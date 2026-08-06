@@ -2,7 +2,7 @@
 
 A Swift package that scans for, connects to, and reads Bluetooth CSCS (Cycling Speed and Cadence Service) sensors. Includes an iOS SwiftUI sample app.
 
-**Status:** Phase 4 — live measurements. `ConnectedSensor` exposes optional `speed` and `cadence` streams from CSC Measurement notifications. Set `wheelCircumference` for speed calculation; streams finish on disconnect. Sample app UI is still placeholder (Phase 5).
+**Status:** Phase 5 — sample app. The iOS SwiftUI app scans for CSC sensors, connects to one or more devices, shows live speed (km/h) and cadence (rpm), and lets you configure wheel circumference from a settings sheet. Library Phases 1–4 are complete.
 
 ## Requirements
 
@@ -64,6 +64,14 @@ xcodebuild \
   -destination 'generic/platform=iOS Simulator' \
   build
 ```
+
+The sample app provides a single scan list:
+
+1. Tap **Scan** to discover nearby CSC sensors (requires a device with Bluetooth; the simulator cannot scan).
+2. Tap **Connect** on a row to connect and subscribe to live measurements.
+3. Speed is shown in km/h; cadence in rpm. Unsupported metrics show "—".
+4. Tap the gear icon to set wheel circumference (meters); changes apply to all connected sensors.
+5. Tap **Disconnect** to release a sensor. Connect/disconnect failures show an alert.
 
 ## Public API
 

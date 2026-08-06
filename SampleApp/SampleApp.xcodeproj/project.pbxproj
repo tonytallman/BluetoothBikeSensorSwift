@@ -10,6 +10,12 @@
 		A10000000000000000000001 /* SampleAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000011 /* SampleAppApp.swift */; };
 		A10000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000012 /* ContentView.swift */; };
 		A10000000000000000000003 /* BluetoothBikeSensorSwift in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000031 /* BluetoothBikeSensorSwift */; };
+		A10000000000000000000004 /* ScanViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000014 /* ScanViewModel.swift */; };
+		A10000000000000000000005 /* SensorRowModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000015 /* SensorRowModel.swift */; };
+		A10000000000000000000006 /* SensorRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000016 /* SensorRowView.swift */; };
+		A10000000000000000000007 /* WheelCircumferenceSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000017 /* WheelCircumferenceSheet.swift */; };
+		A10000000000000000000008 /* ScanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000018 /* ScanView.swift */; };
+		A10000000000000000000009 /* MeasurementFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000019 /* MeasurementFormatting.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -17,6 +23,12 @@
 		A10000000000000000000011 /* SampleAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleAppApp.swift; sourceTree = "<group>"; };
 		A10000000000000000000012 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A10000000000000000000013 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A10000000000000000000014 /* ScanViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanViewModel.swift; sourceTree = "<group>"; };
+		A10000000000000000000015 /* SensorRowModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorRowModel.swift; sourceTree = "<group>"; };
+		A10000000000000000000016 /* SensorRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorRowView.swift; sourceTree = "<group>"; };
+		A10000000000000000000017 /* WheelCircumferenceSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WheelCircumferenceSheet.swift; sourceTree = "<group>"; };
+		A10000000000000000000018 /* ScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanView.swift; sourceTree = "<group>"; };
+		A10000000000000000000019 /* MeasurementFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementFormatting.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -44,6 +56,12 @@
 			children = (
 				A10000000000000000000011 /* SampleAppApp.swift */,
 				A10000000000000000000012 /* ContentView.swift */,
+				A10000000000000000000018 /* ScanView.swift */,
+				A10000000000000000000014 /* ScanViewModel.swift */,
+				A10000000000000000000015 /* SensorRowModel.swift */,
+				A10000000000000000000016 /* SensorRowView.swift */,
+				A10000000000000000000017 /* WheelCircumferenceSheet.swift */,
+				A10000000000000000000019 /* MeasurementFormatting.swift */,
 				A10000000000000000000013 /* Info.plist */,
 			);
 			path = SampleApp;
@@ -105,7 +123,7 @@
 			);
 			mainGroup = A10000000000000000000040;
 			packageReferences = (
-				A10000000000000000000030 /* XCLocalSwiftPackageReference "BluetoothBikeSensorSwift" */,
+				A10000000000000000000030 /* XCLocalSwiftPackageReference ".." */,
 			);
 			productRefGroup = A10000000000000000000042 /* Products */;
 			projectDirPath = "";
@@ -133,6 +151,12 @@
 			files = (
 				A10000000000000000000001 /* SampleAppApp.swift in Sources */,
 				A10000000000000000000002 /* ContentView.swift in Sources */,
+				A10000000000000000000008 /* ScanView.swift in Sources */,
+				A10000000000000000000004 /* ScanViewModel.swift in Sources */,
+				A10000000000000000000005 /* SensorRowModel.swift in Sources */,
+				A10000000000000000000006 /* SensorRowView.swift in Sources */,
+				A10000000000000000000007 /* WheelCircumferenceSheet.swift in Sources */,
+				A10000000000000000000009 /* MeasurementFormatting.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -265,10 +289,11 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 974LGL82GY;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = SampleApp/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -278,7 +303,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleApp;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tallmansoftware.BluetoothBikeSensorSampleApp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -293,10 +318,11 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 974LGL82GY;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = SampleApp/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -306,7 +332,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleApp;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tallmansoftware.BluetoothBikeSensorSampleApp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -338,7 +364,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		A10000000000000000000030 /* XCLocalSwiftPackageReference "BluetoothBikeSensorSwift" */ = {
+		A10000000000000000000030 /* XCLocalSwiftPackageReference ".." */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ..;
 		};
@@ -347,8 +373,8 @@
 /* Begin XCSwiftPackageProductDependency section */
 		A10000000000000000000031 /* BluetoothBikeSensorSwift */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000030 /* XCLocalSwiftPackageReference ".." */;
 			productName = BluetoothBikeSensorSwift;
-			package = A10000000000000000000030 /* XCLocalSwiftPackageReference "BluetoothBikeSensorSwift" */;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
