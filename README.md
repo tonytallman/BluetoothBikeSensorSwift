@@ -2,7 +2,7 @@
 
 A Swift package that scans for, connects to, and reads Bluetooth CSCS (Cycling Speed and Cadence Service) sensors. Includes an iOS SwiftUI sample app.
 
-**Status:** Phase 2 — scan and discovery. `Scanner.scan()` discovers CSCS-capable sensors and yields `DiscoveredSensor` values. Cancel the stream to stop scanning. Connect and live measurements are not implemented yet (Phases 3–4).
+**Status:** Phase 3 — connect and disconnect. `DiscoveredSensor.connect()` connects, discovers the CSC service, and returns `ConnectedSensor`. `ConnectedSensor.disconnect()` returns a reconnectable `DiscoveredSensor`. Live speed/cadence streams are not implemented yet (Phase 4).
 
 ## Requirements
 
@@ -60,12 +60,13 @@ xcodebuild \
 
 - `Scanner()` — client initializer; wires production dependencies internally
 - `Scanner.scan()` — returns `AsyncStream<DiscoveredSensor>` filtered to CSC service (`0x1816`); cancel the stream to stop scanning
-- `DiscoveredSensor` — discovery metadata (`id`, `name`, `manufacturer`, `hasSpeed`, `hasCadence`); `connect() async throws -> ConnectedSensor` (not implemented until Phase 3)
-- `ConnectedSensor` — optional `speed` / `cadence` streams; `disconnect() async throws -> DiscoveredSensor`
+- `DiscoveredSensor` — discovery metadata (`id`, `name`, `manufacturer`, `hasSpeed`, `hasCadence`)
+- `DiscoveredSensor.connect()` — connects to the sensor and discovers CSC service; throws `ConnectError`
+- `ConnectedSensor` — optional `speed` / `cadence` streams (not implemented until Phase 4); `disconnect() async throws -> DiscoveredSensor`
 - `Speed` — typealias for `Measurement<UnitSpeed>`
 - `Cadence` — typealias for `Measurement<UnitFrequency>`; use `UnitFrequency.revolutionsPerMinute` for cadence
-- `BluetoothState` — powered on/off, unauthorized, etc.
-- `ConnectError`, `DisconnectError` — stub error enums
+- `ConnectError` — `notPoweredOn`, `timeout`, `failed`, `peripheralNotFound`, `serviceDiscoveryFailed`
+- `DisconnectError` — `failed`, `alreadyDisconnected`
 
 Test-only dependency injection (`BluetoothCentral`, `FakeBluetoothCentral`, `Scanner.init(central:)`) is `package`-visible within the Swift package, not part of the public client API.
 

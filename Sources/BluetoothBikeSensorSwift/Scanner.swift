@@ -33,7 +33,7 @@ public struct Scanner: Sendable {
 
                 for await event in discoveries {
                     guard !Task.isCancelled else { break }
-                    guard let sensor = DiscoveredSensorMapper.map(event) else { continue }
+                    guard let sensor = DiscoveredSensorMapper.map(event, central: central) else { continue }
                     guard seenIDs.insert(sensor.id).inserted else { continue }
                     continuation.yield(sensor)
                 }
