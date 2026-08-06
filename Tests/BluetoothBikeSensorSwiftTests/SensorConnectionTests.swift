@@ -6,7 +6,7 @@ import Testing
     private func makeSensor(
         fake: FakeBluetoothCentral,
         id: UUID = UUID(),
-        name: String = "Test Sensor"
+        name: String = "Test Sensor",
     ) -> DiscoveredSensor {
         DiscoveredSensor(
             id: id,
@@ -14,7 +14,7 @@ import Testing
             manufacturer: nil,
             hasSpeed: true,
             hasCadence: true,
-            central: fake
+            central: fake,
         )
     }
 
@@ -88,7 +88,7 @@ import Testing
         let sensor = makeSensor(fake: fake, id: sensorID)
 
         await fake.failNextDiscoverServices(
-            with: .serviceNotFound(sensorID, serviceUUID: CSCS.serviceUUID)
+            with: .serviceNotFound(sensorID, serviceUUID: CSCS.serviceUUID),
         )
 
         do {

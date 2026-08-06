@@ -21,7 +21,7 @@ public struct DiscoveredPeripheralEvent: Sendable, Equatable {
         name: String?,
         manufacturerData: Data?,
         serviceUUIDs: [UUID],
-        rssi: Int
+        rssi: Int,
     ) {
         self.id = id
         self.name = name
@@ -45,6 +45,6 @@ public enum GATTEvent: Sendable, Equatable {
         id: UUID,
         serviceUUID: UUID,
         characteristicUUID: UUID,
-        isNotifying: Bool
+        isNotifying: Bool,
     )
 }

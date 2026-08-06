@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.1
 
 import PackageDescription
 
@@ -11,16 +11,16 @@ let package = Package(
     products: [
         .library(
             name: "BluetoothBikeSensorSwift",
-            targets: ["BluetoothBikeSensorSwift"]
+            targets: ["BluetoothBikeSensorSwift"],
         ),
     ],
     targets: [
         .target(
-            name: "BluetoothBikeSensorSwift"
+            name: "BluetoothBikeSensorSwift",
         ),
         .testTarget(
             name: "BluetoothBikeSensorSwiftTests",
-            dependencies: ["BluetoothBikeSensorSwift"]
+            dependencies: ["BluetoothBikeSensorSwift"],
         ),
     ]
 )

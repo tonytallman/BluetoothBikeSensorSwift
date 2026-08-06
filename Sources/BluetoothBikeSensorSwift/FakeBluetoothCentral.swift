@@ -101,14 +101,14 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     package func discoverCharacteristics(
         id: UUID,
         serviceUUID: UUID,
-        characteristicUUIDs: [UUID]?
+        characteristicUUIDs: [UUID]?,
     ) async throws {
         recordedCalls.append(
             .discoverCharacteristics(
                 id: id,
                 serviceUUID: serviceUUID,
-                characteristicUUIDs: characteristicUUIDs
-            )
+                characteristicUUIDs: characteristicUUIDs,
+            ),
         )
     }
 

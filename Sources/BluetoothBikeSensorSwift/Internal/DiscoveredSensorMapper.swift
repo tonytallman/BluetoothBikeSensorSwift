@@ -12,7 +12,7 @@ enum DiscoveredSensorMapper {
             manufacturer: ManufacturerLookup.manufacturerName(from: event.manufacturerData),
             hasSpeed: true,
             hasCadence: true,
-            central: central
+            central: central,
         )
     }
 }

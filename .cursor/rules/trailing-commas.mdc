@@ -1,0 +1,23 @@
+---
+description: Always use trailing commas in multiline comma-separated lists
+alwaysApply: true
+---
+
+# Trailing commas
+
+End every **multiline** comma-separated list with a trailing comma wherever Swift permits it — that is, any list closed by a symmetric delimiter ([SE-0439](https://github.com/swiftlang/swift-evolution/blob/main/proposals/0439-trailing-comma-lists.md), Swift 6.1+). Single-line lists omit it.
+
+Allowed, so required when multiline:
+
+- `(...)` — tuples and tuple patterns; parameter and argument lists of functions, initializers, subscripts (including key-path subscripts), enum associated values, expression macros, and attributes; string interpolation arguments
+- `[...]` — array literals, dictionary literals, closure capture lists
+- `<...>` — generic parameter and argument lists
+
+Swift rejects a trailing comma everywhere else, so never add one to: `if` / `guard` / `while` condition lists, enum case label lists, `switch` case labels, inheritance clauses, generic `where` clauses, non-list attribute arguments (`@inline(never,)`), or empty lists.
+
+```swift
+func connect(
+    id: UUID,
+    timeout: Duration,   // required
+) async throws { }
+```

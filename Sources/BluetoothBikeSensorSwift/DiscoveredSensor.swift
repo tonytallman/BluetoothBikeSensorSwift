@@ -17,7 +17,7 @@ public struct DiscoveredSensor: Sendable {
         manufacturer: String?,
         hasSpeed: Bool,
         hasCadence: Bool,
-        central: any BluetoothCentral
+        central: any BluetoothCentral,
     ) {
         self.id = id
         self.name = name
@@ -69,7 +69,7 @@ public struct DiscoveredSensor: Sendable {
             manufacturer: manufacturer,
             hasSpeed: hasSpeed,
             hasCadence: hasCadence,
-            central: central
+            central: central,
         )
     }
 }

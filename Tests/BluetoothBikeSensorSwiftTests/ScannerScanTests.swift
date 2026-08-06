@@ -31,8 +31,8 @@ import Testing
                 name: "Speed Sensor",
                 manufacturerData: nil,
                 serviceUUIDs: [CSCS.serviceUUID],
-                rssi: -60
-            )
+                rssi: -60,
+            ),
         )
 
         let sensors = await collector.value
@@ -57,8 +57,8 @@ import Testing
                 name: "Heart Rate",
                 manufacturerData: nil,
                 serviceUUIDs: [UUID()],
-                rssi: -50
-            )
+                rssi: -50,
+            ),
         )
 
         let sensors = await collector.value
@@ -79,7 +79,7 @@ import Testing
             name: "Cadence",
             manufacturerData: nil,
             serviceUUIDs: [CSCS.serviceUUID],
-            rssi: -55
+            rssi: -55,
         )
 
         await fake.emitDiscovery(event)
@@ -136,8 +136,8 @@ import Testing
                 name: "Garmin Sensor",
                 manufacturerData: manufacturerData,
                 serviceUUIDs: [CSCS.serviceUUID],
-                rssi: -48
-            )
+                rssi: -48,
+            ),
         )
 
         let sensors = await collector.value

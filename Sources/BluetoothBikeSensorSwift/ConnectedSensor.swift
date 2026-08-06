@@ -22,7 +22,7 @@ public final class ConnectedSensor: Sendable {
         manufacturer: String?,
         hasSpeed: Bool,
         hasCadence: Bool,
-        central: any BluetoothCentral
+        central: any BluetoothCentral,
     ) {
         self.id = id
         self.name = name
@@ -47,7 +47,7 @@ public final class ConnectedSensor: Sendable {
             manufacturer: manufacturer,
             hasSpeed: hasSpeed,
             hasCadence: hasCadence,
-            central: central
+            central: central,
         )
     }
 }

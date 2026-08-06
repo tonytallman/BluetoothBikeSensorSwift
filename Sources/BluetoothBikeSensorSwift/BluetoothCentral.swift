@@ -18,7 +18,7 @@ package protocol BluetoothCentral: Sendable {
     func discoverCharacteristics(
         id: UUID,
         serviceUUID: UUID,
-        characteristicUUIDs: [UUID]?
+        characteristicUUIDs: [UUID]?,
     ) async throws
 
     var gattEvents: AsyncStream<GATTEvent> { get async }

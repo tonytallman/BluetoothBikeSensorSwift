@@ -42,7 +42,7 @@ package actor CoreBluetoothCentral: BluetoothCentral {
         let cbServiceUUIDs = serviceUUIDs?.map { CBUUIDBridge(uuid: $0).cbUUID }
         centralManager.scanForPeripherals(
             withServices: cbServiceUUIDs,
-            options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
+            options: [CBCentralManagerScanOptionAllowDuplicatesKey: false],
         )
     }
 
@@ -102,7 +102,7 @@ package actor CoreBluetoothCentral: BluetoothCentral {
     package func discoverCharacteristics(
         id: UUID,
         serviceUUID: UUID,
-        characteristicUUIDs: [UUID]?
+        characteristicUUIDs: [UUID]?,
     ) async throws {
         guard let peripheral = delegateBridge.peripheral(for: id) else {
             throw BluetoothCentralError.peripheralNotFound(id)
@@ -171,8 +171,8 @@ package actor CoreBluetoothCentral: BluetoothCentral {
                 .characteristicsDiscovered(
                     id: id,
                     serviceUUID: serviceUUID,
-                    characteristicUUIDs: characteristicUUIDs
-                )
+                    characteristicUUIDs: characteristicUUIDs,
+                ),
             )
             pendingCharacteristicDiscoveries.removeValue(forKey: id)?.resume()
         }
@@ -190,7 +190,7 @@ private enum CentralDelegateEvent: Sendable {
         id: UUID,
         serviceUUID: UUID,
         characteristicUUIDs: [UUID],
-        errorReason: String?
+        errorReason: String?,
     )
 }
 
@@ -226,7 +226,7 @@ private final class CentralDelegateBridge: NSObject, CBCentralManagerDelegate, C
         _ central: CBCentralManager,
         didDiscover peripheral: CBPeripheral,
         advertisementData: [String: Any],
-        rssi RSSI: NSNumber
+        rssi RSSI: NSNumber,
     ) {
         let id = peripheral.identifier
         lock.lock()
@@ -242,9 +242,9 @@ private final class CentralDelegateBridge: NSObject, CBCentralManagerDelegate, C
                     manufacturerData: advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data,
                     serviceUUIDs: (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID])?
                         .map(\.asFoundationUUID) ?? [],
-                    rssi: RSSI.intValue
-                )
-            )
+                    rssi: RSSI.intValue,
+                ),
+            ),
         )
     }
 
@@ -255,20 +255,20 @@ private final class CentralDelegateBridge: NSObject, CBCentralManagerDelegate, C
     func centralManager(
         _ central: CBCentralManager,
         didFailToConnect peripheral: CBPeripheral,
-        error: Error?
+        error: Error?,
     ) {
         emit(
             .failedToConnect(
                 id: peripheral.identifier,
-                reason: error?.localizedDescription ?? "Connection failed"
-            )
+                reason: error?.localizedDescription ?? "Connection failed",
+            ),
         )
     }
 
     func centralManager(
         _ central: CBCentralManager,
         didDisconnectPeripheral peripheral: CBPeripheral,
-        error: Error?
+        error: Error?,
     ) {
         emit(.disconnected(id: peripheral.identifier, reason: error?.localizedDescription))
     }
@@ -279,8 +279,8 @@ private final class CentralDelegateBridge: NSObject, CBCentralManagerDelegate, C
             .servicesDiscovered(
                 id: peripheral.identifier,
                 serviceUUIDs: serviceUUIDs,
-                errorReason: error?.localizedDescription
-            )
+                errorReason: error?.localizedDescription,
+            ),
         )
     }
 
@@ -291,8 +291,8 @@ private final class CentralDelegateBridge: NSObject, CBCentralManagerDelegate, C
                 id: peripheral.identifier,
                 serviceUUID: service.uuid.asFoundationUUID,
                 characteristicUUIDs: characteristicUUIDs,
-                errorReason: error?.localizedDescription
-            )
+                errorReason: error?.localizedDescription,
+            ),
         )
     }
 }

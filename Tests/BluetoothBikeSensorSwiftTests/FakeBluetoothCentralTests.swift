@@ -53,8 +53,8 @@ import Testing
                 name: "Cadence Sensor",
                 manufacturerData: Data([0x01, 0x02]),
                 serviceUUIDs: [UUID()],
-                rssi: -55
-            )
+                rssi: -55,
+            ),
         )
 
         let values = await collector.value
@@ -128,7 +128,7 @@ enum AsyncTestHelpers {
     static func collect<T: Sendable>(
         from stream: AsyncStream<T>,
         maxCount: Int = 10,
-        timeoutNanoseconds: UInt64 = 500_000_000
+        timeoutNanoseconds: UInt64 = 500_000_000,
     ) async -> [T] {
         let collector = Collector<T>()
         let task = Task {
