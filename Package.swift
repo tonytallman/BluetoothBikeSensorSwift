@@ -6,6 +6,7 @@ let package = Package(
     name: "BluetoothBikeSensorSwift",
     platforms: [
         .iOS(.v17),
+        .macOS(.v14),
     ],
     products: [
         .library(
@@ -16,6 +17,10 @@ let package = Package(
     targets: [
         .target(
             name: "BluetoothBikeSensorSwift"
+        ),
+        .testTarget(
+            name: "BluetoothBikeSensorSwiftTests",
+            dependencies: ["BluetoothBikeSensorSwift"]
         ),
     ]
 )
