@@ -63,12 +63,28 @@ public struct DiscoveredSensor: Sendable {
             throw ConnectError.serviceDiscoveryFailed(reason: error.localizedDescription)
         }
 
+        let refinedCapabilities: (hasSpeed: Bool, hasCadence: Bool)
+        do {
+            refinedCapabilities = try await CSCConnectionSetup.prepare(
+                central: central,
+                id: id,
+                fallbackHasSpeed: hasSpeed,
+                fallbackHasCadence: hasCadence,
+            )
+        } catch {
+            try? await central.disconnect(id: id)
+            if let centralError = error as? BluetoothCentralError {
+                throw BluetoothCentralErrorMapping.connectError(from: centralError)
+            }
+            throw ConnectError.serviceDiscoveryFailed(reason: error.localizedDescription)
+        }
+
         return ConnectedSensor(
             id: id,
             name: name,
             manufacturer: manufacturer,
-            hasSpeed: hasSpeed,
-            hasCadence: hasCadence,
+            hasSpeed: refinedCapabilities.hasSpeed,
+            hasCadence: refinedCapabilities.hasCadence,
             central: central,
         )
     }

@@ -28,6 +28,21 @@ import Testing
         let calls = await fake.recordedCalls
         #expect(calls.contains(.connect(id: sensorID)))
         #expect(calls.contains(.discoverServices(id: sensorID, serviceUUIDs: [CSCS.serviceUUID])))
+        #expect(calls.contains(
+            .discoverCharacteristics(
+                id: sensorID,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUIDs: [CSCS.measurementUUID, CSCS.featureUUID],
+            ),
+        ))
+        #expect(calls.contains(
+            .setNotifyValue(
+                id: sensorID,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.measurementUUID,
+                enabled: true,
+            ),
+        ))
     }
 
     @Test func disconnectReturnsRediscoverableSensor() async throws {

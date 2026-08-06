@@ -22,4 +22,17 @@ package protocol BluetoothCentral: Sendable {
     ) async throws
 
     var gattEvents: AsyncStream<GATTEvent> { get async }
+
+    func setNotifyValue(
+        id: UUID,
+        serviceUUID: UUID,
+        characteristicUUID: UUID,
+        enabled: Bool,
+    ) async throws
+
+    func readValue(
+        id: UUID,
+        serviceUUID: UUID,
+        characteristicUUID: UUID,
+    ) async throws -> Data
 }

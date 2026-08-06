@@ -9,13 +9,24 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         case disconnect(id: UUID)
         case discoverServices(id: UUID, serviceUUIDs: [UUID]?)
         case discoverCharacteristics(id: UUID, serviceUUID: UUID, characteristicUUIDs: [UUID]?)
+        case setNotifyValue(
+            id: UUID,
+            serviceUUID: UUID,
+            characteristicUUID: UUID,
+            enabled: Bool,
+        )
+        case readValue(id: UUID, serviceUUID: UUID, characteristicUUID: UUID)
     }
 
     private var state: BluetoothState
     private var nextConnectError: BluetoothCentralError?
     private var nextDiscoverServicesError: BluetoothCentralError?
+    private var nextDiscoverCharacteristicsError: BluetoothCentralError?
     private var nextDisconnectError: BluetoothCentralError?
+    private var nextReadValueError: BluetoothCentralError?
+    private var nextSetNotifyError: BluetoothCentralError?
     private var shouldHangNextConnect = false
+    private var featureData = Data([0x03, 0x00])
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>.Box()
     private let discoveryBroadcaster = StreamBroadcaster<DiscoveredPeripheralEvent>.Box()
@@ -110,6 +121,11 @@ package actor FakeBluetoothCentral: BluetoothCentral {
                 characteristicUUIDs: characteristicUUIDs,
             ),
         )
+
+        if let nextDiscoverCharacteristicsError {
+            self.nextDiscoverCharacteristicsError = nil
+            throw nextDiscoverCharacteristicsError
+        }
     }
 
     package var gattEvents: AsyncStream<GATTEvent> {
@@ -118,9 +134,68 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         }
     }
 
+    package func setNotifyValue(
+        id: UUID,
+        serviceUUID: UUID,
+        characteristicUUID: UUID,
+        enabled: Bool,
+    ) async throws {
+        recordedCalls.append(
+            .setNotifyValue(
+                id: id,
+                serviceUUID: serviceUUID,
+                characteristicUUID: characteristicUUID,
+                enabled: enabled,
+            ),
+        )
+
+        if let nextSetNotifyError {
+            self.nextSetNotifyError = nil
+            throw nextSetNotifyError
+        }
+
+        gattBroadcaster.yield(
+            .notificationStateChanged(
+                id: id,
+                serviceUUID: serviceUUID,
+                characteristicUUID: characteristicUUID,
+                isNotifying: enabled,
+            ),
+        )
+    }
+
+    package func readValue(
+        id: UUID,
+        serviceUUID: UUID,
+        characteristicUUID: UUID,
+    ) async throws -> Data {
+        recordedCalls.append(
+            .readValue(
+                id: id,
+                serviceUUID: serviceUUID,
+                characteristicUUID: characteristicUUID,
+            ),
+        )
+
+        if let nextReadValueError {
+            self.nextReadValueError = nil
+            throw nextReadValueError
+        }
+
+        if characteristicUUID == CSCS.featureUUID {
+            return featureData
+        }
+
+        return Data()
+    }
+
     package func setState(_ newState: BluetoothState) {
         state = newState
         stateBroadcaster.yield(newState)
+    }
+
+    package func setFeatureData(_ data: Data) {
+        featureData = data
     }
 
     package func emitDiscovery(_ event: DiscoveredPeripheralEvent) {
@@ -143,8 +218,20 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         nextDiscoverServicesError = error
     }
 
+    package func failNextDiscoverCharacteristics(with error: BluetoothCentralError) {
+        nextDiscoverCharacteristicsError = error
+    }
+
     package func failNextDisconnect(with error: BluetoothCentralError) {
         nextDisconnectError = error
+    }
+
+    package func failNextReadValue(with error: BluetoothCentralError) {
+        nextReadValueError = error
+    }
+
+    package func failNextSetNotify(with error: BluetoothCentralError) {
+        nextSetNotifyError = error
     }
 
     package func hangNextConnect() {
