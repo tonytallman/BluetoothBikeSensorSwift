@@ -144,4 +144,74 @@ import Testing
         #expect(sensors.count == 1)
         #expect(sensors[0].manufacturer == "Garmin")
     }
+
+    @Test func scanStartsAfterUnknownTransitionsToPoweredOn() async {
+        let fake = FakeBluetoothCentral(initialState: .unknown)
+        let scanner = Scanner(central: fake)
+        let stream = scanner.scan()
+        let collector = Task {
+            await AsyncTestHelpers.collect(from: stream, maxCount: 1, timeoutNanoseconds: 3_000_000_000)
+        }
+
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        await fake.setState(.poweredOn)
+        await Self.waitForScanStart(fake)
+
+        let peripheralID = UUID()
+        await fake.emitDiscovery(
+            DiscoveredPeripheralEvent(
+                id: peripheralID,
+                name: "Delayed Sensor",
+                manufacturerData: nil,
+                serviceUUIDs: [CSCS.serviceUUID],
+                rssi: -50,
+            ),
+        )
+
+        let sensors = await collector.value
+        #expect(sensors.count == 1)
+        #expect(sensors[0].id == peripheralID)
+    }
+
+    @Test func scanContinuesWhenBluetoothPoweredOffMidScan() async {
+        let fake = FakeBluetoothCentral()
+        let scanner = Scanner(central: fake)
+        let stream = scanner.scan()
+        let collector = Task {
+            await AsyncTestHelpers.collect(from: stream, maxCount: 2, timeoutNanoseconds: 500_000_000)
+        }
+
+        await Self.waitForScanStart(fake)
+
+        let firstID = UUID()
+        await fake.emitDiscovery(
+            DiscoveredPeripheralEvent(
+                id: firstID,
+                name: "First",
+                manufacturerData: nil,
+                serviceUUIDs: [CSCS.serviceUUID],
+                rssi: -55,
+            ),
+        )
+
+        await fake.setState(.poweredOff)
+
+        let secondID = UUID()
+        await fake.emitDiscovery(
+            DiscoveredPeripheralEvent(
+                id: secondID,
+                name: "Second",
+                manufacturerData: nil,
+                serviceUUIDs: [CSCS.serviceUUID],
+                rssi: -60,
+            ),
+        )
+
+        let sensors = await collector.value
+        #expect(sensors.count == 2)
+        #expect(sensors.map(\.id) == [firstID, secondID])
+
+        let calls = await fake.recordedCalls
+        #expect(!calls.contains(.stopScanning))
+    }
 }

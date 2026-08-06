@@ -1,6 +1,6 @@
 import Foundation
 
-public enum BluetoothCentralError: Error, Sendable, Equatable {
+package enum BluetoothCentralError: Error, Sendable, Equatable {
     case peripheralNotFound(UUID)
     case notPoweredOn
     case connectionFailed(UUID, reason: String)
@@ -9,14 +9,14 @@ public enum BluetoothCentralError: Error, Sendable, Equatable {
     case characteristicNotFound(UUID, serviceUUID: UUID, characteristicUUID: UUID)
 }
 
-public struct DiscoveredPeripheralEvent: Sendable, Equatable {
-    public let id: UUID
-    public let name: String?
-    public let manufacturerData: Data?
-    public let serviceUUIDs: [UUID]
-    public let rssi: Int
+package struct DiscoveredPeripheralEvent: Sendable, Equatable {
+    package let id: UUID
+    package let name: String?
+    package let manufacturerData: Data?
+    package let serviceUUIDs: [UUID]
+    package let rssi: Int
 
-    public init(
+    package init(
         id: UUID,
         name: String?,
         manufacturerData: Data?,
@@ -31,13 +31,13 @@ public struct DiscoveredPeripheralEvent: Sendable, Equatable {
     }
 }
 
-public enum ConnectionEvent: Sendable, Equatable {
+package enum ConnectionEvent: Sendable, Equatable {
     case connected(id: UUID)
     case disconnected(id: UUID, reason: String?)
     case failed(id: UUID, reason: String)
 }
 
-public enum GATTEvent: Sendable, Equatable {
+package enum GATTEvent: Sendable, Equatable {
     case servicesDiscovered(id: UUID, serviceUUIDs: [UUID])
     case characteristicsDiscovered(id: UUID, serviceUUID: UUID, characteristicUUIDs: [UUID])
     case characteristicValue(id: UUID, serviceUUID: UUID, characteristicUUID: UUID, value: Data)

@@ -101,6 +101,41 @@ import Testing
 
         #expect(abs((speed?.value ?? 0) - 6.315) < 0.001)
     }
+
+    @Test func handlesCrankRevolutionWraparound() {
+        var state = CSCMeasurementState(
+            previousCrankRevolutions: UInt16.max,
+            previousCrankEventTime: 1_024,
+        )
+        let sample = CSCMeasurementFixtures.crankMeasurement(revolutions: 0, eventTime: 2_048)
+
+        let cadence = CSCMeasurementParser.cadence(
+            from: CSCMeasurementParser.parse(sample)!,
+            previous: &state,
+        )
+
+        #expect(abs((cadence?.value ?? 0) - 60.0) < 0.001)
+    }
+
+    @Test func zeroDeltaTimeDoesNotEmitSpeed() {
+        var state = CSCMeasurementState()
+        let first = CSCMeasurementFixtures.wheelMeasurement(revolutions: 100, eventTime: 1_024)
+        let duplicateTime = CSCMeasurementFixtures.wheelMeasurement(revolutions: 101, eventTime: 1_024)
+
+        _ = CSCMeasurementParser.speed(
+            from: CSCMeasurementParser.parse(first)!,
+            previous: &state,
+            circumferenceMeters: 2.105,
+        )
+
+        let speed = CSCMeasurementParser.speed(
+            from: CSCMeasurementParser.parse(duplicateTime)!,
+            previous: &state,
+            circumferenceMeters: 2.105,
+        )
+
+        #expect(speed == nil)
+    }
 }
 
 @Suite struct CSCFeatureParserTests {
@@ -291,6 +326,78 @@ import Testing
         #expect(finished == true)
     }
 
+    @Test func cadenceStreamEmitsRPMValues() async throws {
+        let fake = FakeBluetoothCentral()
+        let sensorID = UUID()
+        let sensor = makeSensor(fake: fake, id: sensorID)
+        let connected = try await sensor.connect()
+
+        guard let cadenceStream = connected.cadence else {
+            Issue.record("Expected cadence stream")
+            return
+        }
+
+        let collector = Task {
+            await AsyncTestHelpers.collect(from: cadenceStream, maxCount: 1)
+        }
+
+        await waitForMeasurementLoop()
+
+        await emitCrankMeasurement(
+            fake: fake,
+            id: sensorID,
+            revolutions: 10,
+            eventTime: 1_024,
+        )
+        await emitCrankMeasurement(
+            fake: fake,
+            id: sensorID,
+            revolutions: 11,
+            eventTime: 2_048,
+        )
+
+        let cadences = await collector.value
+        #expect(cadences.count == 1)
+        if cadences.count == 1 {
+            #expect(cadences[0].value == 60.0)
+            #expect(cadences[0].unit == .revolutionsPerMinute)
+        }
+    }
+
+    @Test func unexpectedDisconnectFinishesStreamsAfterEmission() async throws {
+        let fake = FakeBluetoothCentral()
+        let sensorID = UUID()
+        let sensor = makeSensor(fake: fake, id: sensorID)
+        let connected = try await sensor.connect()
+
+        guard let speedStream = connected.speed else {
+            Issue.record("Expected speed stream")
+            return
+        }
+
+        await waitForMeasurementLoop()
+
+        let collector = Task { () -> (speeds: [Speed], finished: Bool) in
+            var speeds: [Speed] = []
+            for await speed in speedStream {
+                speeds.append(speed)
+            }
+            return (speeds, true)
+        }
+
+        await emitWheelMeasurement(fake: fake, id: sensorID, revolutions: 100, eventTime: 1_024)
+        await emitWheelMeasurement(fake: fake, id: sensorID, revolutions: 102, eventTime: 2_048)
+
+        try? await Task.sleep(nanoseconds: 150_000_000)
+
+        await fake.emitConnection(.disconnected(id: sensorID, reason: "Link lost"))
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        let result = await collector.value
+        #expect(result.speeds.count == 1)
+        #expect(result.finished == true)
+    }
+
     @Test func notifyFailureMapsToConnectError() async {
         let fake = FakeBluetoothCentral()
         let sensorID = UUID()
@@ -314,6 +421,27 @@ import Testing
         } catch {
             Issue.record("Unexpected error: \(error)")
         }
+    }
+
+    private func emitCrankMeasurement(
+        fake: FakeBluetoothCentral,
+        id: UUID,
+        revolutions: UInt16,
+        eventTime: UInt16,
+    ) async {
+        let payload = CSCMeasurementFixtures.crankMeasurement(
+            revolutions: revolutions,
+            eventTime: eventTime,
+        )
+        await fake.emitGATT(
+            .characteristicValue(
+                id: id,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.measurementUUID,
+                value: payload,
+            ),
+        )
+        try? await Task.sleep(nanoseconds: 50_000_000)
     }
 
     private func emitWheelMeasurement(

@@ -1,12 +1,22 @@
 import Foundation
 
+/// A CSCS sensor discovered during an active scan.
+///
+/// Obtain instances only from ``Scanner/scan()``. Capability flags on this type are
+/// best-effort from discovery; after ``connect()``, rely on optional ``ConnectedSensor/speed``
+/// and ``ConnectedSensor/cadence`` streams for supported metrics.
 public struct DiscoveredSensor: Sendable {
     nonisolated(unsafe) package static var connectTimeoutNanoseconds: UInt64 = 10_000_000_000
 
+    /// Stable identifier for the peripheral.
     public let id: UUID
+    /// Advertised or peripheral name, when available.
     public let name: String?
+    /// Manufacturer resolved from advertisement data, when available.
     public let manufacturer: String?
+    /// Best-effort speed support hint from discovery; refined on connect.
     public let hasSpeed: Bool
+    /// Best-effort cadence support hint from discovery; refined on connect.
     public let hasCadence: Bool
 
     private let central: any BluetoothCentral
@@ -27,6 +37,10 @@ public struct DiscoveredSensor: Sendable {
         self.central = central
     }
 
+    /// Connects to the sensor, discovers CSC characteristics, and enables notifications.
+    ///
+    /// - Returns: A ``ConnectedSensor`` for reading live measurements.
+    /// - Throws: ``ConnectError`` when connection, discovery, or notification setup fails.
     public func connect() async throws -> ConnectedSensor {
         guard await central.currentState == .poweredOn else {
             throw ConnectError.notPoweredOn

@@ -1,5 +1,10 @@
 import Foundation
 
+/// Entry point for discovering CSCS (Cycling Speed and Cadence Service) sensors.
+///
+/// Create a `Scanner`, call ``scan()`` to receive ``DiscoveredSensor`` values, then
+/// connect to read live measurements. The library is not MainActor-bound; update UI on
+/// the main actor in your app.
 public struct Scanner: Sendable {
     private static let poweredOnTimeoutNanoseconds: UInt64 = 2_000_000_000
 
@@ -15,7 +20,11 @@ public struct Scanner: Sendable {
         self.central = central
     }
 
-    /// Scans for CSCS-capable sensors. Cancel the returned stream to stop scanning.
+    /// Scans for CSCS-capable sensors filtered to service UUID `0x1816`.
+    ///
+    /// Yields each peripheral at most once per scan session. Cancel the returned stream
+    /// to stop scanning. If Bluetooth is unavailable when scanning starts, the stream
+    /// finishes without yielding.
     public func scan() -> AsyncStream<DiscoveredSensor> {
         let central = central
 

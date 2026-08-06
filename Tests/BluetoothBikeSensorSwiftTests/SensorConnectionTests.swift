@@ -165,4 +165,108 @@ import Testing
             Issue.record("Unexpected error: \(error)")
         }
     }
+
+    @Test func rapidConnectDisconnectReconnect() async throws {
+        let fake = FakeBluetoothCentral()
+        let sensorID = UUID()
+        var current = makeSensor(fake: fake, id: sensorID)
+
+        for _ in 0..<3 {
+            let connected = try await current.connect()
+            current = try await connected.disconnect()
+        }
+
+        _ = try await current.connect()
+
+        let calls = await fake.recordedCalls
+        #expect(calls.filter {
+            if case .connect = $0 { return true }
+            return false
+        }.count == 4)
+        #expect(calls.filter {
+            if case .disconnect = $0 { return true }
+            return false
+        }.count == 3)
+    }
+
+    @Test func connectPeripheralNotFound() async {
+        let fake = FakeBluetoothCentral()
+        let sensorID = UUID()
+        let sensor = makeSensor(fake: fake, id: sensorID)
+
+        await fake.failNextConnect(with: .peripheralNotFound(sensorID))
+
+        do {
+            _ = try await sensor.connect()
+            Issue.record("Expected connect to throw")
+        } catch let error as ConnectError {
+            #expect(error == .peripheralNotFound)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test func disconnectFailureMapsToDisconnectError() async throws {
+        let fake = FakeBluetoothCentral()
+        let sensorID = UUID()
+        let sensor = makeSensor(fake: fake, id: sensorID)
+        let connected = try await sensor.connect()
+
+        await fake.failNextDisconnect(with: .connectionFailed(sensorID, reason: "Link dropped"))
+
+        do {
+            _ = try await connected.disconnect()
+            Issue.record("Expected disconnect to throw")
+        } catch let error as DisconnectError {
+            #expect(error == .failed(reason: "Link dropped"))
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test func characteristicDiscoveryFailure() async {
+        let fake = FakeBluetoothCentral()
+        let sensorID = UUID()
+        let sensor = makeSensor(fake: fake, id: sensorID)
+
+        await fake.failNextDiscoverCharacteristics(
+            with: .characteristicNotFound(
+                sensorID,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.measurementUUID,
+            ),
+        )
+
+        do {
+            _ = try await sensor.connect()
+            Issue.record("Expected connect to throw")
+        } catch let error as ConnectError {
+            #expect(error == .serviceDiscoveryFailed(
+                reason: "Characteristic not found: \(CSCS.measurementUUID) on \(CSCS.serviceUUID)",
+            ))
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+
+        let calls = await fake.recordedCalls
+        #expect(calls.contains(.disconnect(id: sensorID)))
+    }
+
+    @Test func featureReadFailureFallsBackToDiscoveryFlags() async throws {
+        let fake = FakeBluetoothCentral()
+        let sensorID = UUID()
+        let sensor = makeSensor(fake: fake, id: sensorID)
+
+        await fake.failNextReadValue(
+            with: .characteristicNotFound(
+                sensorID,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.featureUUID,
+            ),
+        )
+
+        let connected = try await sensor.connect()
+        #expect(connected.speed != nil)
+        #expect(connected.cadence != nil)
+    }
 }

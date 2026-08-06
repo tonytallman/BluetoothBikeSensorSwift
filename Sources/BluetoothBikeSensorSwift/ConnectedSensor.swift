@@ -1,5 +1,10 @@
 import Foundation
 
+/// A connected CSCS sensor emitting live speed and/or cadence measurements.
+///
+/// Created only by ``DiscoveredSensor/connect()``. Set ``wheelCircumference`` before or
+/// during streaming so speed values reflect your wheel size. Streams finish when the
+/// sensor disconnects unexpectedly; call ``disconnect()`` to release the connection.
 public final class ConnectedSensor: Sendable {
     package static let defaultWheelCircumference = Measurement(value: 2.105, unit: UnitLength.meters)
 
@@ -33,6 +38,9 @@ public final class ConnectedSensor: Sendable {
     private let central: any BluetoothCentral
     private let loopOwner: MeasurementLoopOwner
 
+    /// Wheel circumference used for speed calculation. Client-managed; not persisted by the library.
+    ///
+    /// Default is 2.105 m (700×25C). Changes apply to subsequent speed calculations.
     public var wheelCircumference: Measurement<UnitLength> {
         get {
             stateBox.lock.lock()
@@ -46,6 +54,9 @@ public final class ConnectedSensor: Sendable {
         }
     }
 
+    /// Live speed stream, or `nil` when the sensor does not support wheel data.
+    ///
+    /// Emits ``Speed`` values while connected. The stream finishes on disconnect.
     public var speed: AsyncStream<Speed>? {
         guard hasSpeed else {
             return nil
@@ -53,6 +64,10 @@ public final class ConnectedSensor: Sendable {
         return speedBroadcaster.makeStream()
     }
 
+    /// Live cadence stream, or `nil` when the sensor does not support crank data.
+    ///
+    /// Emits ``Cadence`` values in revolutions per minute while connected. The stream
+    /// finishes on disconnect.
     public var cadence: AsyncStream<Cadence>? {
         guard hasCadence else {
             return nil
@@ -85,6 +100,10 @@ public final class ConnectedSensor: Sendable {
         )
     }
 
+    /// Disconnects from the sensor and returns a ``DiscoveredSensor`` for reconnection.
+    ///
+    /// - Returns: A rediscovered sensor representing the same peripheral.
+    /// - Throws: ``DisconnectError`` when the disconnect operation fails.
     public func disconnect() async throws -> DiscoveredSensor {
         loopOwner.cancel()
         finishStreams()
