@@ -14,7 +14,7 @@ A Swift package that scans for, connects to, and reads Bluetooth CSCS (Cycling S
 
 ```
 BluetoothBikeSensorSwift/          # Swift package (library)
-  Package.swift
+  Package.swift                    # open this in Xcode to run unit tests
   Sources/BluetoothBikeSensorSwift/
   Tests/BluetoothBikeSensorSwiftTests/
 SampleApp/                         # iOS SwiftUI sample app
@@ -42,9 +42,18 @@ Unit tests inject package-visible test doubles and run on the macOS host without
 swift test
 ```
 
+In Xcode:
+
+1. Open `Package.swift` (File → Open → select the package root or `Package.swift`).
+2. Select the **BluetoothBikeSensorSwift** scheme.
+3. Choose a **My Mac** destination (package tests run on macOS).
+4. Product → Test (⌘U).
+
+Do not use `SampleApp.xcodeproj` for unit tests — that project only builds the sample app. Package tests live in the Swift package scheme.
+
 ### Sample app
 
-Open `SampleApp/SampleApp.xcodeproj` in Xcode and run on an iOS simulator or device.
+Open `SampleApp/SampleApp.xcodeproj` in Xcode and run the **SampleApp** scheme on an iOS simulator or device.
 
 Or from the command line:
 
