@@ -2,7 +2,7 @@
 
 A Swift package that scans for, connects to, and reads Bluetooth CSCS (Cycling Speed and Cadence Service) sensors. Includes an iOS SwiftUI sample app.
 
-**Status:** Phase 1 — Bluetooth session and testability foundation. Clients use `Scanner()`; CoreBluetooth is wired internally. Scan/connect behavior on sensor types is not implemented yet (Phases 2–4).
+**Status:** Phase 2 — scan and discovery. `Scanner.scan()` discovers CSCS-capable sensors and yields `DiscoveredSensor` values. Cancel the stream to stop scanning. Connect and live measurements are not implemented yet (Phases 3–4).
 
 ## Requirements
 
@@ -59,7 +59,8 @@ xcodebuild \
 ## Public API
 
 - `Scanner()` — client initializer; wires production dependencies internally
-- `DiscoveredSensor` — discovery metadata; `connect() async throws -> ConnectedSensor`
+- `Scanner.scan()` — returns `AsyncStream<DiscoveredSensor>` filtered to CSC service (`0x1816`); cancel the stream to stop scanning
+- `DiscoveredSensor` — discovery metadata (`id`, `name`, `manufacturer`, `hasSpeed`, `hasCadence`); `connect() async throws -> ConnectedSensor` (not implemented until Phase 3)
 - `ConnectedSensor` — optional `speed` / `cadence` streams; `disconnect() async throws -> DiscoveredSensor`
 - `Speed` — typealias for `Measurement<UnitSpeed>`
 - `Cadence` — typealias for `Measurement<UnitFrequency>`; use `UnitFrequency.revolutionsPerMinute` for cadence
