@@ -15,10 +15,10 @@ package actor CoreBluetoothCentral: BluetoothCentral {
     private var pendingReadValues: [GATTRequestKey: CheckedContinuation<Data, Error>] = [:]
     private var pendingSetNotifyValues: [GATTRequestKey: CheckedContinuation<Void, Error>] = [:]
 
-    private let stateBroadcaster = StreamBroadcaster<BluetoothState>.Box()
-    private let discoveryBroadcaster = StreamBroadcaster<DiscoveredPeripheralEvent>.Box()
-    private let connectionBroadcaster = StreamBroadcaster<ConnectionEvent>.Box()
-    private let gattBroadcaster = StreamBroadcaster<GATTEvent>.Box()
+    private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
+    private let discoveryBroadcaster = StreamBroadcaster<DiscoveredPeripheralEvent>()
+    private let connectionBroadcaster = StreamBroadcaster<ConnectionEvent>()
+    private let gattBroadcaster = StreamBroadcaster<GATTEvent>()
 
     package init() {
         let bridge = CentralDelegateBridge()
@@ -31,7 +31,7 @@ package actor CoreBluetoothCentral: BluetoothCentral {
 
     package var stateUpdates: AsyncStream<BluetoothState> {
         get async {
-            stateBroadcaster.makeStream()
+            await stateBroadcaster.makeStream()
         }
     }
 
@@ -54,7 +54,7 @@ package actor CoreBluetoothCentral: BluetoothCentral {
 
     package var discoveries: AsyncStream<DiscoveredPeripheralEvent> {
         get async {
-            discoveryBroadcaster.makeStream()
+            await discoveryBroadcaster.makeStream()
         }
     }
 
@@ -85,7 +85,7 @@ package actor CoreBluetoothCentral: BluetoothCentral {
 
     package var connectionEvents: AsyncStream<ConnectionEvent> {
         get async {
-            connectionBroadcaster.makeStream()
+            await connectionBroadcaster.makeStream()
         }
     }
 
@@ -122,7 +122,7 @@ package actor CoreBluetoothCentral: BluetoothCentral {
 
     package var gattEvents: AsyncStream<GATTEvent> {
         get async {
-            gattBroadcaster.makeStream()
+            await gattBroadcaster.makeStream()
         }
     }
 
@@ -216,26 +216,26 @@ package actor CoreBluetoothCentral: BluetoothCentral {
         }
     }
 
-    private func handle(_ event: CentralDelegateEvent) {
+    private func handle(_ event: CentralDelegateEvent) async {
         switch event {
         case let .stateUpdated(newState):
             state = newState
-            stateBroadcaster.yield(newState)
+            await stateBroadcaster.yield(newState)
 
         case let .discovered(discovery):
-            discoveryBroadcaster.yield(discovery)
+            await discoveryBroadcaster.yield(discovery)
 
         case let .connected(id):
-            connectionBroadcaster.yield(.connected(id: id))
+            await connectionBroadcaster.yield(.connected(id: id))
             pendingConnections.removeValue(forKey: id)?.resume()
 
         case let .failedToConnect(id, reason):
-            connectionBroadcaster.yield(.failed(id: id, reason: reason))
+            await connectionBroadcaster.yield(.failed(id: id, reason: reason))
             pendingConnections.removeValue(forKey: id)?
                 .resume(throwing: BluetoothCentralError.connectionFailed(id, reason: reason))
 
         case let .disconnected(id, reason):
-            connectionBroadcaster.yield(.disconnected(id: id, reason: reason))
+            await connectionBroadcaster.yield(.disconnected(id: id, reason: reason))
             let disconnectError = BluetoothCentralError.disconnected(id, reason: reason)
             failPendingGATTRequests(for: id, error: disconnectError)
             pendingConnections.removeValue(forKey: id)?
@@ -252,7 +252,7 @@ package actor CoreBluetoothCentral: BluetoothCentral {
                     .resume(throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason))
                 return
             }
-            gattBroadcaster.yield(.servicesDiscovered(id: id, serviceUUIDs: serviceUUIDs))
+            await gattBroadcaster.yield(.servicesDiscovered(id: id, serviceUUIDs: serviceUUIDs))
             pendingServiceDiscoveries.removeValue(forKey: id)?.resume()
 
         case let .characteristicsDiscovered(id, serviceUUID, characteristicUUIDs, errorReason):
@@ -261,7 +261,7 @@ package actor CoreBluetoothCentral: BluetoothCentral {
                     .resume(throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason))
                 return
             }
-            gattBroadcaster.yield(
+            await gattBroadcaster.yield(
                 .characteristicsDiscovered(
                     id: id,
                     serviceUUID: serviceUUID,
@@ -281,7 +281,7 @@ package actor CoreBluetoothCentral: BluetoothCentral {
                     .resume(throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason))
                 return
             }
-            gattBroadcaster.yield(
+            await gattBroadcaster.yield(
                 .characteristicValue(
                     id: id,
                     serviceUUID: serviceUUID,
@@ -302,7 +302,7 @@ package actor CoreBluetoothCentral: BluetoothCentral {
                     .resume(throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason))
                 return
             }
-            gattBroadcaster.yield(
+            await gattBroadcaster.yield(
                 .notificationStateChanged(
                     id: id,
                     serviceUUID: serviceUUID,

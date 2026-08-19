@@ -44,8 +44,8 @@ final class SensorRowModel: Identifiable {
     func applyConnected(_ sensor: ConnectedSensor) {
         connectedSensor = sensor
         phase = .connected
-        speedText = sensor.speed == nil ? nil : "—"
-        cadenceText = sensor.cadence == nil ? nil : "—"
+        speedText = metadata.hasSpeed ? "—" : nil
+        cadenceText = metadata.hasCadence ? "—" : nil
     }
 
     func applyRediscovered(_ sensor: DiscoveredSensor) {
@@ -61,11 +61,11 @@ final class SensorRowModel: Identifiable {
     }
 
     var supportsSpeed: Bool {
-        connectedSensor?.speed != nil
+        metadata.hasSpeed
     }
 
     var supportsCadence: Bool {
-        connectedSensor?.cadence != nil
+        metadata.hasCadence
     }
 
     func updateSpeedDisplay(_ text: String?) {

@@ -20,6 +20,21 @@ public final class ConnectedSensor: Sendable {
             self.wheelCircumference = wheelCircumference
             self.measurementState = measurementState
         }
+
+        func readMeasurementContext() -> (circumferenceMeters: Double, state: CSCMeasurementState) {
+            lock.lock()
+            defer { lock.unlock() }
+            return (
+                wheelCircumference.converted(to: .meters).value,
+                measurementState,
+            )
+        }
+
+        func writeMeasurementState(_ state: CSCMeasurementState) {
+            lock.lock()
+            measurementState = state
+            lock.unlock()
+        }
     }
 
     private let stateBox = StateBox(
@@ -27,8 +42,8 @@ public final class ConnectedSensor: Sendable {
         measurementState: CSCMeasurementState(),
     )
 
-    private let speedBroadcaster = StreamBroadcaster<Speed>.Box()
-    private let cadenceBroadcaster = StreamBroadcaster<Cadence>.Box()
+    private let speedBroadcaster = StreamBroadcaster<Speed>()
+    private let cadenceBroadcaster = StreamBroadcaster<Cadence>()
 
     private let id: UUID
     private let name: String?
@@ -58,10 +73,12 @@ public final class ConnectedSensor: Sendable {
     ///
     /// Emits ``Speed`` values while connected. The stream finishes on disconnect.
     public var speed: AsyncStream<Speed>? {
-        guard hasSpeed else {
-            return nil
+        get async {
+            guard hasSpeed else {
+                return nil
+            }
+            return await speedBroadcaster.makeStream()
         }
-        return speedBroadcaster.makeStream()
     }
 
     /// Live cadence stream, or `nil` when the sensor does not support crank data.
@@ -69,10 +86,12 @@ public final class ConnectedSensor: Sendable {
     /// Emits ``Cadence`` values in revolutions per minute while connected. The stream
     /// finishes on disconnect.
     public var cadence: AsyncStream<Cadence>? {
-        guard hasCadence else {
-            return nil
+        get async {
+            guard hasCadence else {
+                return nil
+            }
+            return await cadenceBroadcaster.makeStream()
         }
-        return cadenceBroadcaster.makeStream()
     }
 
     package init(
@@ -106,7 +125,7 @@ public final class ConnectedSensor: Sendable {
     /// - Throws: ``DisconnectError`` when the disconnect operation fails.
     public func disconnect() async throws -> DiscoveredSensor {
         loopOwner.cancel()
-        finishStreams()
+        await finishStreams()
 
         try? await central.setNotifyValue(
             id: id,
@@ -133,9 +152,9 @@ public final class ConnectedSensor: Sendable {
         )
     }
 
-    private func finishStreams() {
-        speedBroadcaster.finish()
-        cadenceBroadcaster.finish()
+    private func finishStreams() async {
+        await speedBroadcaster.finish()
+        await cadenceBroadcaster.finish()
     }
 
     private static func runMeasurementLoop(
@@ -143,8 +162,8 @@ public final class ConnectedSensor: Sendable {
         id: UUID,
         hasSpeed: Bool,
         hasCadence: Bool,
-        speedBroadcaster: StreamBroadcaster<Speed>.Box,
-        cadenceBroadcaster: StreamBroadcaster<Cadence>.Box,
+        speedBroadcaster: StreamBroadcaster<Speed>,
+        cadenceBroadcaster: StreamBroadcaster<Cadence>,
         stateBox: StateBox,
     ) async {
         async let gattLoop: Void = consumeGATTEvents(
@@ -170,8 +189,8 @@ public final class ConnectedSensor: Sendable {
         id: UUID,
         hasSpeed: Bool,
         hasCadence: Bool,
-        speedBroadcaster: StreamBroadcaster<Speed>.Box,
-        cadenceBroadcaster: StreamBroadcaster<Cadence>.Box,
+        speedBroadcaster: StreamBroadcaster<Speed>,
+        cadenceBroadcaster: StreamBroadcaster<Cadence>,
         stateBox: StateBox,
     ) async {
         let gattEvents = await central.gattEvents
@@ -193,7 +212,7 @@ public final class ConnectedSensor: Sendable {
                 continue
             }
 
-            processMeasurement(
+            await processMeasurement(
                 value,
                 hasSpeed: hasSpeed,
                 hasCadence: hasCadence,
@@ -207,8 +226,8 @@ public final class ConnectedSensor: Sendable {
     private static func consumeConnectionEvents(
         central: any BluetoothCentral,
         id: UUID,
-        speedBroadcaster: StreamBroadcaster<Speed>.Box,
-        cadenceBroadcaster: StreamBroadcaster<Cadence>.Box,
+        speedBroadcaster: StreamBroadcaster<Speed>,
+        cadenceBroadcaster: StreamBroadcaster<Cadence>,
     ) async {
         let connectionEvents = await central.connectionEvents
         for await event in connectionEvents {
@@ -217,8 +236,8 @@ public final class ConnectedSensor: Sendable {
             }
 
             if case let .disconnected(peripheralID, _) = event, peripheralID == id {
-                speedBroadcaster.finish()
-                cadenceBroadcaster.finish()
+                await speedBroadcaster.finish()
+                await cadenceBroadcaster.finish()
                 return
             }
         }
@@ -228,26 +247,27 @@ public final class ConnectedSensor: Sendable {
         _ data: Data,
         hasSpeed: Bool,
         hasCadence: Bool,
-        speedBroadcaster: StreamBroadcaster<Speed>.Box,
-        cadenceBroadcaster: StreamBroadcaster<Cadence>.Box,
+        speedBroadcaster: StreamBroadcaster<Speed>,
+        cadenceBroadcaster: StreamBroadcaster<Cadence>,
         stateBox: StateBox,
-    ) {
+    ) async {
         guard let sample = CSCMeasurementParser.parse(data) else {
             return
         }
 
-        stateBox.lock.lock()
-        let circumferenceMeters = stateBox.wheelCircumference.converted(to: .meters).value
-        var state = stateBox.measurementState
-        stateBox.lock.unlock()
+        let context = stateBox.readMeasurementContext()
+        var state = context.state
+
+        var speedToYield: Speed?
+        var cadenceToYield: Cadence?
 
         if hasSpeed,
            let speed = CSCMeasurementParser.speed(
                from: sample,
                previous: &state,
-               circumferenceMeters: circumferenceMeters,
+               circumferenceMeters: context.circumferenceMeters,
            ) {
-            speedBroadcaster.yield(speed)
+            speedToYield = speed
         }
 
         if hasCadence,
@@ -255,12 +275,18 @@ public final class ConnectedSensor: Sendable {
                from: sample,
                previous: &state,
            ) {
-            cadenceBroadcaster.yield(cadence)
+            cadenceToYield = cadence
         }
 
-        stateBox.lock.lock()
-        stateBox.measurementState = state
-        stateBox.lock.unlock()
+        if let speedToYield {
+            await speedBroadcaster.yield(speedToYield)
+        }
+
+        if let cadenceToYield {
+            await cadenceBroadcaster.yield(cadenceToYield)
+        }
+
+        stateBox.writeMeasurementState(state)
     }
 
     private final class MeasurementLoopOwner: @unchecked Sendable {
@@ -271,8 +297,8 @@ public final class ConnectedSensor: Sendable {
             id: UUID,
             hasSpeed: Bool,
             hasCadence: Bool,
-            speedBroadcaster: StreamBroadcaster<Speed>.Box,
-            cadenceBroadcaster: StreamBroadcaster<Cadence>.Box,
+            speedBroadcaster: StreamBroadcaster<Speed>,
+            cadenceBroadcaster: StreamBroadcaster<Cadence>,
             stateBox: StateBox,
         ) {
             task = Task {

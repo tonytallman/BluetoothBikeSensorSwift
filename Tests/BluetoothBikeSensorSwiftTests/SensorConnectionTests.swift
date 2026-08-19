@@ -266,7 +266,7 @@ import Testing
         )
 
         let connected = try await sensor.connect()
-        #expect(connected.speed != nil)
-        #expect(connected.cadence != nil)
+        #expect(await connected.speed != nil)
+        #expect(await connected.cadence != nil)
     }
 }

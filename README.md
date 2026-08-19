@@ -46,7 +46,7 @@ for await sensor in scanner.scan() {
         let connected = try await sensor.connect()
         connected.wheelCircumference = Measurement(value: 2.105, unit: .meters)
 
-        if let speedStream = connected.speed {
+        if let speedStream = await connected.speed {
             Task {
                 for await speed in speedStream {
                     let kmh = speed.converted(to: .kilometersPerHour)
@@ -55,7 +55,7 @@ for await sensor in scanner.scan() {
             }
         }
 
-        if let cadenceStream = connected.cadence {
+        if let cadenceStream = await connected.cadence {
             Task {
                 for await cadence in cadenceStream {
                     let rpm = cadence.converted(to: .revolutionsPerMinute)

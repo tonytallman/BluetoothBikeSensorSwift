@@ -200,7 +200,7 @@ import Testing
         let connected = try await sensor.connect()
         connected.wheelCircumference = Measurement(value: 2.0, unit: .meters)
 
-        guard let speedStream = connected.speed else {
+        guard let speedStream = await connected.speed else {
             Issue.record("Expected speed stream")
             return
         }
@@ -237,7 +237,7 @@ import Testing
         let sensor = makeSensor(fake: fake, id: sensorID)
         let connected = try await sensor.connect()
 
-        guard let speedStream = connected.speed else {
+        guard let speedStream = await connected.speed else {
             Issue.record("Expected speed stream")
             return
         }
@@ -269,8 +269,8 @@ import Testing
         await fake.setFeatureData(Data([0x02, 0x00]))
 
         let connected = try await makeSensor(fake: fake).connect()
-        #expect(connected.speed == nil)
-        #expect(connected.cadence != nil)
+        #expect(await connected.speed == nil)
+        #expect(await connected.cadence != nil)
     }
 
     @Test func disconnectFinishesStreams() async throws {
@@ -278,7 +278,7 @@ import Testing
         let sensor = makeSensor(fake: fake)
         let connected = try await sensor.connect()
 
-        guard let speedStream = connected.speed else {
+        guard let speedStream = await connected.speed else {
             Issue.record("Expected speed stream")
             return
         }
@@ -304,7 +304,7 @@ import Testing
         let sensor = makeSensor(fake: fake, id: sensorID)
         let connected = try await sensor.connect()
 
-        guard let cadenceStream = connected.cadence else {
+        guard let cadenceStream = await connected.cadence else {
             Issue.record("Expected cadence stream")
             return
         }
@@ -332,7 +332,7 @@ import Testing
         let sensor = makeSensor(fake: fake, id: sensorID)
         let connected = try await sensor.connect()
 
-        guard let cadenceStream = connected.cadence else {
+        guard let cadenceStream = await connected.cadence else {
             Issue.record("Expected cadence stream")
             return
         }
@@ -370,7 +370,7 @@ import Testing
         let sensor = makeSensor(fake: fake, id: sensorID)
         let connected = try await sensor.connect()
 
-        guard let speedStream = connected.speed else {
+        guard let speedStream = await connected.speed else {
             Issue.record("Expected speed stream")
             return
         }

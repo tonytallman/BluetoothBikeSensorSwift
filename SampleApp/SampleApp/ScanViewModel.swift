@@ -67,7 +67,7 @@ final class ScanViewModel {
                 let connected = try await row.discoveredSensor.connect()
                 connected.wheelCircumference = currentWheelCircumference
                 row.applyConnected(connected)
-                subscribeToStreams(for: row)
+                await subscribeToStreams(for: row)
             } catch let error as ConnectError {
                 row.phase = .discovered
                 alertMessage = Self.message(for: error)
@@ -108,12 +108,12 @@ final class ScanViewModel {
         Measurement(value: wheelCircumferenceMeters, unit: .meters)
     }
 
-    private func subscribeToStreams(for row: SensorRowModel) {
+    private func subscribeToStreams(for row: SensorRowModel) async {
         guard let connected = row.connectedSensor else { return }
 
         var tasks: [Task<Void, Never>] = []
 
-        if let speedStream = connected.speed {
+        if let speedStream = await connected.speed {
             tasks.append(Task {
                 for await speed in speedStream {
                     guard !Task.isCancelled else { return }
@@ -129,7 +129,7 @@ final class ScanViewModel {
             row.speedText = nil
         }
 
-        if let cadenceStream = connected.cadence {
+        if let cadenceStream = await connected.cadence {
             tasks.append(Task {
                 for await cadence in cadenceStream {
                     guard !Task.isCancelled else { return }
