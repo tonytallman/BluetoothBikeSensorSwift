@@ -1,12 +1,12 @@
 import Foundation
 
-enum CSCFeatureParser {
-    struct Capabilities: Sendable, Equatable {
-        let hasSpeed: Bool
-        let hasCadence: Bool
+package enum CSCFeatureParser {
+    package struct Capabilities: Sendable, Equatable {
+        package let hasSpeed: Bool
+        package let hasCadence: Bool
     }
 
-    static func parse(_ data: Data) -> Capabilities? {
+    package static func parse(_ data: Data) -> Capabilities? {
         guard data.count >= 2 else {
             return nil
         }

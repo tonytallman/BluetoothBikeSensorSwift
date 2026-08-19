@@ -1,21 +1,33 @@
 import Foundation
 
-struct CSCMeasurementSample: Sendable, Equatable {
-    let cumulativeWheelRevolutions: UInt32?
-    let lastWheelEventTime: UInt16?
-    let cumulativeCrankRevolutions: UInt16?
-    let lastCrankEventTime: UInt16?
+package struct CSCMeasurementSample: Sendable, Equatable {
+    package let cumulativeWheelRevolutions: UInt32?
+    package let lastWheelEventTime: UInt16?
+    package let cumulativeCrankRevolutions: UInt16?
+    package let lastCrankEventTime: UInt16?
 }
 
-struct CSCMeasurementState: Sendable, Equatable {
-    var previousWheelRevolutions: UInt32?
-    var previousWheelEventTime: UInt16?
-    var previousCrankRevolutions: UInt16?
-    var previousCrankEventTime: UInt16?
+package struct CSCMeasurementState: Sendable, Equatable {
+    package var previousWheelRevolutions: UInt32?
+    package var previousWheelEventTime: UInt16?
+    package var previousCrankRevolutions: UInt16?
+    package var previousCrankEventTime: UInt16?
+
+    package init(
+        previousWheelRevolutions: UInt32? = nil,
+        previousWheelEventTime: UInt16? = nil,
+        previousCrankRevolutions: UInt16? = nil,
+        previousCrankEventTime: UInt16? = nil,
+    ) {
+        self.previousWheelRevolutions = previousWheelRevolutions
+        self.previousWheelEventTime = previousWheelEventTime
+        self.previousCrankRevolutions = previousCrankRevolutions
+        self.previousCrankEventTime = previousCrankEventTime
+    }
 }
 
-enum CSCMeasurementParser {
-    static func parse(_ data: Data) -> CSCMeasurementSample? {
+package enum CSCMeasurementParser {
+    package static func parse(_ data: Data) -> CSCMeasurementSample? {
         guard !data.isEmpty else {
             return nil
         }
@@ -54,7 +66,7 @@ enum CSCMeasurementParser {
         )
     }
 
-    static func speed(
+    package static func speed(
         from sample: CSCMeasurementSample,
         previous: inout CSCMeasurementState,
         circumferenceMeters: Double,
@@ -83,7 +95,7 @@ enum CSCMeasurementParser {
         return Measurement(value: metersPerSecond, unit: UnitSpeed.metersPerSecond)
     }
 
-    static func cadence(
+    package static func cadence(
         from sample: CSCMeasurementSample,
         previous: inout CSCMeasurementState,
     ) -> Cadence? {

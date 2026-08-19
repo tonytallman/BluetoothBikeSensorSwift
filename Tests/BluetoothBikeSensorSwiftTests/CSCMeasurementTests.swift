@@ -1,4 +1,4 @@
-@testable import BluetoothBikeSensorSwift
+import BluetoothBikeSensorSwift
 import Foundation
 import Testing
 
