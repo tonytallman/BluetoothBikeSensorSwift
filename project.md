@@ -44,6 +44,15 @@ BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and rea
     - `Cadence` is a typealias for `Measurement<UnitFrequency>`.
     - Cadence values use `UnitFrequency.revolutionsPerMinute` (`"rpm"`).
     - Returns `nil` if cadence is not supported.
+- Has a property `wheelSamples: AsyncStream<WheelSample>?`.
+    - Returns `nil` if wheel data is not supported.
+    - Emits distance and time deltas derived from CSC wheel event timestamps (1/1024 s).
+    - `deltaDistance` uses client-managed `wheelCircumference` at emission time.
+    - Implausible-delta gaps suppress individual samples (same rule as instantaneous speed).
+- Has a property `crankSamples: AsyncStream<CrankSample>?`.
+    - Returns `nil` if crank data is not supported.
+    - Emits revolution and time deltas derived from CSC crank event timestamps (1/1024 s).
+    - Implausible-delta gaps suppress individual samples (same rule as instantaneous cadence).
 - Has a single function `disconnect()` returning `async` `DiscoveredSensor`, throwing `DisconnectError`.
 
 #### Measurement types
@@ -55,7 +64,8 @@ BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and rea
 #### Open Questions
 
 - Any other useful information to include with `DiscoveredSensor`?
-- Exact API surface for client-supplied wheel size (e.g., circumference parameter vs exposure of raw CSC fields for client-side computation).
+
+**Resolved:** Wheel size is `ConnectedSensor.wheelCircumference` (client-managed, default 2.105 m). Clients that need to accumulate distance or cadence consume `wheelSamples` / `crankSamples` rather than raw CSC cumulative counters.
 
 ### Sample App
 

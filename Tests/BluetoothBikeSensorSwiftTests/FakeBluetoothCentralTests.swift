@@ -143,4 +143,36 @@ enum AsyncTestHelpers {
         task.cancel()
         return await collector.snapshot()
     }
+
+    /// Returns as soon as `maxCount` elements arrive, or `timeout` elapses, whichever first.
+    /// Unlike `collect`, this does not sleep out the full timeout when values arrive early.
+    static func collectUntil<T: Sendable>(
+        from stream: AsyncStream<T>,
+        maxCount: Int,
+        timeoutNanoseconds: UInt64 = 1_000_000_000,
+    ) async -> [T] {
+        let collector = Collector<T>()
+
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                for await value in stream {
+                    await collector.append(value)
+                    if await collector.count() >= maxCount {
+                        return true
+                    }
+                }
+                return false
+            }
+
+            group.addTask {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                return false
+            }
+
+            _ = await group.next()
+            group.cancelAll()
+        }
+
+        return await collector.snapshot()
+    }
 }
