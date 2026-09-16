@@ -69,7 +69,7 @@ for await sensor in scanner.scan() {
                 for await sample in wheelSampleStream {
                     let meters = sample.deltaDistance.converted(to: .meters)
                     let seconds = sample.deltaTime.converted(to: .seconds)
-                    print("Wheel delta: \(meters) in \(seconds)s")
+                    print("Wheel delta: \(meters) in \(seconds)")
                 }
             }
         }
@@ -78,7 +78,7 @@ for await sensor in scanner.scan() {
             Task {
                 for await sample in crankSampleStream {
                     let seconds = sample.deltaTime.converted(to: .seconds)
-                    print("Crank delta: \(sample.deltaRevolutions) rev in \(seconds)s")
+                    print("Crank delta: \(sample.deltaRevolutions) rev in \(seconds)")
                 }
             }
         }

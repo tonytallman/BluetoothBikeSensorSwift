@@ -144,6 +144,24 @@ import Testing
         #expect(state.previousWheelEventTime == 1_024)
     }
 
+    @Test func zeroDeltaTimeDoesNotEmitCrank() {
+        var state = CSCMeasurementState()
+
+        _ = CSCMeasurementParser.crankDelta(
+            from: crankSample(revolutions: 10, eventTime: 1_024),
+            previous: &state,
+        )
+
+        let delta = CSCMeasurementParser.crankDelta(
+            from: crankSample(revolutions: 11, eventTime: 1_024),
+            previous: &state,
+        )
+
+        #expect(delta == nil)
+        #expect(state.previousCrankRevolutions == 11)
+        #expect(state.previousCrankEventTime == 1_024)
+    }
+
     @Test func zeroQuantityWithPositiveDeltaTimeEmitsWheel() {
         var state = CSCMeasurementState()
 
@@ -424,6 +442,13 @@ import Testing
             previous: &state,
         )
         #expect(rejected == nil)
+
+        let followUp = CSCMeasurementParser.crankDelta(
+            from: crankSample(revolutions: 6, eventTime: 1_023 + 1_024),
+            previous: &state,
+        )
+        #expect(followUp?.deltaRevolutions == 1)
+        #expect(followUp?.deltaTimeSeconds == 1.0)
     }
 
     @Test func interleavedPacketsDoNotWipeWheelSeed() {
@@ -435,10 +460,14 @@ import Testing
             circumferenceMeters: defaultCircumference,
         )
 
-        _ = CSCMeasurementParser.crankDelta(
+        let absent = CSCMeasurementParser.wheelDelta(
             from: crankSample(revolutions: 10, eventTime: 1_024),
             previous: &state,
+            circumferenceMeters: defaultCircumference,
         )
+        #expect(absent == nil)
+        #expect(state.previousWheelRevolutions == 100)
+        #expect(state.previousWheelEventTime == 1_024)
 
         let delta = CSCMeasurementParser.wheelDelta(
             from: wheelSample(revolutions: 102, eventTime: 2_048),
@@ -457,11 +486,13 @@ import Testing
             previous: &state,
         )
 
-        _ = CSCMeasurementParser.wheelDelta(
+        let absent = CSCMeasurementParser.crankDelta(
             from: wheelSample(revolutions: 100, eventTime: 1_024),
             previous: &state,
-            circumferenceMeters: defaultCircumference,
         )
+        #expect(absent == nil)
+        #expect(state.previousCrankRevolutions == 10)
+        #expect(state.previousCrankEventTime == 1_024)
 
         let delta = CSCMeasurementParser.crankDelta(
             from: crankSample(revolutions: 11, eventTime: 2_048),
@@ -622,7 +653,7 @@ struct CSCMeasurementStreamTests {
         let fake = FakeBluetoothCentral()
         await fake.setFeatureData(Data([0x02, 0x00]))
 
-        let connected = try await makeSensor(fake: fake, hasSpeed: false, hasCadence: true).connect()
+        let connected = try await makeSensor(fake: fake).connect()
         #expect(await connected.speed == nil)
         #expect(await connected.cadence != nil)
         #expect(await connected.wheelSamples == nil)
@@ -633,7 +664,7 @@ struct CSCMeasurementStreamTests {
         let fake = FakeBluetoothCentral()
         await fake.setFeatureData(Data([0x01, 0x00]))
 
-        let connected = try await makeSensor(fake: fake, hasSpeed: true, hasCadence: false).connect()
+        let connected = try await makeSensor(fake: fake).connect()
         #expect(await connected.speed != nil)
         #expect(await connected.cadence == nil)
         #expect(await connected.wheelSamples != nil)
@@ -769,6 +800,50 @@ struct CSCMeasurementStreamTests {
         let crankSamples = await crankCollector.value
         #expect(wheelSamples.count == 1)
         #expect(crankSamples.count == 1)
+        if wheelSamples.count == 1, crankSamples.count == 1 {
+            #expect(wheelSamples[0].deltaDistance.converted(to: .meters).value == 4.21)
+            #expect(wheelSamples[0].deltaTime.converted(to: .seconds).value == 1.0)
+            #expect(crankSamples[0].deltaRevolutions == 1)
+            #expect(crankSamples[0].deltaTime.converted(to: .seconds).value == 1.0)
+        }
+    }
+
+    @Test func interleavedPacketsEmitBothFamilies() async throws {
+        let fake = FakeBluetoothCentral()
+        let sensorID = UUID()
+        let connected = try await makeSensor(fake: fake, id: sensorID).connect()
+
+        guard let wheelStream = await connected.wheelSamples,
+              let crankStream = await connected.crankSamples
+        else {
+            Issue.record("Expected both sample streams")
+            return
+        }
+
+        let wheelCollector = Task {
+            await AsyncTestHelpers.collectUntil(from: wheelStream, maxCount: 1)
+        }
+        let crankCollector = Task {
+            await AsyncTestHelpers.collectUntil(from: crankStream, maxCount: 1)
+        }
+
+        await waitForMeasurementLoop()
+
+        await emitWheelMeasurement(fake: fake, id: sensorID, revolutions: 100, eventTime: 1_024)
+        await emitCrankMeasurement(fake: fake, id: sensorID, revolutions: 10, eventTime: 1_024)
+        await emitWheelMeasurement(fake: fake, id: sensorID, revolutions: 102, eventTime: 2_048)
+        await emitCrankMeasurement(fake: fake, id: sensorID, revolutions: 11, eventTime: 2_048)
+
+        let wheelSamples = await wheelCollector.value
+        let crankSamples = await crankCollector.value
+        #expect(wheelSamples.count == 1)
+        #expect(crankSamples.count == 1)
+        if wheelSamples.count == 1, crankSamples.count == 1 {
+            #expect(wheelSamples[0].deltaDistance.converted(to: .meters).value == 4.21)
+            #expect(wheelSamples[0].deltaTime.converted(to: .seconds).value == 1.0)
+            #expect(crankSamples[0].deltaRevolutions == 1)
+            #expect(crankSamples[0].deltaTime.converted(to: .seconds).value == 1.0)
+        }
     }
 
     @Test func combinedPayloadOneSideIdle() async throws {
@@ -907,7 +982,9 @@ struct CSCMeasurementStreamTests {
         let connected = try await sensor.connect()
 
         guard let speedStream = await connected.speed,
-              let wheelStream = await connected.wheelSamples
+              let cadenceStream = await connected.cadence,
+              let wheelStream = await connected.wheelSamples,
+              let crankStream = await connected.crankSamples
         else {
             Issue.record("Expected streams")
             return
@@ -920,9 +997,23 @@ struct CSCMeasurementStreamTests {
             finished = true
             return finished
         }
+        let cadenceCollector = Task {
+            var finished = false
+            for await _ in cadenceStream {
+            }
+            finished = true
+            return finished
+        }
         let wheelCollector = Task {
             var finished = false
             for await _ in wheelStream {
+            }
+            finished = true
+            return finished
+        }
+        let crankCollector = Task {
+            var finished = false
+            for await _ in crankStream {
             }
             finished = true
             return finished
@@ -931,10 +1022,10 @@ struct CSCMeasurementStreamTests {
         _ = try await connected.disconnect()
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        let speedFinished = await speedCollector.value
-        let wheelFinished = await wheelCollector.value
-        #expect(speedFinished == true)
-        #expect(wheelFinished == true)
+        #expect(await speedCollector.value == true)
+        #expect(await cadenceCollector.value == true)
+        #expect(await wheelCollector.value == true)
+        #expect(await crankCollector.value == true)
     }
 
     @Test func unexpectedDisconnectFinishesAllStreams() async throws {
@@ -943,7 +1034,9 @@ struct CSCMeasurementStreamTests {
         let sensor = makeSensor(fake: fake, id: sensorID)
         let connected = try await sensor.connect()
 
-        guard let cadenceStream = await connected.cadence,
+        guard let speedStream = await connected.speed,
+              let cadenceStream = await connected.cadence,
+              let wheelStream = await connected.wheelSamples,
               let crankStream = await connected.crankSamples
         else {
             Issue.record("Expected streams")
@@ -952,9 +1045,23 @@ struct CSCMeasurementStreamTests {
 
         await waitForMeasurementLoop()
 
+        let speedCollector = Task {
+            var finished = false
+            for await _ in speedStream {
+            }
+            finished = true
+            return finished
+        }
         let cadenceCollector = Task {
             var finished = false
             for await _ in cadenceStream {
+            }
+            finished = true
+            return finished
+        }
+        let wheelCollector = Task {
+            var finished = false
+            for await _ in wheelStream {
             }
             finished = true
             return finished
@@ -970,10 +1077,10 @@ struct CSCMeasurementStreamTests {
         await fake.emitConnection(.disconnected(id: sensorID, reason: "Link lost"))
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        let cadenceFinished = await cadenceCollector.value
-        let crankFinished = await crankCollector.value
-        #expect(cadenceFinished == true)
-        #expect(crankFinished == true)
+        #expect(await speedCollector.value == true)
+        #expect(await cadenceCollector.value == true)
+        #expect(await wheelCollector.value == true)
+        #expect(await crankCollector.value == true)
     }
 
     @Test func cadenceStreamEmitsRPMValues() async throws {

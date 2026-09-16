@@ -6,7 +6,10 @@ import Foundation
 /// ``ConnectedSensor/wheelCircumference`` at emission time. `deltaTime` comes
 /// from CSC last-wheel-event timestamps (1/1024 s resolution), not BLE arrival time.
 public struct WheelSample: Sendable, Equatable {
-    /// Distance traveled during this interval, in the client's chosen length unit.
+    /// Distance traveled during this interval, always in meters.
+    ///
+    /// ``ConnectedSensor/wheelCircumference`` is converted to meters at emission time.
+    /// Use ``Measurement/converted(to:)`` for another length unit.
     public let deltaDistance: Measurement<UnitLength>
 
     /// Elapsed time between CSC wheel event timestamps for this interval.

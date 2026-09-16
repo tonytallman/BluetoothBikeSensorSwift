@@ -183,10 +183,24 @@ public final class ConnectedSensor: Sendable {
     }
 
     private func finishStreams() async {
-        await speedBroadcaster.finish()
-        await cadenceBroadcaster.finish()
-        await wheelSampleBroadcaster.finish()
-        await crankSampleBroadcaster.finish()
+        await Self.finishAll(
+            speed: speedBroadcaster,
+            cadence: cadenceBroadcaster,
+            wheelSample: wheelSampleBroadcaster,
+            crankSample: crankSampleBroadcaster,
+        )
+    }
+
+    private static func finishAll(
+        speed: StreamBroadcaster<Speed>,
+        cadence: StreamBroadcaster<Cadence>,
+        wheelSample: StreamBroadcaster<WheelSample>,
+        crankSample: StreamBroadcaster<CrankSample>,
+    ) async {
+        await speed.finish()
+        await cadence.finish()
+        await wheelSample.finish()
+        await crankSample.finish()
     }
 
     private static func runMeasurementLoop(
@@ -280,10 +294,12 @@ public final class ConnectedSensor: Sendable {
             }
 
             if case let .disconnected(peripheralID, _) = event, peripheralID == id {
-                await speedBroadcaster.finish()
-                await cadenceBroadcaster.finish()
-                await wheelSampleBroadcaster.finish()
-                await crankSampleBroadcaster.finish()
+                await finishAll(
+                    speed: speedBroadcaster,
+                    cadence: cadenceBroadcaster,
+                    wheelSample: wheelSampleBroadcaster,
+                    crankSample: crankSampleBroadcaster,
+                )
                 return
             }
         }
