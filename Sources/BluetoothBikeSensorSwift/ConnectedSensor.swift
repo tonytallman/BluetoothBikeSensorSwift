@@ -44,6 +44,8 @@ public final class ConnectedSensor: Sendable {
 
     private let speedBroadcaster = StreamBroadcaster<Speed>()
     private let cadenceBroadcaster = StreamBroadcaster<Cadence>()
+    private let wheelSampleBroadcaster = StreamBroadcaster<WheelSample>()
+    private let crankSampleBroadcaster = StreamBroadcaster<CrankSample>()
 
     private let id: UUID
     private let name: String?
@@ -94,6 +96,32 @@ public final class ConnectedSensor: Sendable {
         }
     }
 
+    /// Wheel delta-sample stream, or `nil` when the sensor does not support wheel data.
+    ///
+    /// Emits ``WheelSample`` values with distance and time deltas derived from CSC
+    /// wheel event timestamps. The stream finishes on disconnect.
+    public var wheelSamples: AsyncStream<WheelSample>? {
+        get async {
+            guard hasSpeed else {
+                return nil
+            }
+            return await wheelSampleBroadcaster.makeStream()
+        }
+    }
+
+    /// Crank delta-sample stream, or `nil` when the sensor does not support crank data.
+    ///
+    /// Emits ``CrankSample`` values with revolution and time deltas derived from CSC
+    /// crank event timestamps. The stream finishes on disconnect.
+    public var crankSamples: AsyncStream<CrankSample>? {
+        get async {
+            guard hasCadence else {
+                return nil
+            }
+            return await crankSampleBroadcaster.makeStream()
+        }
+    }
+
     package init(
         id: UUID,
         name: String?,
@@ -115,6 +143,8 @@ public final class ConnectedSensor: Sendable {
             hasCadence: hasCadence,
             speedBroadcaster: speedBroadcaster,
             cadenceBroadcaster: cadenceBroadcaster,
+            wheelSampleBroadcaster: wheelSampleBroadcaster,
+            crankSampleBroadcaster: crankSampleBroadcaster,
             stateBox: stateBox,
         )
     }
@@ -155,6 +185,8 @@ public final class ConnectedSensor: Sendable {
     private func finishStreams() async {
         await speedBroadcaster.finish()
         await cadenceBroadcaster.finish()
+        await wheelSampleBroadcaster.finish()
+        await crankSampleBroadcaster.finish()
     }
 
     private static func runMeasurementLoop(
@@ -164,6 +196,8 @@ public final class ConnectedSensor: Sendable {
         hasCadence: Bool,
         speedBroadcaster: StreamBroadcaster<Speed>,
         cadenceBroadcaster: StreamBroadcaster<Cadence>,
+        wheelSampleBroadcaster: StreamBroadcaster<WheelSample>,
+        crankSampleBroadcaster: StreamBroadcaster<CrankSample>,
         stateBox: StateBox,
     ) async {
         async let gattLoop: Void = consumeGATTEvents(
@@ -173,6 +207,8 @@ public final class ConnectedSensor: Sendable {
             hasCadence: hasCadence,
             speedBroadcaster: speedBroadcaster,
             cadenceBroadcaster: cadenceBroadcaster,
+            wheelSampleBroadcaster: wheelSampleBroadcaster,
+            crankSampleBroadcaster: crankSampleBroadcaster,
             stateBox: stateBox,
         )
         async let connectionLoop: Void = consumeConnectionEvents(
@@ -180,6 +216,8 @@ public final class ConnectedSensor: Sendable {
             id: id,
             speedBroadcaster: speedBroadcaster,
             cadenceBroadcaster: cadenceBroadcaster,
+            wheelSampleBroadcaster: wheelSampleBroadcaster,
+            crankSampleBroadcaster: crankSampleBroadcaster,
         )
         _ = await (gattLoop, connectionLoop)
     }
@@ -191,6 +229,8 @@ public final class ConnectedSensor: Sendable {
         hasCadence: Bool,
         speedBroadcaster: StreamBroadcaster<Speed>,
         cadenceBroadcaster: StreamBroadcaster<Cadence>,
+        wheelSampleBroadcaster: StreamBroadcaster<WheelSample>,
+        crankSampleBroadcaster: StreamBroadcaster<CrankSample>,
         stateBox: StateBox,
     ) async {
         let gattEvents = await central.gattEvents
@@ -218,6 +258,8 @@ public final class ConnectedSensor: Sendable {
                 hasCadence: hasCadence,
                 speedBroadcaster: speedBroadcaster,
                 cadenceBroadcaster: cadenceBroadcaster,
+                wheelSampleBroadcaster: wheelSampleBroadcaster,
+                crankSampleBroadcaster: crankSampleBroadcaster,
                 stateBox: stateBox,
             )
         }
@@ -228,6 +270,8 @@ public final class ConnectedSensor: Sendable {
         id: UUID,
         speedBroadcaster: StreamBroadcaster<Speed>,
         cadenceBroadcaster: StreamBroadcaster<Cadence>,
+        wheelSampleBroadcaster: StreamBroadcaster<WheelSample>,
+        crankSampleBroadcaster: StreamBroadcaster<CrankSample>,
     ) async {
         let connectionEvents = await central.connectionEvents
         for await event in connectionEvents {
@@ -238,6 +282,8 @@ public final class ConnectedSensor: Sendable {
             if case let .disconnected(peripheralID, _) = event, peripheralID == id {
                 await speedBroadcaster.finish()
                 await cadenceBroadcaster.finish()
+                await wheelSampleBroadcaster.finish()
+                await crankSampleBroadcaster.finish()
                 return
             }
         }
@@ -249,6 +295,8 @@ public final class ConnectedSensor: Sendable {
         hasCadence: Bool,
         speedBroadcaster: StreamBroadcaster<Speed>,
         cadenceBroadcaster: StreamBroadcaster<Cadence>,
+        wheelSampleBroadcaster: StreamBroadcaster<WheelSample>,
+        crankSampleBroadcaster: StreamBroadcaster<CrankSample>,
         stateBox: StateBox,
     ) async {
         guard let sample = CSCMeasurementParser.parse(data) else {
@@ -258,35 +306,45 @@ public final class ConnectedSensor: Sendable {
         let context = stateBox.readMeasurementContext()
         var state = context.state
 
-        var speedToYield: Speed?
-        var cadenceToYield: Cadence?
-
-        if hasSpeed,
-           let speed = CSCMeasurementParser.speed(
-               from: sample,
-               previous: &state,
-               circumferenceMeters: context.circumferenceMeters,
-           ) {
-            speedToYield = speed
-        }
-
-        if hasCadence,
-           let cadence = CSCMeasurementParser.cadence(
-               from: sample,
-               previous: &state,
-           ) {
-            cadenceToYield = cadence
-        }
-
-        if let speedToYield {
-            await speedBroadcaster.yield(speedToYield)
-        }
-
-        if let cadenceToYield {
-            await cadenceBroadcaster.yield(cadenceToYield)
-        }
+        let wheelDelta = hasSpeed
+            ? CSCMeasurementParser.wheelDelta(
+                from: sample,
+                previous: &state,
+                circumferenceMeters: context.circumferenceMeters,
+            )
+            : nil
+        let crankDelta = hasCadence
+            ? CSCMeasurementParser.crankDelta(from: sample, previous: &state)
+            : nil
 
         stateBox.writeMeasurementState(state)
+
+        if let wheelDelta {
+            let speed = CSCMeasurementParser.speed(
+                from: wheelDelta,
+                circumferenceMeters: context.circumferenceMeters,
+            )
+            await speedBroadcaster.yield(speed)
+            await wheelSampleBroadcaster.yield(
+                WheelSample(
+                    deltaDistance: Measurement(
+                        value: Double(wheelDelta.deltaRevolutions) * context.circumferenceMeters,
+                        unit: .meters,
+                    ),
+                    deltaTime: Measurement(value: wheelDelta.deltaTimeSeconds, unit: .seconds),
+                ),
+            )
+        }
+
+        if let crankDelta {
+            await cadenceBroadcaster.yield(CSCMeasurementParser.cadence(from: crankDelta))
+            await crankSampleBroadcaster.yield(
+                CrankSample(
+                    deltaRevolutions: Int(crankDelta.deltaRevolutions),
+                    deltaTime: Measurement(value: crankDelta.deltaTimeSeconds, unit: .seconds),
+                ),
+            )
+        }
     }
 
     private final class MeasurementLoopOwner: @unchecked Sendable {
@@ -299,6 +357,8 @@ public final class ConnectedSensor: Sendable {
             hasCadence: Bool,
             speedBroadcaster: StreamBroadcaster<Speed>,
             cadenceBroadcaster: StreamBroadcaster<Cadence>,
+            wheelSampleBroadcaster: StreamBroadcaster<WheelSample>,
+            crankSampleBroadcaster: StreamBroadcaster<CrankSample>,
             stateBox: StateBox,
         ) {
             task = Task {
@@ -309,6 +369,8 @@ public final class ConnectedSensor: Sendable {
                     hasCadence: hasCadence,
                     speedBroadcaster: speedBroadcaster,
                     cadenceBroadcaster: cadenceBroadcaster,
+                    wheelSampleBroadcaster: wheelSampleBroadcaster,
+                    crankSampleBroadcaster: crankSampleBroadcaster,
                     stateBox: stateBox,
                 )
             }

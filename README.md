@@ -2,12 +2,12 @@
 
 A Swift package that scans for, connects to, and reads Bluetooth CSCS (Cycling Speed and Cadence Service) sensors. Includes an iOS SwiftUI sample app.
 
-**Status:** Phase 6 — hardened and documented. The library and sample app are complete through CSC scan, connect, live measurements, and disconnect.
+**Status:** Phase 6 — hardened and documented. The library and sample app are complete through CSC scan, connect, live measurements, and disconnect. `ConnectedSensor` also exposes optional `wheelSamples` and `crankSamples` delta-sample streams alongside instantaneous speed and cadence.
 
 ## Requirements
 
 - iOS 17+
-- Swift 6.0+
+- Swift 6.1+
 - Xcode 16+
 
 ## Installation
@@ -60,6 +60,25 @@ for await sensor in scanner.scan() {
                 for await cadence in cadenceStream {
                     let rpm = cadence.converted(to: .revolutionsPerMinute)
                     print("Cadence: \(rpm)")
+                }
+            }
+        }
+
+        if let wheelSampleStream = await connected.wheelSamples {
+            Task {
+                for await sample in wheelSampleStream {
+                    let meters = sample.deltaDistance.converted(to: .meters)
+                    let seconds = sample.deltaTime.converted(to: .seconds)
+                    print("Wheel delta: \(meters) in \(seconds)s")
+                }
+            }
+        }
+
+        if let crankSampleStream = await connected.crankSamples {
+            Task {
+                for await sample in crankSampleStream {
+                    let seconds = sample.deltaTime.converted(to: .seconds)
+                    print("Crank delta: \(sample.deltaRevolutions) rev in \(seconds)s")
                 }
             }
         }
@@ -161,7 +180,9 @@ The sample app provides a single scan list:
 - `Scanner.scan()` — returns `AsyncStream<DiscoveredSensor>` filtered to CSC service (`0x1816`); cancel the stream to stop scanning
 - `DiscoveredSensor` — discovery metadata (`id`, `name`, `manufacturer`, `hasSpeed`, `hasCadence`)
 - `DiscoveredSensor.connect()` — connects, discovers CSC service/characteristics, enables measurement notifications; throws `ConnectError`
-- `ConnectedSensor` — `wheelCircumference` (client-managed, default 2.105 m); optional `speed` / `cadence` streams; `disconnect() async throws -> DiscoveredSensor`
+- `ConnectedSensor` — `wheelCircumference` (client-managed, default 2.105 m); optional `speed` / `cadence` / `wheelSamples` / `crankSamples` streams; `disconnect() async throws -> DiscoveredSensor`
+- `WheelSample` — `deltaDistance` (`Measurement<UnitLength>`) and `deltaTime` (`Measurement<UnitDuration>`) between CSC wheel events; stream is `nil` when the sensor has no wheel data
+- `CrankSample` — `deltaRevolutions` (`Int`) and `deltaTime` (`Measurement<UnitDuration>`) between CSC crank events; stream is `nil` when the sensor has no crank data
 - `Speed` — typealias for `Measurement<UnitSpeed>`
 - `Cadence` — typealias for `Measurement<UnitFrequency>`; use `UnitFrequency.revolutionsPerMinute` for cadence
 - `ConnectError` — `notPoweredOn`, `timeout`, `failed`, `peripheralNotFound`, `serviceDiscoveryFailed`
@@ -173,7 +194,9 @@ Public types include DocC-style `///` comments in source. Test-only dependency i
 
 - **Multi-connection:** Multiple sensors may be connected simultaneously.
 - **Discovery metadata:** `name` and `manufacturer` are best-effort from advertisement data and may be absent.
-- **Capability flags:** `hasSpeed` and `hasCadence` on `DiscoveredSensor` are best-effort at discovery time. After connect, rely on non-`nil` `speed` / `cadence` streams for supported metrics.
+- **Capability flags:** `hasSpeed` and `hasCadence` on `DiscoveredSensor` are best-effort at discovery time. After connect, rely on non-`nil` `speed` / `cadence` / `wheelSamples` / `crankSamples` streams for supported metrics.
+- **CSC event-time wrap (64 s):** last-event time is uint16 at 1/1024 s and wraps every 64 seconds. If the sensor is silent for ~65 s, wrapping Δt can compute to ~1 s. One revolution over that wrong Δt is ~2.1 m/s, which passes the implausible-delta guard, so a sample is emitted with a wrong Δt. Downstream accumulators will add that Δt to total time. This is inherent to the protocol; this library does not reconstruct wall-clock intervals as `deltaTime`.
+- **Zero-distance / zero-revolution samples:** when Δt > 0 but revolutions did not change, the library emits a sample with zero quantity (0 m/s / 0 rpm). Spec-compliant firmware rarely advances event time without a revolution; non-compliant firmware can accrue moving time in downstream accumulators until autopause gates it.
 - **Unexpected disconnect:** If the link drops, measurement streams finish without throwing `DisconnectError`. Only an explicit `disconnect()` call that fails throws.
 - **Scan and Bluetooth state:** If Bluetooth is off when scanning starts, the scan stream finishes empty. Toggling Bluetooth off mid-scan does not automatically stop an active scan stream; cancel the stream to stop scanning.
 - **Simulator:** The iOS Simulator cannot scan for Bluetooth peripherals; use a physical device for end-to-end testing.
