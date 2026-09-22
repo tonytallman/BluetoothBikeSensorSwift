@@ -68,14 +68,13 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             inFlightBox.setAddContinuation(continuation)
             queue.sync {
-                let cbService = Self.makeCBService(from: service)
+                let (cbService, characteristicPairs) = Self.makeCBService(from: service)
                 delegateBridge.store(service: cbService, for: service.uuid)
-                for characteristic in service.characteristics {
-                    let cbCharacteristic = Self.makeCBCharacteristic(from: characteristic)
+                for pair in characteristicPairs {
                     delegateBridge.store(
-                        characteristic: cbCharacteristic,
+                        characteristic: pair.characteristic,
                         serviceUUID: service.uuid,
-                        characteristicUUID: characteristic.uuid,
+                        characteristicUUID: pair.uuid,
                     )
                 }
                 peripheralManager.add(cbService)
@@ -168,7 +167,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
 
         switch (requestKind, result) {
         case (.read, .success):
-            guard let value, !value.isEmpty else {
+            guard let value else {
                 throw BluetoothPeripheralError.missingReadValue
             }
         case (.read, .error), (.write, _):
@@ -190,7 +189,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
                     request.value = value
                 }
             case let .error(code):
-                cbResult = CBATTError.Code(rawValue: Int(code)) ?? .unlikelyError
+                cbResult = CBATTError.Code(rawValue: Int(code))
             }
 
             peripheralManager.respond(to: request, withResult: cbResult)
@@ -274,13 +273,19 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
-    private static func makeCBService(from service: PeripheralService) -> CBMutableService {
+    private static func makeCBService(
+        from service: PeripheralService,
+    ) -> (CBMutableService, [(uuid: UUID, characteristic: CBMutableCharacteristic)]) {
         let cbService = CBMutableService(
             type: CBUUIDBridge(uuid: service.uuid).cbUUID,
             primary: service.isPrimary,
         )
-        cbService.characteristics = service.characteristics.map(makeCBCharacteristic(from:))
-        return cbService
+        let characteristicPairs = service.characteristics.map { characteristic in
+            let cbCharacteristic = makeCBCharacteristic(from: characteristic)
+            return (uuid: characteristic.uuid, characteristic: cbCharacteristic)
+        }
+        cbService.characteristics = characteristicPairs.map(\.characteristic)
+        return (cbService, characteristicPairs)
     }
 
     private static func makeCBCharacteristic(from characteristic: PeripheralCharacteristic) -> CBMutableCharacteristic {

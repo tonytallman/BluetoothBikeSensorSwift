@@ -26,7 +26,7 @@ BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and rea
 - **Subscribe before `add` and `startAdvertising`** — inbound streams do not replay; use `currentState` for the latest Bluetooth state.
 - **Characteristic values** — a non-nil `value` is legal only when properties are exactly read and permissions are exactly readable (CoreBluetooth cached read). Any other combination throws `cachedValueNotReadOnly`. Nil `value` is dynamic; reads arrive on `readRequests`. The fake does not answer from a cached value.
 - **CCCD (`0x2902`)** — subscription enable/disable is `didSubscribeTo` / `didUnsubscribeFrom`, not `writeTransactions`.
-- **Read/write responses** — read success carries the offset slice in `respond`; the adaptor assigns it to `CBATTRequest.value` without re-slicing. One `respond` per write transaction uses the first `CBATTRequest`. Error bytes pass through `CBATTError.Code(rawValue:)` so application codes `0x80` / `0x81` survive.
+- **Read/write responses** — read success carries the offset slice in `respond`; the adaptor assigns it to `CBATTRequest.value` without re-slicing. The success slice may be empty; only `nil` is `missingReadValue`. One `respond` per write transaction uses the first `CBATTRequest`. Error bytes pass through `CBATTError.Code(rawValue:)` so application codes `0x80` / `0x81` survive.
 - **Notify backpressure** — when `updateValue` returns `false`, the caller waits on `subscriberUpdatesReady` and retries; this actor does not queue or retry internally.
 - **Control point** — the server adds SC Control Point only when a later builder requires it (same as issue #12 client behavior: wheel connect without control point when multiple-locations is clear).
 

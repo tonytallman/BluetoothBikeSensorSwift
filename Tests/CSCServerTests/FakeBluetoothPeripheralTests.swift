@@ -266,6 +266,54 @@ struct FakeBluetoothPeripheralTests {
         }
     }
 
+    @Test func emptyReadSuccessIsAccepted() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let stream = await fake.readRequests
+        var iterator = stream.makeAsyncIterator()
+
+        let requestID = UUID()
+        let centralID = UUID()
+        let serviceUUID = UUID()
+        let characteristicUUID = UUID()
+
+        await fake.emitRead(
+            PeripheralReadRequest(
+                id: requestID,
+                centralID: centralID,
+                serviceUUID: serviceUUID,
+                characteristicUUID: characteristicUUID,
+                offset: 0,
+            ),
+        )
+        _ = await iterator.next()
+
+        let nilRequestID = UUID()
+        await fake.emitRead(
+            PeripheralReadRequest(
+                id: nilRequestID,
+                centralID: centralID,
+                serviceUUID: serviceUUID,
+                characteristicUUID: characteristicUUID,
+                offset: 0,
+            ),
+        )
+        _ = await iterator.next()
+
+        await #expect(throws: BluetoothPeripheralError.missingReadValue) {
+            try await fake.respond(to: nilRequestID, with: .success, value: nil)
+        }
+        #expect(await fake.recordedCalls.isEmpty)
+
+        try await fake.respond(to: requestID, with: .success, value: Data())
+        #expect(await fake.recordedCalls == [
+            .respond(id: requestID, result: .success, value: Data()),
+        ])
+
+        await #expect(throws: BluetoothPeripheralError.unknownRequest) {
+            try await fake.respond(to: requestID, with: .success, value: Data())
+        }
+    }
+
     @Test func writeRoundTripUsesSingleRespond() async throws {
         let fake = FakeBluetoothPeripheral()
         let stream = await fake.writeTransactions

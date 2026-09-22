@@ -143,7 +143,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         if isRead {
             switch result {
             case .success:
-                guard let value, !value.isEmpty else {
+                guard let value else {
                     throw BluetoothPeripheralError.missingReadValue
                 }
             case .error:
