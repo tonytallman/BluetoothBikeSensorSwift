@@ -19,7 +19,7 @@ package protocol BluetoothCentral: Sendable {
         id: UUID,
         serviceUUID: UUID,
         characteristicUUIDs: [UUID]?,
-    ) async throws
+    ) async throws -> [UUID]
 
     var gattEvents: AsyncStream<GATTEvent> { get async }
 
@@ -35,4 +35,11 @@ package protocol BluetoothCentral: Sendable {
         serviceUUID: UUID,
         characteristicUUID: UUID,
     ) async throws -> Data
+
+    func writeValue(
+        id: UUID,
+        serviceUUID: UUID,
+        characteristicUUID: UUID,
+        value: Data,
+    ) async throws
 }

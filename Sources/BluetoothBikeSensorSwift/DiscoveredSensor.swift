@@ -3,8 +3,8 @@ import Foundation
 /// A CSCS sensor discovered during an active scan.
 ///
 /// Obtain instances only from ``Scanner/scan()``. Capability flags on this type are
-/// best-effort from discovery; after ``connect()``, rely on optional ``ConnectedSensor/speed``
-/// and ``ConnectedSensor/cadence`` streams for supported metrics.
+/// best-effort from discovery; after ``connect()``, rely on ``ConnectedSensor/revolutions``
+/// and ``ConnectedSensor/location`` for supported features.
 public struct DiscoveredSensor: Sendable {
     nonisolated(unsafe) package static var connectTimeoutNanoseconds: UInt64 = 10_000_000_000
 
@@ -14,9 +14,9 @@ public struct DiscoveredSensor: Sendable {
     public let name: String?
     /// Manufacturer resolved from advertisement data, when available.
     public let manufacturer: String?
-    /// Best-effort speed support hint from discovery; refined on connect.
+    /// Best-effort speed support hint from discovery.
     public let hasSpeed: Bool
-    /// Best-effort cadence support hint from discovery; refined on connect.
+    /// Best-effort cadence support hint from discovery.
     public let hasCadence: Bool
 
     private let central: any BluetoothCentral
@@ -38,9 +38,6 @@ public struct DiscoveredSensor: Sendable {
     }
 
     /// Connects to the sensor, discovers CSC characteristics, and enables notifications.
-    ///
-    /// - Returns: A ``ConnectedSensor`` for reading live measurements.
-    /// - Throws: ``ConnectError`` when connection, discovery, or notification setup fails.
     public func connect() async throws -> ConnectedSensor {
         guard await central.currentState == .poweredOn else {
             throw ConnectError.notPoweredOn
@@ -77,14 +74,15 @@ public struct DiscoveredSensor: Sendable {
             throw ConnectError.serviceDiscoveryFailed(reason: error.localizedDescription)
         }
 
-        let refinedCapabilities: (hasSpeed: Bool, hasCadence: Bool)
+        let connectionResult: CSCConnectionResult
         do {
-            refinedCapabilities = try await CSCConnectionSetup.prepare(
+            connectionResult = try await CSCConnectionSetup.prepare(
                 central: central,
                 id: id,
-                fallbackHasSpeed: hasSpeed,
-                fallbackHasCadence: hasCadence,
             )
+        } catch let error as ConnectError {
+            try? await central.disconnect(id: id)
+            throw error
         } catch {
             try? await central.disconnect(id: id)
             if let centralError = error as? BluetoothCentralError {
@@ -93,13 +91,91 @@ public struct DiscoveredSensor: Sendable {
             throw ConnectError.serviceDiscoveryFailed(reason: error.localizedDescription)
         }
 
+        return await Self.makeConnectedSensor(
+            id: id,
+            name: name,
+            manufacturer: manufacturer,
+            connectionResult: connectionResult,
+            central: central,
+        )
+    }
+
+    private static func makeConnectedSensor(
+        id: UUID,
+        name: String?,
+        manufacturer: String?,
+        connectionResult: CSCConnectionResult,
+        central: any BluetoothCentral,
+    ) async -> ConnectedSensor {
+        let stateBox = MeasurementStateBox()
+        let controlPointSession = CSCControlPointSession(
+            central: central,
+            peripheralID: id,
+            controlPointAvailable: connectionResult.controlPointAvailable,
+        )
+
+        if connectionResult.controlPointAvailable {
+            await controlPointSession.startListener()
+        }
+
+        let revolutions = Self.makeRevolutions(
+            resolved: connectionResult.revolutions,
+            stateBox: stateBox,
+            controlPointSession: controlPointSession,
+        )
+
+        let location: LocationSupport
+        switch connectionResult.location {
+        case .unavailable:
+            location = .unavailable
+        case let .fixed(sensorLocation):
+            location = .fixed(sensorLocation)
+        case let .multiple(supported, current):
+            location = .multiple(
+                MultipleSensorLocations(
+                    supported: supported,
+                    current: current,
+                    controlPointSession: controlPointSession,
+                ),
+            )
+        }
+
         return ConnectedSensor(
             id: id,
             name: name,
             manufacturer: manufacturer,
-            hasSpeed: refinedCapabilities.hasSpeed,
-            hasCadence: refinedCapabilities.hasCadence,
+            revolutions: revolutions,
+            location: location,
             central: central,
+            controlPointSession: controlPointSession,
+            controlPointIndicationsEnabled: connectionResult.controlPointAvailable,
+            stateBox: stateBox,
         )
+    }
+
+    private static func makeRevolutions(
+        resolved: ResolvedRevolutions,
+        stateBox: MeasurementStateBox,
+        controlPointSession: CSCControlPointSession,
+    ) -> RevolutionData {
+        switch resolved {
+        case .wheel:
+            return .wheel(
+                WheelRevolutions(
+                    stateBox: stateBox,
+                    controlPointSession: controlPointSession,
+                ),
+            )
+        case .crank:
+            return .crank(CrankRevolutions())
+        case .wheelAndCrank:
+            return .wheelAndCrank(
+                WheelRevolutions(
+                    stateBox: stateBox,
+                    controlPointSession: controlPointSession,
+                ),
+                CrankRevolutions(),
+            )
+        }
     }
 }

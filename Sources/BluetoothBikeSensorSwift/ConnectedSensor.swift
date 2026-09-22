@@ -2,159 +2,76 @@ import Foundation
 
 /// A connected CSCS sensor emitting live speed and/or cadence measurements.
 ///
-/// Created only by ``DiscoveredSensor/connect()``. Set ``wheelCircumference`` before or
-/// during streaming so speed values reflect your wheel size. Streams finish when the
+/// Created only by ``DiscoveredSensor/connect()``. Set ``WheelRevolutions/wheelCircumference``
+/// before or during streaming so speed values reflect your wheel size. Streams finish when the
 /// sensor disconnects unexpectedly; call ``disconnect()`` to release the connection.
 public final class ConnectedSensor: Sendable {
-    package static let defaultWheelCircumference = Measurement(value: 2.105, unit: UnitLength.meters)
+    /// Supported revolution data and live measurement streams.
+    public let revolutions: RevolutionData
 
-    private final class StateBox: @unchecked Sendable {
-        let lock = NSLock()
-        var wheelCircumference: Measurement<UnitLength>
-        var measurementState: CSCMeasurementState
-
-        init(
-            wheelCircumference: Measurement<UnitLength>,
-            measurementState: CSCMeasurementState,
-        ) {
-            self.wheelCircumference = wheelCircumference
-            self.measurementState = measurementState
-        }
-
-        func readMeasurementContext() -> (circumferenceMeters: Double, state: CSCMeasurementState) {
-            lock.lock()
-            defer { lock.unlock() }
-            return (
-                wheelCircumference.converted(to: .meters).value,
-                measurementState,
-            )
-        }
-
-        func writeMeasurementState(_ state: CSCMeasurementState) {
-            lock.lock()
-            measurementState = state
-            lock.unlock()
-        }
-    }
-
-    private let stateBox = StateBox(
-        wheelCircumference: ConnectedSensor.defaultWheelCircumference,
-        measurementState: CSCMeasurementState(),
-    )
-
-    private let speedBroadcaster = StreamBroadcaster<Speed>()
-    private let cadenceBroadcaster = StreamBroadcaster<Cadence>()
-    private let wheelSampleBroadcaster = StreamBroadcaster<WheelSample>()
-    private let crankSampleBroadcaster = StreamBroadcaster<CrankSample>()
+    /// Sensor location support for this connection.
+    public let location: LocationSupport
 
     private let id: UUID
     private let name: String?
     private let manufacturer: String?
-    private let hasSpeed: Bool
-    private let hasCadence: Bool
     private let central: any BluetoothCentral
+    private let controlPointSession: CSCControlPointSession
+    private let controlPointIndicationsEnabled: Bool
     private let loopOwner: MeasurementLoopOwner
 
-    /// Wheel circumference used for speed calculation. Client-managed; not persisted by the library.
-    ///
-    /// Default is 2.105 m (700×25C). Changes apply to subsequent speed calculations.
-    public var wheelCircumference: Measurement<UnitLength> {
-        get {
-            stateBox.lock.lock()
-            defer { stateBox.lock.unlock() }
-            return stateBox.wheelCircumference
-        }
-        set {
-            stateBox.lock.lock()
-            stateBox.wheelCircumference = newValue
-            stateBox.lock.unlock()
-        }
-    }
-
-    /// Live speed stream, or `nil` when the sensor does not support wheel data.
-    ///
-    /// Emits ``Speed`` values while connected. The stream finishes on disconnect.
-    public var speed: AsyncStream<Speed>? {
-        get async {
-            guard hasSpeed else {
-                return nil
-            }
-            return await speedBroadcaster.makeStream()
-        }
-    }
-
-    /// Live cadence stream, or `nil` when the sensor does not support crank data.
-    ///
-    /// Emits ``Cadence`` values in revolutions per minute while connected. The stream
-    /// finishes on disconnect.
-    public var cadence: AsyncStream<Cadence>? {
-        get async {
-            guard hasCadence else {
-                return nil
-            }
-            return await cadenceBroadcaster.makeStream()
-        }
-    }
-
-    /// Wheel delta-sample stream, or `nil` when the sensor does not support wheel data.
-    ///
-    /// Emits ``WheelSample`` values with distance and time deltas derived from CSC
-    /// wheel event timestamps. The stream finishes on disconnect.
-    public var wheelSamples: AsyncStream<WheelSample>? {
-        get async {
-            guard hasSpeed else {
-                return nil
-            }
-            return await wheelSampleBroadcaster.makeStream()
-        }
-    }
-
-    /// Crank delta-sample stream, or `nil` when the sensor does not support crank data.
-    ///
-    /// Emits ``CrankSample`` values with revolution and time deltas derived from CSC
-    /// crank event timestamps. The stream finishes on disconnect.
-    public var crankSamples: AsyncStream<CrankSample>? {
-        get async {
-            guard hasCadence else {
-                return nil
-            }
-            return await crankSampleBroadcaster.makeStream()
-        }
-    }
+    private let wheelRevolutions: WheelRevolutions?
+    private let crankRevolutions: CrankRevolutions?
 
     package init(
         id: UUID,
         name: String?,
         manufacturer: String?,
-        hasSpeed: Bool,
-        hasCadence: Bool,
+        revolutions: RevolutionData,
+        location: LocationSupport,
         central: any BluetoothCentral,
+        controlPointSession: CSCControlPointSession,
+        controlPointIndicationsEnabled: Bool,
+        stateBox: MeasurementStateBox,
     ) {
         self.id = id
         self.name = name
         self.manufacturer = manufacturer
-        self.hasSpeed = hasSpeed
-        self.hasCadence = hasCadence
+        self.revolutions = revolutions
+        self.location = location
         self.central = central
+        self.controlPointSession = controlPointSession
+        self.controlPointIndicationsEnabled = controlPointIndicationsEnabled
+
+        switch revolutions {
+        case let .wheel(wheel):
+            wheelRevolutions = wheel
+            crankRevolutions = nil
+        case let .crank(crank):
+            wheelRevolutions = nil
+            crankRevolutions = crank
+        case let .wheelAndCrank(wheel, crank):
+            wheelRevolutions = wheel
+            crankRevolutions = crank
+        }
+
         loopOwner = MeasurementLoopOwner(
             central: central,
             id: id,
-            hasSpeed: hasSpeed,
-            hasCadence: hasCadence,
-            speedBroadcaster: speedBroadcaster,
-            cadenceBroadcaster: cadenceBroadcaster,
-            wheelSampleBroadcaster: wheelSampleBroadcaster,
-            crankSampleBroadcaster: crankSampleBroadcaster,
+            wheelRevolutions: wheelRevolutions,
+            crankRevolutions: crankRevolutions,
             stateBox: stateBox,
         )
     }
 
+    deinit {
+        loopOwner.cancel()
+    }
+
     /// Disconnects from the sensor and returns a ``DiscoveredSensor`` for reconnection.
-    ///
-    /// - Returns: A rediscovered sensor representing the same peripheral.
-    /// - Throws: ``DisconnectError`` when the disconnect operation fails.
     public func disconnect() async throws -> DiscoveredSensor {
         loopOwner.cancel()
+        await controlPointSession.cancel()
         await finishStreams()
 
         try? await central.setNotifyValue(
@@ -164,6 +81,15 @@ public final class ConnectedSensor: Sendable {
             enabled: false,
         )
 
+        if controlPointIndicationsEnabled {
+            try? await central.setNotifyValue(
+                id: id,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.controlPointUUID,
+                enabled: false,
+            )
+        }
+
         do {
             try await central.disconnect(id: id)
         } catch let error as BluetoothCentralError {
@@ -172,6 +98,7 @@ public final class ConnectedSensor: Sendable {
             throw DisconnectError.failed(reason: error.localizedDescription)
         }
 
+        let (hasSpeed, hasCadence) = Self.capabilityFlags(for: revolutions)
         return DiscoveredSensor(
             id: id,
             name: name,
@@ -182,56 +109,45 @@ public final class ConnectedSensor: Sendable {
         )
     }
 
-    private func finishStreams() async {
-        await Self.finishAll(
-            speed: speedBroadcaster,
-            cadence: cadenceBroadcaster,
-            wheelSample: wheelSampleBroadcaster,
-            crankSample: crankSampleBroadcaster,
-        )
+    private static func capabilityFlags(for revolutions: RevolutionData) -> (hasSpeed: Bool, hasCadence: Bool) {
+        switch revolutions {
+        case .wheel:
+            return (true, false)
+        case .crank:
+            return (false, true)
+        case .wheelAndCrank:
+            return (true, true)
+        }
     }
 
-    private static func finishAll(
-        speed: StreamBroadcaster<Speed>,
-        cadence: StreamBroadcaster<Cadence>,
-        wheelSample: StreamBroadcaster<WheelSample>,
-        crankSample: StreamBroadcaster<CrankSample>,
-    ) async {
-        await speed.finish()
-        await cadence.finish()
-        await wheelSample.finish()
-        await crankSample.finish()
+    private func finishStreams() async {
+        if let wheelRevolutions {
+            await wheelRevolutions.finishStreams()
+        }
+        if let crankRevolutions {
+            await crankRevolutions.finishStreams()
+        }
     }
 
     private static func runMeasurementLoop(
         central: any BluetoothCentral,
         id: UUID,
-        hasSpeed: Bool,
-        hasCadence: Bool,
-        speedBroadcaster: StreamBroadcaster<Speed>,
-        cadenceBroadcaster: StreamBroadcaster<Cadence>,
-        wheelSampleBroadcaster: StreamBroadcaster<WheelSample>,
-        crankSampleBroadcaster: StreamBroadcaster<CrankSample>,
-        stateBox: StateBox,
+        wheelRevolutions: WheelRevolutions?,
+        crankRevolutions: CrankRevolutions?,
+        stateBox: MeasurementStateBox,
     ) async {
         async let gattLoop: Void = consumeGATTEvents(
             central: central,
             id: id,
-            hasSpeed: hasSpeed,
-            hasCadence: hasCadence,
-            speedBroadcaster: speedBroadcaster,
-            cadenceBroadcaster: cadenceBroadcaster,
-            wheelSampleBroadcaster: wheelSampleBroadcaster,
-            crankSampleBroadcaster: crankSampleBroadcaster,
+            wheelRevolutions: wheelRevolutions,
+            crankRevolutions: crankRevolutions,
             stateBox: stateBox,
         )
         async let connectionLoop: Void = consumeConnectionEvents(
             central: central,
             id: id,
-            speedBroadcaster: speedBroadcaster,
-            cadenceBroadcaster: cadenceBroadcaster,
-            wheelSampleBroadcaster: wheelSampleBroadcaster,
-            crankSampleBroadcaster: crankSampleBroadcaster,
+            wheelRevolutions: wheelRevolutions,
+            crankRevolutions: crankRevolutions,
         )
         _ = await (gattLoop, connectionLoop)
     }
@@ -239,13 +155,9 @@ public final class ConnectedSensor: Sendable {
     private static func consumeGATTEvents(
         central: any BluetoothCentral,
         id: UUID,
-        hasSpeed: Bool,
-        hasCadence: Bool,
-        speedBroadcaster: StreamBroadcaster<Speed>,
-        cadenceBroadcaster: StreamBroadcaster<Cadence>,
-        wheelSampleBroadcaster: StreamBroadcaster<WheelSample>,
-        crankSampleBroadcaster: StreamBroadcaster<CrankSample>,
-        stateBox: StateBox,
+        wheelRevolutions: WheelRevolutions?,
+        crankRevolutions: CrankRevolutions?,
+        stateBox: MeasurementStateBox,
     ) async {
         let gattEvents = await central.gattEvents
         for await event in gattEvents {
@@ -268,12 +180,8 @@ public final class ConnectedSensor: Sendable {
 
             await processMeasurement(
                 value,
-                hasSpeed: hasSpeed,
-                hasCadence: hasCadence,
-                speedBroadcaster: speedBroadcaster,
-                cadenceBroadcaster: cadenceBroadcaster,
-                wheelSampleBroadcaster: wheelSampleBroadcaster,
-                crankSampleBroadcaster: crankSampleBroadcaster,
+                wheelRevolutions: wheelRevolutions,
+                crankRevolutions: crankRevolutions,
                 stateBox: stateBox,
             )
         }
@@ -282,10 +190,8 @@ public final class ConnectedSensor: Sendable {
     private static func consumeConnectionEvents(
         central: any BluetoothCentral,
         id: UUID,
-        speedBroadcaster: StreamBroadcaster<Speed>,
-        cadenceBroadcaster: StreamBroadcaster<Cadence>,
-        wheelSampleBroadcaster: StreamBroadcaster<WheelSample>,
-        crankSampleBroadcaster: StreamBroadcaster<CrankSample>,
+        wheelRevolutions: WheelRevolutions?,
+        crankRevolutions: CrankRevolutions?,
     ) async {
         let connectionEvents = await central.connectionEvents
         for await event in connectionEvents {
@@ -294,12 +200,12 @@ public final class ConnectedSensor: Sendable {
             }
 
             if case let .disconnected(peripheralID, _) = event, peripheralID == id {
-                await finishAll(
-                    speed: speedBroadcaster,
-                    cadence: cadenceBroadcaster,
-                    wheelSample: wheelSampleBroadcaster,
-                    crankSample: crankSampleBroadcaster,
-                )
+                if let wheelRevolutions {
+                    await wheelRevolutions.finishStreams()
+                }
+                if let crankRevolutions {
+                    await crankRevolutions.finishStreams()
+                }
                 return
             }
         }
@@ -307,13 +213,9 @@ public final class ConnectedSensor: Sendable {
 
     private static func processMeasurement(
         _ data: Data,
-        hasSpeed: Bool,
-        hasCadence: Bool,
-        speedBroadcaster: StreamBroadcaster<Speed>,
-        cadenceBroadcaster: StreamBroadcaster<Cadence>,
-        wheelSampleBroadcaster: StreamBroadcaster<WheelSample>,
-        crankSampleBroadcaster: StreamBroadcaster<CrankSample>,
-        stateBox: StateBox,
+        wheelRevolutions: WheelRevolutions?,
+        crankRevolutions: CrankRevolutions?,
+        stateBox: MeasurementStateBox,
     ) async {
         guard let sample = CSCMeasurementParser.parse(data) else {
             return
@@ -322,26 +224,26 @@ public final class ConnectedSensor: Sendable {
         let context = stateBox.readMeasurementContext()
         var state = context.state
 
-        let wheelDelta = hasSpeed
+        let wheelDelta = wheelRevolutions != nil
             ? CSCMeasurementParser.wheelDelta(
                 from: sample,
                 previous: &state,
                 circumferenceMeters: context.circumferenceMeters,
             )
             : nil
-        let crankDelta = hasCadence
+        let crankDelta = crankRevolutions != nil
             ? CSCMeasurementParser.crankDelta(from: sample, previous: &state)
             : nil
 
         stateBox.writeMeasurementState(state)
 
-        if let wheelDelta {
+        if let wheelDelta, let wheelRevolutions {
             let speed = CSCMeasurementParser.speed(
                 from: wheelDelta,
                 circumferenceMeters: context.circumferenceMeters,
             )
-            await speedBroadcaster.yield(speed)
-            await wheelSampleBroadcaster.yield(
+            await wheelRevolutions.yieldSpeed(speed)
+            await wheelRevolutions.yieldWheelSample(
                 WheelSample(
                     deltaDistance: Measurement(
                         value: Double(wheelDelta.deltaRevolutions) * context.circumferenceMeters,
@@ -352,9 +254,9 @@ public final class ConnectedSensor: Sendable {
             )
         }
 
-        if let crankDelta {
-            await cadenceBroadcaster.yield(CSCMeasurementParser.cadence(from: crankDelta))
-            await crankSampleBroadcaster.yield(
+        if let crankDelta, let crankRevolutions {
+            await crankRevolutions.yieldCadence(CSCMeasurementParser.cadence(from: crankDelta))
+            await crankRevolutions.yieldCrankSample(
                 CrankSample(
                     deltaRevolutions: Int(crankDelta.deltaRevolutions),
                     deltaTime: Measurement(value: crankDelta.deltaTimeSeconds, unit: .seconds),
@@ -369,24 +271,16 @@ public final class ConnectedSensor: Sendable {
         init(
             central: any BluetoothCentral,
             id: UUID,
-            hasSpeed: Bool,
-            hasCadence: Bool,
-            speedBroadcaster: StreamBroadcaster<Speed>,
-            cadenceBroadcaster: StreamBroadcaster<Cadence>,
-            wheelSampleBroadcaster: StreamBroadcaster<WheelSample>,
-            crankSampleBroadcaster: StreamBroadcaster<CrankSample>,
-            stateBox: StateBox,
+            wheelRevolutions: WheelRevolutions?,
+            crankRevolutions: CrankRevolutions?,
+            stateBox: MeasurementStateBox,
         ) {
             task = Task {
                 await ConnectedSensor.runMeasurementLoop(
                     central: central,
                     id: id,
-                    hasSpeed: hasSpeed,
-                    hasCadence: hasCadence,
-                    speedBroadcaster: speedBroadcaster,
-                    cadenceBroadcaster: cadenceBroadcaster,
-                    wheelSampleBroadcaster: wheelSampleBroadcaster,
-                    crankSampleBroadcaster: crankSampleBroadcaster,
+                    wheelRevolutions: wheelRevolutions,
+                    crankRevolutions: crankRevolutions,
                     stateBox: stateBox,
                 )
             }

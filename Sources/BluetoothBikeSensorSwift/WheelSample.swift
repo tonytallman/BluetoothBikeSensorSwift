@@ -3,12 +3,12 @@ import Foundation
 /// A wheel rotation delta between two CSC measurement notifications.
 ///
 /// `deltaDistance` is derived from revolution count and the client-managed
-/// ``ConnectedSensor/wheelCircumference`` at emission time. `deltaTime` comes
+/// ``WheelRevolutions/wheelCircumference`` at emission time. `deltaTime` comes
 /// from CSC last-wheel-event timestamps (1/1024 s resolution), not BLE arrival time.
 public struct WheelSample: Sendable, Equatable {
     /// Distance traveled during this interval, always in meters.
     ///
-    /// ``ConnectedSensor/wheelCircumference`` is converted to meters at emission time.
+    /// ``WheelRevolutions/wheelCircumference`` is converted to meters at emission time.
     /// Use ``Measurement/converted(to:)`` for another length unit.
     public let deltaDistance: Measurement<UnitLength>
 

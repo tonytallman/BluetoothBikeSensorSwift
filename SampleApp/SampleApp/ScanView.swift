@@ -18,6 +18,7 @@ struct ScanView: View {
                             row: row,
                             onConnect: { viewModel.connect(row: row) },
                             onDisconnect: { viewModel.disconnect(row: row) },
+                            onUpdateLocation: { viewModel.updateLocation(row: row) },
                         )
                     }
                     .listStyle(.plain)

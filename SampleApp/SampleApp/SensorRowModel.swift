@@ -5,15 +5,11 @@ struct SensorMetadata: Equatable, Sendable {
     let id: UUID
     let name: String?
     let manufacturer: String?
-    let hasSpeed: Bool
-    let hasCadence: Bool
 
     init(from sensor: DiscoveredSensor) {
         id = sensor.id
         name = sensor.name
         manufacturer = sensor.manufacturer
-        hasSpeed = sensor.hasSpeed
-        hasCadence = sensor.hasCadence
     }
 }
 
@@ -23,6 +19,12 @@ enum SensorRowPhase: Equatable {
     case connected
 }
 
+enum ConnectedLocationPresentation: Equatable {
+    case unavailable
+    case fixed(String)
+    case multiple(supported: [SensorLocation], current: SensorLocation)
+}
+
 @MainActor
 @Observable
 final class SensorRowModel: Identifiable {
@@ -30,11 +32,15 @@ final class SensorRowModel: Identifiable {
     var phase: SensorRowPhase = .discovered
     var speedText: String?
     var cadenceText: String?
+    var supportsSpeed = false
+    var supportsCadence = false
+    var locationPresentation: ConnectedLocationPresentation = .unavailable
+    var selectedLocation: SensorLocation?
 
     private(set) var discoveredSensor: DiscoveredSensor
     private(set) var connectedSensor: ConnectedSensor?
 
-    var id: UUID { metadata.id }
+    nonisolated var id: UUID { metadata.id }
 
     init(discoveredSensor: DiscoveredSensor) {
         self.discoveredSensor = discoveredSensor
@@ -44,8 +50,39 @@ final class SensorRowModel: Identifiable {
     func applyConnected(_ sensor: ConnectedSensor) {
         connectedSensor = sensor
         phase = .connected
-        speedText = metadata.hasSpeed ? "—" : nil
-        cadenceText = metadata.hasCadence ? "—" : nil
+
+        switch sensor.revolutions {
+        case .wheel, .wheelAndCrank:
+            supportsSpeed = true
+            speedText = "—"
+        case .crank:
+            supportsSpeed = false
+            speedText = nil
+        }
+
+        switch sensor.revolutions {
+        case .crank, .wheelAndCrank:
+            supportsCadence = true
+            cadenceText = "—"
+        case .wheel:
+            supportsCadence = false
+            cadenceText = nil
+        }
+
+        switch sensor.location {
+        case .unavailable:
+            locationPresentation = .unavailable
+            selectedLocation = nil
+        case let .fixed(location):
+            locationPresentation = .fixed(location.displayName)
+            selectedLocation = nil
+        case let .multiple(locations):
+            locationPresentation = .multiple(
+                supported: locations.supported,
+                current: locations.current,
+            )
+            selectedLocation = locations.current
+        }
     }
 
     func applyRediscovered(_ sensor: DiscoveredSensor) {
@@ -54,18 +91,14 @@ final class SensorRowModel: Identifiable {
         phase = .discovered
         speedText = nil
         cadenceText = nil
+        supportsSpeed = false
+        supportsCadence = false
+        locationPresentation = .unavailable
+        selectedLocation = nil
     }
 
     func beginConnecting() {
         phase = .connecting
-    }
-
-    var supportsSpeed: Bool {
-        metadata.hasSpeed
-    }
-
-    var supportsCadence: Bool {
-        metadata.hasCadence
     }
 
     func updateSpeedDisplay(_ text: String?) {
@@ -82,5 +115,11 @@ final class SensorRowModel: Identifiable {
             return
         }
         cadenceText = text ?? "—"
+    }
+
+    func syncMultipleLocationCurrent(_ location: SensorLocation) {
+        guard case let .multiple(supported, _) = locationPresentation else { return }
+        locationPresentation = .multiple(supported: supported, current: location)
+        selectedLocation = location
     }
 }

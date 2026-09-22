@@ -16,6 +16,12 @@ package actor FakeBluetoothCentral: BluetoothCentral {
             enabled: Bool,
         )
         case readValue(id: UUID, serviceUUID: UUID, characteristicUUID: UUID)
+        case writeValue(
+            id: UUID,
+            serviceUUID: UUID,
+            characteristicUUID: UUID,
+            value: Data,
+        )
     }
 
     private var state: BluetoothState
@@ -25,8 +31,20 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     private var nextDisconnectError: BluetoothCentralError?
     private var nextReadValueError: BluetoothCentralError?
     private var nextSetNotifyError: BluetoothCentralError?
+    private var nextWriteValueError: BluetoothCentralError?
+    private var nextWriteATTCode: UInt8?
+    private var nextControlPointResponseValue: UInt8?
     private var shouldHangNextConnect = false
+    private var shouldHoldNextControlPointIndication = false
+    private var heldControlPointIndication: GATTEvent?
     private var featureData = Data([0x03, 0x00])
+    private var discoveredCharacteristicUUIDs: [UUID] = [
+        CSCS.measurementUUID,
+        CSCS.featureUUID,
+        CSCS.controlPointUUID,
+    ]
+    private var sensorLocationData = Data([0x05])
+    private var supportedSensorLocationBytes: [UInt8] = [0x05, 0x06, 0x0A]
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
     private let discoveryBroadcaster = StreamBroadcaster<DiscoveredPeripheralEvent>()
@@ -113,7 +131,7 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         id: UUID,
         serviceUUID: UUID,
         characteristicUUIDs: [UUID]?,
-    ) async throws {
+    ) async throws -> [UUID] {
         recordedCalls.append(
             .discoverCharacteristics(
                 id: id,
@@ -126,6 +144,8 @@ package actor FakeBluetoothCentral: BluetoothCentral {
             self.nextDiscoverCharacteristicsError = nil
             throw nextDiscoverCharacteristicsError
         }
+
+        return discoveredCharacteristicUUIDs
     }
 
     package var gattEvents: AsyncStream<GATTEvent> {
@@ -186,7 +206,66 @@ package actor FakeBluetoothCentral: BluetoothCentral {
             return featureData
         }
 
+        if characteristicUUID == CSCS.sensorLocationUUID {
+            return sensorLocationData
+        }
+
         return Data()
+    }
+
+    package func writeValue(
+        id: UUID,
+        serviceUUID: UUID,
+        characteristicUUID: UUID,
+        value: Data,
+    ) async throws {
+        recordedCalls.append(
+            .writeValue(
+                id: id,
+                serviceUUID: serviceUUID,
+                characteristicUUID: characteristicUUID,
+                value: value,
+            ),
+        )
+
+        if let nextWriteATTCode {
+            let code = nextWriteATTCode
+            self.nextWriteATTCode = nil
+            throw BluetoothCentralError.attApplicationError(code: code)
+        }
+
+        if let nextWriteValueError {
+            self.nextWriteValueError = nil
+            throw nextWriteValueError
+        }
+
+        guard characteristicUUID == CSCS.controlPointUUID else {
+            return
+        }
+
+        let responseValue = nextControlPointResponseValue ?? 0x01
+        nextControlPointResponseValue = nil
+
+        let indication = Self.controlPointIndication(
+            for: value,
+            responseValue: responseValue,
+            supportedLocationBytes: supportedSensorLocationBytes,
+        )
+
+        let event = GATTEvent.characteristicValue(
+            id: id,
+            serviceUUID: serviceUUID,
+            characteristicUUID: characteristicUUID,
+            value: indication,
+        )
+
+        if shouldHoldNextControlPointIndication {
+            shouldHoldNextControlPointIndication = false
+            heldControlPointIndication = event
+            return
+        }
+
+        await gattBroadcaster.yield(event)
     }
 
     package func setState(_ newState: BluetoothState) async {
@@ -196,6 +275,18 @@ package actor FakeBluetoothCentral: BluetoothCentral {
 
     package func setFeatureData(_ data: Data) {
         featureData = data
+    }
+
+    package func setDiscoveredCharacteristicUUIDs(_ uuids: [UUID]) {
+        discoveredCharacteristicUUIDs = uuids
+    }
+
+    package func setSensorLocationData(_ data: Data) {
+        sensorLocationData = data
+    }
+
+    package func setSupportedSensorLocationBytes(_ bytes: [UInt8]) {
+        supportedSensorLocationBytes = bytes
     }
 
     package func emitDiscovery(_ event: DiscoveredPeripheralEvent) async {
@@ -234,7 +325,51 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         nextSetNotifyError = error
     }
 
+    package func failNextWriteValue(with error: BluetoothCentralError) {
+        nextWriteValueError = error
+    }
+
+    package func failNextWriteWithATTCode(_ code: UInt8) {
+        nextWriteATTCode = code
+    }
+
+    package func setNextControlPointResponseValue(_ value: UInt8) {
+        nextControlPointResponseValue = value
+    }
+
     package func hangNextConnect() {
         shouldHangNextConnect = true
+    }
+
+    package func holdNextControlPointIndication() {
+        shouldHoldNextControlPointIndication = true
+    }
+
+    package func releaseHeldControlPointIndication() async {
+        guard let event = heldControlPointIndication else {
+            return
+        }
+        heldControlPointIndication = nil
+        await gattBroadcaster.yield(event)
+    }
+
+    private static func controlPointIndication(
+        for request: Data,
+        responseValue: UInt8,
+        supportedLocationBytes: [UInt8],
+    ) -> Data {
+        guard let requestOpcode = request.first else {
+            return Data([0x10, 0x00, responseValue])
+        }
+
+        switch requestOpcode {
+        case 0x04:
+            if responseValue == 0x01 {
+                return Data([0x10, 0x04, 0x01] + supportedLocationBytes)
+            }
+            return Data([0x10, 0x04, responseValue])
+        default:
+            return Data([0x10, requestOpcode, responseValue])
+        }
     }
 }

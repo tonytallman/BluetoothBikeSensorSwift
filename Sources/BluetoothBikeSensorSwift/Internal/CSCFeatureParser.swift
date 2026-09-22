@@ -4,6 +4,7 @@ package enum CSCFeatureParser {
     package struct Capabilities: Sendable, Equatable {
         package let hasSpeed: Bool
         package let hasCadence: Bool
+        package let hasMultipleSensorLocations: Bool
     }
 
     package static func parse(_ data: Data) -> Capabilities? {
@@ -15,6 +16,7 @@ package enum CSCFeatureParser {
         return Capabilities(
             hasSpeed: flags & 0x01 != 0,
             hasCadence: flags & 0x02 != 0,
+            hasMultipleSensorLocations: flags & 0x04 != 0,
         )
     }
 }

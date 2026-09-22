@@ -7,6 +7,7 @@ package enum BluetoothCentralError: Error, Sendable, Equatable {
     case disconnected(UUID, reason: String?)
     case serviceNotFound(UUID, serviceUUID: UUID)
     case characteristicNotFound(UUID, serviceUUID: UUID, characteristicUUID: UUID)
+    case attApplicationError(code: UInt8)
 }
 
 package struct DiscoveredPeripheralEvent: Sendable, Equatable {

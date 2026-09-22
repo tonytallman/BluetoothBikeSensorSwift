@@ -17,6 +17,8 @@ enum BluetoothCentralErrorMapping {
             return .serviceDiscoveryFailed(
                 reason: "Characteristic not found: \(characteristicUUID) on \(serviceUUID)",
             )
+        case let .attApplicationError(code):
+            return .serviceDiscoveryFailed(reason: "ATT error \(code)")
         }
     }
 
@@ -34,6 +36,8 @@ enum BluetoothCentralErrorMapping {
             return .failed(reason: "Service not found: \(serviceUUID)")
         case let .characteristicNotFound(_, serviceUUID, characteristicUUID):
             return .failed(reason: "Characteristic not found: \(characteristicUUID) on \(serviceUUID)")
+        case let .attApplicationError(code):
+            return .failed(reason: "ATT error \(code)")
         }
     }
 }

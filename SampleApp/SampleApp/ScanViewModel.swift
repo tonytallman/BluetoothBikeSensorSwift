@@ -65,7 +65,7 @@ final class ScanViewModel {
         Task {
             do {
                 let connected = try await row.discoveredSensor.connect()
-                connected.wheelCircumference = currentWheelCircumference
+                applyWheelCircumference(to: connected)
                 row.applyConnected(connected)
                 await subscribeToStreams(for: row)
             } catch let error as ConnectError {
@@ -75,7 +75,6 @@ final class ScanViewModel {
                 row.phase = .discovered
                 alertMessage = error.localizedDescription
             }
-
         }
     }
 
@@ -96,11 +95,32 @@ final class ScanViewModel {
         }
     }
 
+    func updateLocation(row: SensorRowModel) {
+        guard let connected = row.connectedSensor,
+              case let .multiple(locations) = connected.location,
+              let selected = row.selectedLocation
+        else {
+            return
+        }
+
+        Task {
+            do {
+                try await locations.update(selected)
+                row.syncMultipleLocationCurrent(locations.current)
+            } catch let error as ControlPointError {
+                alertMessage = Self.message(for: error)
+            } catch {
+                alertMessage = error.localizedDescription
+            }
+        }
+    }
+
     func applyWheelCircumferenceMeters(_ meters: Double) {
         wheelCircumferenceMeters = max(meters, 0.1)
         let measurement = currentWheelCircumference
         for row in rows {
-            row.connectedSensor?.wheelCircumference = measurement
+            guard let connected = row.connectedSensor else { continue }
+            applyWheelCircumference(measurement, to: connected)
         }
     }
 
@@ -108,13 +128,46 @@ final class ScanViewModel {
         Measurement(value: wheelCircumferenceMeters, unit: .meters)
     }
 
+    private func applyWheelCircumference(to connected: ConnectedSensor) {
+        applyWheelCircumference(currentWheelCircumference, to: connected)
+    }
+
+    private func applyWheelCircumference(
+        _ measurement: Measurement<UnitLength>,
+        to connected: ConnectedSensor,
+    ) {
+        switch connected.revolutions {
+        case let .wheel(wheel):
+            wheel.wheelCircumference = measurement
+        case let .wheelAndCrank(wheel, _):
+            wheel.wheelCircumference = measurement
+        case .crank:
+            break
+        }
+    }
+
     private func subscribeToStreams(for row: SensorRowModel) async {
         guard let connected = row.connectedSensor else { return }
 
         var tasks: [Task<Void, Never>] = []
 
-        if let speedStream = await connected.speed {
-            tasks.append(Task {
+        switch connected.revolutions {
+        case let .wheel(wheel):
+            tasks.append(contentsOf: await streamTasks(for: row, wheel: wheel))
+        case let .crank(crank):
+            tasks.append(contentsOf: await streamTasks(for: row, crank: crank))
+        case let .wheelAndCrank(wheel, crank):
+            tasks.append(contentsOf: await streamTasks(for: row, wheel: wheel))
+            tasks.append(contentsOf: await streamTasks(for: row, crank: crank))
+        }
+
+        streamTasks[row.id] = tasks
+    }
+
+    private func streamTasks(for row: SensorRowModel, wheel: WheelRevolutions) async -> [Task<Void, Never>] {
+        let speedStream = await wheel.speed
+        return [
+            Task {
                 for await speed in speedStream {
                     guard !Task.isCancelled else { return }
                     await MainActor.run {
@@ -124,13 +177,14 @@ final class ScanViewModel {
                 await MainActor.run {
                     self.handleStreamEnded(for: row.id)
                 }
-            })
-        } else {
-            row.speedText = nil
-        }
+            },
+        ]
+    }
 
-        if let cadenceStream = await connected.cadence {
-            tasks.append(Task {
+    private func streamTasks(for row: SensorRowModel, crank: CrankRevolutions) async -> [Task<Void, Never>] {
+        let cadenceStream = await crank.cadence
+        return [
+            Task {
                 for await cadence in cadenceStream {
                     guard !Task.isCancelled else { return }
                     await MainActor.run {
@@ -140,12 +194,8 @@ final class ScanViewModel {
                 await MainActor.run {
                     self.handleStreamEnded(for: row.id)
                 }
-            })
-        } else {
-            row.cadenceText = nil
-        }
-
-        streamTasks[row.id] = tasks
+            },
+        ]
     }
 
     private func handleStreamEnded(for sensorID: UUID) {
@@ -193,6 +243,29 @@ final class ScanViewModel {
             return "Disconnect failed: \(reason)"
         case .alreadyDisconnected:
             return "Sensor is already disconnected."
+        }
+    }
+
+    private static func message(for error: ControlPointError) -> String {
+        switch error {
+        case .unsupportedLocation:
+            return "That sensor location is not supported."
+        case .controlPointUnavailable:
+            return "This sensor does not expose a control point."
+        case .procedureInProgress:
+            return "Another control-point procedure is already in progress."
+        case .opCodeNotSupported:
+            return "The sensor does not support that control-point operation."
+        case .invalidParameter:
+            return "The sensor rejected the control-point parameter."
+        case .operationFailed:
+            return "The sensor reported that the control-point operation failed."
+        case .cccdImproperlyConfigured:
+            return "Control-point indications are not enabled."
+        case .timedOut:
+            return "The control-point procedure timed out."
+        case let .failed(reason):
+            return "Control-point procedure failed: \(reason)"
         }
     }
 }

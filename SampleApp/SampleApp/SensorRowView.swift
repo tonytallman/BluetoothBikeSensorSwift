@@ -1,9 +1,11 @@
+import BluetoothBikeSensorSwift
 import SwiftUI
 
 struct SensorRowView: View {
     let row: SensorRowModel
     let onConnect: () -> Void
     let onDisconnect: () -> Void
+    let onUpdateLocation: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -20,6 +22,12 @@ struct SensorRowView: View {
                     supportsCadence: row.supportsCadence,
                     speedText: row.speedText,
                     cadenceText: row.cadenceText,
+                    locationPresentation: row.locationPresentation,
+                    selectedLocation: Binding(
+                        get: { row.selectedLocation },
+                        set: { row.selectedLocation = $0 },
+                    ),
+                    onUpdateLocation: onUpdateLocation,
                     onDisconnect: onDisconnect,
                 ).content
             }
@@ -73,6 +81,9 @@ private struct ConnectedSensorRowState: SensorRowState {
     let supportsCadence: Bool
     let speedText: String?
     let cadenceText: String?
+    let locationPresentation: ConnectedLocationPresentation
+    @Binding var selectedLocation: SensorLocation?
+    let onUpdateLocation: () -> Void
     let onDisconnect: () -> Void
 
     var content: some View {
@@ -84,8 +95,35 @@ private struct ConnectedSensorRowState: SensorRowState {
                 MeasurementLine(label: "Cadence", value: cadenceText)
             }
 
+            locationSection
+
             Button("Disconnect", role: .destructive, action: onDisconnect)
                 .buttonStyle(.bordered)
+        }
+    }
+
+    @ViewBuilder
+    private var locationSection: some View {
+        switch locationPresentation {
+        case .unavailable:
+            EmptyView()
+        case let .fixed(displayName):
+            MeasurementLine(label: "Location", value: displayName)
+        case let .multiple(supported, current):
+            VStack(alignment: .leading, spacing: 8) {
+                MeasurementLine(label: "Location", value: current.displayName)
+
+                Picker("Sensor location", selection: $selectedLocation) {
+                    ForEach(supported, id: \.self) { location in
+                        Text(location.displayName).tag(Optional(location))
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Button("Update Location", action: onUpdateLocation)
+                    .buttonStyle(.bordered)
+                    .disabled(selectedLocation == current)
+            }
         }
     }
 }

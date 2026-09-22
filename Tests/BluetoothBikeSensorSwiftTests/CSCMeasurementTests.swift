@@ -525,6 +525,28 @@ import Testing
         let capabilities = CSCFeatureParser.parse(Data([0x01, 0x00]))
         #expect(capabilities?.hasSpeed == true)
         #expect(capabilities?.hasCadence == false)
+        #expect(capabilities?.hasMultipleSensorLocations == false)
+    }
+
+    @Test func parsesMultipleSensorLocationsBit() {
+        let capabilities = CSCFeatureParser.parse(Data([0x07, 0x00]))
+        #expect(capabilities?.hasSpeed == true)
+        #expect(capabilities?.hasCadence == true)
+        #expect(capabilities?.hasMultipleSensorLocations == true)
+    }
+}
+
+@Suite struct SensorLocationTests {
+    @Test func mapsAssignedNumbersToKind() {
+        let location = SensorLocation.fromAssignedNumber(0x0A)
+        #expect(location.kind == .rearDropout)
+        #expect(location.displayName == "Rear Dropout")
+    }
+
+    @Test func mapsReservedAssignedNumbers() {
+        let location = SensorLocation.fromAssignedNumber(0xFF)
+        #expect(location.kind == .reserved(0xFF))
+        #expect(location.displayName == "Unknown (255)")
     }
 }
 
@@ -558,7 +580,7 @@ struct CSCMeasurementStreamTests {
             .discoverCharacteristics(
                 id: sensorID,
                 serviceUUID: CSCS.serviceUUID,
-                characteristicUUIDs: [CSCS.measurementUUID, CSCS.featureUUID],
+                characteristicUUIDs: ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs,
             ),
         ))
         #expect(calls.contains(
@@ -583,12 +605,13 @@ struct CSCMeasurementStreamTests {
         let sensorID = UUID()
         let sensor = makeSensor(fake: fake, id: sensorID)
         let connected = try await sensor.connect()
-        connected.wheelCircumference = Measurement(value: 2.0, unit: .meters)
-
-        guard let speedStream = await connected.speed else {
-            Issue.record("Expected speed stream")
+        guard let wheel = ConnectedSensorTestHelpers.wheel(from: connected) else {
+            Issue.record("Expected wheel revolutions")
             return
         }
+        wheel.wheelCircumference = Measurement(value: 2.0, unit: .meters)
+
+        let speedStream = await wheel.speed
 
         let collector = Task {
             await AsyncTestHelpers.collect(from: speedStream, maxCount: 1)
@@ -621,11 +644,12 @@ struct CSCMeasurementStreamTests {
         let sensorID = UUID()
         let sensor = makeSensor(fake: fake, id: sensorID)
         let connected = try await sensor.connect()
-
-        guard let speedStream = await connected.speed else {
-            Issue.record("Expected speed stream")
+        guard let wheel = ConnectedSensorTestHelpers.wheel(from: connected) else {
+            Issue.record("Expected wheel revolutions")
             return
         }
+
+        let speedStream = await wheel.speed
 
         let collector = Task {
             await AsyncTestHelpers.collect(from: speedStream, maxCount: 2)
@@ -636,7 +660,7 @@ struct CSCMeasurementStreamTests {
         await emitWheelMeasurement(fake: fake, id: sensorID, revolutions: 100, eventTime: 1_024)
         await emitWheelMeasurement(fake: fake, id: sensorID, revolutions: 102, eventTime: 2_048)
 
-        connected.wheelCircumference = Measurement(value: 1.0, unit: .meters)
+        wheel.wheelCircumference = Measurement(value: 1.0, unit: .meters)
 
         await emitWheelMeasurement(fake: fake, id: sensorID, revolutions: 104, eventTime: 3_072)
         await emitWheelMeasurement(fake: fake, id: sensorID, revolutions: 106, eventTime: 4_096)
@@ -649,38 +673,47 @@ struct CSCMeasurementStreamTests {
         }
     }
 
-    @Test func cadenceOnlySensorHasNilSpeedAndWheelSamples() async throws {
+    @Test func cadenceOnlySensorHasNoWheelStreams() async throws {
         let fake = FakeBluetoothCentral()
         await fake.setFeatureData(Data([0x02, 0x00]))
 
         let connected = try await makeSensor(fake: fake).connect()
-        #expect(await connected.speed == nil)
-        #expect(await connected.cadence != nil)
-        #expect(await connected.wheelSamples == nil)
-        #expect(await connected.crankSamples != nil)
+        switch connected.revolutions {
+        case .crank:
+            break
+        default:
+            Issue.record("Expected crank-only revolution data")
+        }
+        #expect(ConnectedSensorTestHelpers.wheel(from: connected) == nil)
+        #expect(ConnectedSensorTestHelpers.crank(from: connected) != nil)
     }
 
-    @Test func speedOnlySensorHasNilCadenceAndCrankSamples() async throws {
+    @Test func speedOnlySensorHasNoCrankStreams() async throws {
         let fake = FakeBluetoothCentral()
         await fake.setFeatureData(Data([0x01, 0x00]))
 
         let connected = try await makeSensor(fake: fake).connect()
-        #expect(await connected.speed != nil)
-        #expect(await connected.cadence == nil)
-        #expect(await connected.wheelSamples != nil)
-        #expect(await connected.crankSamples == nil)
+        switch connected.revolutions {
+        case .wheel:
+            break
+        default:
+            Issue.record("Expected wheel-only revolution data")
+        }
+        #expect(ConnectedSensorTestHelpers.wheel(from: connected) != nil)
+        #expect(ConnectedSensorTestHelpers.crank(from: connected) == nil)
     }
 
     @Test func wheelSamplesEmitAfterTwoNotifies() async throws {
         let fake = FakeBluetoothCentral()
         let sensorID = UUID()
         let connected = try await makeSensor(fake: fake, id: sensorID).connect()
-        connected.wheelCircumference = Measurement(value: 2.0, unit: .meters)
-
-        guard let stream = await connected.wheelSamples else {
-            Issue.record("Expected wheelSamples stream")
+        guard let wheel = ConnectedSensorTestHelpers.wheel(from: connected) else {
+            Issue.record("Expected wheel revolutions")
             return
         }
+        wheel.wheelCircumference = Measurement(value: 2.0, unit: .meters)
+
+        let stream = await wheel.wheelSamples
 
         let collector = Task {
             await AsyncTestHelpers.collectUntil(from: stream, maxCount: 1)
@@ -703,11 +736,12 @@ struct CSCMeasurementStreamTests {
         let fake = FakeBluetoothCentral()
         let sensorID = UUID()
         let connected = try await makeSensor(fake: fake, id: sensorID).connect()
-
-        guard let stream = await connected.wheelSamples else {
-            Issue.record("Expected wheelSamples stream")
+        guard let wheel = ConnectedSensorTestHelpers.wheel(from: connected) else {
+            Issue.record("Expected wheel revolutions")
             return
         }
+
+        let stream = await wheel.wheelSamples
 
         let collector = Task {
             await AsyncTestHelpers.collectUntil(from: stream, maxCount: 2)
@@ -718,7 +752,7 @@ struct CSCMeasurementStreamTests {
         await emitWheelMeasurement(fake: fake, id: sensorID, revolutions: 100, eventTime: 1_024)
         await emitWheelMeasurement(fake: fake, id: sensorID, revolutions: 102, eventTime: 2_048)
 
-        connected.wheelCircumference = Measurement(value: 1.0, unit: .meters)
+        wheel.wheelCircumference = Measurement(value: 1.0, unit: .meters)
 
         await emitWheelMeasurement(fake: fake, id: sensorID, revolutions: 104, eventTime: 3_072)
         await emitWheelMeasurement(fake: fake, id: sensorID, revolutions: 106, eventTime: 4_096)
@@ -736,10 +770,12 @@ struct CSCMeasurementStreamTests {
         let sensorID = UUID()
         let connected = try await makeSensor(fake: fake, id: sensorID).connect()
 
-        guard let stream = await connected.crankSamples else {
-            Issue.record("Expected crankSamples stream")
+        guard let crank = ConnectedSensorTestHelpers.crank(from: connected) else {
+            Issue.record("Expected crank revolutions")
             return
         }
+
+        let stream = await crank.crankSamples
 
         let collector = Task {
             await AsyncTestHelpers.collectUntil(from: stream, maxCount: 1)
@@ -763,12 +799,15 @@ struct CSCMeasurementStreamTests {
         let sensorID = UUID()
         let connected = try await makeSensor(fake: fake, id: sensorID).connect()
 
-        guard let wheelStream = await connected.wheelSamples,
-              let crankStream = await connected.crankSamples
+        guard let wheel = ConnectedSensorTestHelpers.wheel(from: connected),
+              let crank = ConnectedSensorTestHelpers.crank(from: connected)
         else {
             Issue.record("Expected both sample streams")
             return
         }
+
+        let wheelStream = await wheel.wheelSamples
+        let crankStream = await crank.crankSamples
 
         let wheelCollector = Task {
             await AsyncTestHelpers.collectUntil(from: wheelStream, maxCount: 1)
@@ -813,12 +852,15 @@ struct CSCMeasurementStreamTests {
         let sensorID = UUID()
         let connected = try await makeSensor(fake: fake, id: sensorID).connect()
 
-        guard let wheelStream = await connected.wheelSamples,
-              let crankStream = await connected.crankSamples
+        guard let wheel = ConnectedSensorTestHelpers.wheel(from: connected),
+              let crank = ConnectedSensorTestHelpers.crank(from: connected)
         else {
             Issue.record("Expected both sample streams")
             return
         }
+
+        let wheelStream = await wheel.wheelSamples
+        let crankStream = await crank.crankSamples
 
         let wheelCollector = Task {
             await AsyncTestHelpers.collectUntil(from: wheelStream, maxCount: 1)
@@ -851,14 +893,17 @@ struct CSCMeasurementStreamTests {
         let sensorID = UUID()
         let connected = try await makeSensor(fake: fake, id: sensorID).connect()
 
-        guard let wheelStream = await connected.wheelSamples,
-              let crankStream = await connected.crankSamples,
-              let speedStream = await connected.speed,
-              let cadenceStream = await connected.cadence
+        guard let wheel = ConnectedSensorTestHelpers.wheel(from: connected),
+              let crank = ConnectedSensorTestHelpers.crank(from: connected)
         else {
             Issue.record("Expected all streams")
             return
         }
+
+        let wheelStream = await wheel.wheelSamples
+        let crankStream = await crank.crankSamples
+        let speedStream = await wheel.speed
+        let cadenceStream = await crank.cadence
 
         let wheelCollector = Task {
             await AsyncTestHelpers.collectUntil(from: wheelStream, maxCount: 1)
@@ -908,12 +953,13 @@ struct CSCMeasurementStreamTests {
         let sensorID = UUID()
         let connected = try await makeSensor(fake: fake, id: sensorID).connect()
 
-        guard let speedStream = await connected.speed,
-              let wheelStream = await connected.wheelSamples
-        else {
-            Issue.record("Expected speed and wheelSamples streams")
+        guard let wheel = ConnectedSensorTestHelpers.wheel(from: connected) else {
+            Issue.record("Expected wheel revolutions")
             return
         }
+
+        let speedStream = await wheel.speed
+        let wheelStream = await wheel.wheelSamples
 
         let speedCollector = Task {
             await AsyncTestHelpers.collectUntil(from: speedStream, maxCount: 1)
@@ -945,12 +991,13 @@ struct CSCMeasurementStreamTests {
         let sensorID = UUID()
         let connected = try await makeSensor(fake: fake, id: sensorID).connect()
 
-        guard let cadenceStream = await connected.cadence,
-              let crankStream = await connected.crankSamples
-        else {
-            Issue.record("Expected cadence and crankSamples streams")
+        guard let crank = ConnectedSensorTestHelpers.crank(from: connected) else {
+            Issue.record("Expected crank revolutions")
             return
         }
+
+        let cadenceStream = await crank.cadence
+        let crankStream = await crank.crankSamples
 
         let cadenceCollector = Task {
             await AsyncTestHelpers.collectUntil(from: cadenceStream, maxCount: 1)
@@ -981,14 +1028,17 @@ struct CSCMeasurementStreamTests {
         let sensor = makeSensor(fake: fake)
         let connected = try await sensor.connect()
 
-        guard let speedStream = await connected.speed,
-              let cadenceStream = await connected.cadence,
-              let wheelStream = await connected.wheelSamples,
-              let crankStream = await connected.crankSamples
+        guard let wheel = ConnectedSensorTestHelpers.wheel(from: connected),
+              let crank = ConnectedSensorTestHelpers.crank(from: connected)
         else {
             Issue.record("Expected streams")
             return
         }
+
+        let speedStream = await wheel.speed
+        let cadenceStream = await crank.cadence
+        let wheelStream = await wheel.wheelSamples
+        let crankStream = await crank.crankSamples
 
         let speedCollector = Task {
             var finished = false
@@ -1034,14 +1084,17 @@ struct CSCMeasurementStreamTests {
         let sensor = makeSensor(fake: fake, id: sensorID)
         let connected = try await sensor.connect()
 
-        guard let speedStream = await connected.speed,
-              let cadenceStream = await connected.cadence,
-              let wheelStream = await connected.wheelSamples,
-              let crankStream = await connected.crankSamples
+        guard let wheel = ConnectedSensorTestHelpers.wheel(from: connected),
+              let crank = ConnectedSensorTestHelpers.crank(from: connected)
         else {
             Issue.record("Expected streams")
             return
         }
+
+        let speedStream = await wheel.speed
+        let cadenceStream = await crank.cadence
+        let wheelStream = await wheel.wheelSamples
+        let crankStream = await crank.crankSamples
 
         await waitForMeasurementLoop()
 
@@ -1089,10 +1142,12 @@ struct CSCMeasurementStreamTests {
         let sensor = makeSensor(fake: fake, id: sensorID)
         let connected = try await sensor.connect()
 
-        guard let cadenceStream = await connected.cadence else {
-            Issue.record("Expected cadence stream")
+        guard let crank = ConnectedSensorTestHelpers.crank(from: connected) else {
+            Issue.record("Expected crank revolutions")
             return
         }
+
+        let cadenceStream = await crank.cadence
 
         let collector = Task {
             await AsyncTestHelpers.collect(from: cadenceStream, maxCount: 1)
@@ -1127,10 +1182,12 @@ struct CSCMeasurementStreamTests {
         let sensor = makeSensor(fake: fake, id: sensorID)
         let connected = try await sensor.connect()
 
-        guard let speedStream = await connected.speed else {
-            Issue.record("Expected speed stream")
+        guard let wheel = ConnectedSensorTestHelpers.wheel(from: connected) else {
+            Issue.record("Expected wheel revolutions")
             return
         }
+
+        let speedStream = await wheel.speed
 
         await waitForMeasurementLoop()
 
