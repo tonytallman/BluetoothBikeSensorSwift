@@ -2,7 +2,7 @@
 
 ## Summary
 
-BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and reads Bluetooth CSCS sensors. The Swift package name remains `BluetoothBikeSensorSwift`; the library product is **`CSCClient`**. It includes the library and an iOS-only SwiftUI sample app. It uses SOLID principles and any other best practices as appropriate.
+BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and reads Bluetooth CSCS sensors. The Swift package name remains `BluetoothBikeSensorSwift`. Library products are **`CSCClient`** and **`CSCServer`**. `CSCWire` is an internal target, not a product. It includes the library and an iOS-only SwiftUI sample app. It uses SOLID principles and any other best practices as appropriate.
 
 ## Decisions
 
@@ -15,12 +15,15 @@ BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and rea
 - **Sample app uses a single Scan list screen** — no separate sensor detail screen; row content is driven by a State Pattern for discovered vs connected states.
 - **`Speed` and `Cadence` are Foundation `Measurement` typealiases** — `Speed` is `Measurement<UnitSpeed>`; `Cadence` is `Measurement<UnitFrequency>`. The library provides `UnitFrequency.revolutionsPerMinute` (`"rpm"`) for cadence values.
 - **Missing SC Control Point does not fail wheel or wheel-and-crank `connect()` when the multiple-locations bit is clear** — Set Cumulative Value still requires the control point and throws `ControlPointError.controlPointUnavailable`. Multiple-locations connect still fails when the control point is absent, because connect runs Request Supported Sensor Locations.
-- **`SensorLocation` is not publicly constructible** — clients obtain tokens from the peripheral and compare via `SensorLocation.Kind`; future `CSCServer` builder will accept `Kind` values.
+- **`SensorLocation` is not publicly constructible** — clients obtain tokens from the peripheral and compare via `SensorLocation.Kind`. The server builder takes `SensorLocationKind` (GATT assigned numbers 0...16). That enum has no `reserved` case and no `displayName`.
 - **Start Sensor Calibration (`0x02`) is not supported** — the client does not expose this control-point procedure.
 
 ### CSC Server
 
-- **`CSCServer` is an internal package target in Phase 1, not a library product** — it owns the peripheral seam (`BluetoothPeripheral`, `CoreBluetoothPeripheral`, `FakeBluetoothPeripheral`). `CSCClient` is unchanged. The `CSCServer` library product arrives in Phase 2 with the first `public` `Server`. Phase 3’s `Server` is the only production constructor of `CoreBluetoothPeripheral`; that instance is not passed into `Scanner`.
+- **`CSCServer` is a library product as of Phase 2.** Phase 1 added the target and the peripheral seam (`BluetoothPeripheral`, `CoreBluetoothPeripheral`, `FakeBluetoothPeripheral`) without a product. Phase 2 publishes the product and a builder-only `Server`: `build()` records feature bits, the GATT inventory, revolution sequences, and delegates. It does not advertise or serve reads and writes. `CSCClient` does not depend on `CSCServer`. Phase 3’s `Server` remains the only production constructor of `CoreBluetoothPeripheral`; that instance is not passed into `Scanner`.
+- **`Server` is builder-only in Phase 2.** There is no public initializer and no `start()`. `Server: Sendable`. The initializer is `internal`.
+- **Stored configuration.** `wheel: WheelConfiguration?` pairs the sequence with the set-cumulative delegate. `location: ServerLocationConfiguration` is `.none`, `.staticLocation`, or `.multiple`. Set Cumulative Value follows `wheel != nil`. Update Sensor Location and Request Supported Sensor Locations follow `.multiple`. Start Sensor Calibration is not stored.
+- **Delegates and sequences are stored and not called.** `build()` copies multiple-location `supported` and `current` and does not iterate sequences.
 - **`BluetoothPeripheral`** exposes Bluetooth state, add/remove GATT services, start/stop advertising, read requests, write transactions (one `respond` per batch), CCCD subscription changes, `respond` with a read payload, and notify `updateValue` plus `subscriberUpdatesReady` when the transmit queue has space.
 - **Queue crossing** — `CoreBluetoothPeripheral` creates `CBPeripheralManager` on serial queue `com.bluetoothbikesensor.peripheral`. The delegate bridge enqueues `Task { await handle(event) }` and returns. All manager calls run in `queue.sync` without holding the bridge lock across the sync. `add` and `startAdvertising` continuations resume on the actor. Only one in-flight `add` and one in-flight `startAdvertising` are allowed. `deinit` clears the handler and fails leftover continuations with `peripheralInvalidated` without calling `queue.sync`.
 - **Subscribe before `add` and `startAdvertising`** — inbound streams do not replay; use `currentState` for the latest Bluetooth state.
@@ -28,7 +31,7 @@ BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and rea
 - **CCCD (`0x2902`)** — subscription enable/disable is `didSubscribeTo` / `didUnsubscribeFrom`, not `writeTransactions`.
 - **Read/write responses** — read success carries the offset slice in `respond`; the adaptor assigns it to `CBATTRequest.value` without re-slicing. The success slice may be empty; only `nil` is `missingReadValue`. One `respond` per write transaction uses the first `CBATTRequest`. Error bytes pass through `CBATTError.Code(rawValue:)` so application codes `0x80` / `0x81` survive.
 - **Notify backpressure** — when `updateValue` returns `false`, the caller waits on `subscriberUpdatesReady` and retries; this actor does not queue or retry internally.
-- **Control point** — the server adds SC Control Point only when a later builder requires it (same as issue #12 client behavior: wheel connect without control point when multiple-locations is clear).
+- **Control point** — the Phase 2 builder includes SC Control Point (`0x2A55`) on every server that has wheel revolution data or multiple sensor locations, and omits it for crank-only and crank-plus-static location (CSCS 1.0 §3.4 / Table 3.3). Issue #12 stays the client rule: wheel or wheel-and-crank `connect()` still succeeds when the peer omitted the control point and the multiple-locations bit is clear.
 
 ## Detailed Design
 
@@ -92,6 +95,26 @@ BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and rea
 - Any other useful information to include with `DiscoveredSensor`?
 
 **Resolved:** Wheel size is `WheelRevolutions.wheelCircumference` (client-managed, default 2.105 m). Clients that need to accumulate distance or cadence consume `wheelSamples` / `crankSamples` rather than raw CSC cumulative counters.
+
+#### CSC Server (Phase 2)
+
+Phase 2 adds a type-state builder on `Server` that records CSCS feature bits, the GATT characteristic inventory, revolution sequences, and delegates. `build()` does not advertise, serve reads/writes, or construct a peripheral.
+
+Characteristic order when present: CSC Measurement (`0x2A5B`), CSC Feature (`0x2A5C`), Sensor Location (`0x2A5D`), SC Control Point (`0x2A55`).
+
+| Configuration | Feature bytes | Characteristics |
+|---|---|---|
+| Crank | `02 00` | Measurement, Feature |
+| Crank + static | `02 00` | Measurement, Feature, Sensor Location (cached) |
+| Wheel | `01 00` | Measurement, Feature, Control Point |
+| Wheel + static | `01 00` | Measurement, Feature, Sensor Location (cached), Control Point |
+| Wheel + crank | `03 00` | Measurement, Feature, Control Point |
+| Wheel + crank + static | `03 00` | Measurement, Feature, Sensor Location (cached), Control Point |
+| Crank + multiple | `06 00` | Measurement, Feature, Sensor Location (`nil`), Control Point |
+| Wheel + multiple | `05 00` | Measurement, Feature, Sensor Location (`nil`), Control Point |
+| Wheel + crank + multiple | `07 00` | Measurement, Feature, Sensor Location (`nil`), Control Point |
+
+`SensorLocationKind` cases (GATT assigned numbers 0...16): `other`, `topOfShoe`, `inShoe`, `hip`, `frontWheel`, `leftCrank`, `rightCrank`, `leftPedal`, `rightPedal`, `frontHub`, `rearDropout`, `chainstay`, `rearWheel`, `rearHub`, `chest`, `spider`, `chainRing`.
 
 ### Sample App
 
