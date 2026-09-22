@@ -57,12 +57,6 @@ enum CSCConnectionSetup {
         let controlPointAvailable = discovered.contains(CSCS.controlPointUUID)
         let sensorLocationAvailable = discovered.contains(CSCS.sensorLocationUUID)
 
-        if feature.hasSpeed && !controlPointAvailable {
-            throw ConnectError.serviceDiscoveryFailed(
-                reason: "SC Control Point characteristic missing for wheel data",
-            )
-        }
-
         if controlPointAvailable {
             try await central.setNotifyValue(
                 id: id,

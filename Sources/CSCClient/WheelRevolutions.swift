@@ -41,6 +41,7 @@ public final class WheelRevolutions: Sendable {
     /// Sets the sensor's cumulative wheel revolutions via the SC Control Point.
     ///
     /// Success clears the local wheel delta baseline so the next measurement establishes a new baseline.
+    /// Throws ``ControlPointError/controlPointUnavailable`` when SC Control Point was not discovered.
     public func setCumulativeRevolutions(_ value: UInt32) async throws {
         let stateBox = stateBox
         try await controlPointSession.perform(

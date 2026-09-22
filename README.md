@@ -182,7 +182,7 @@ The sample app provides a single scan list:
 - `DiscoveredSensor` — discovery metadata (`id`, `name`, `manufacturer`, `hasSpeed`, `hasCadence`); capability flags are best-effort hints only
 - `DiscoveredSensor.connect()` — connects, reads CSC Feature (`0x2A5C`), resolves wheel/crank/location support, enables notifications; throws `ConnectError`
 - `ConnectedSensor` — `revolutions: RevolutionData` (`.wheel` / `.crank` / `.wheelAndCrank`) and `location: LocationSupport` (`.unavailable` / `.fixed` / `.multiple`); `disconnect() async throws -> DiscoveredSensor`
-- `WheelRevolutions` — client-managed `wheelCircumference` (default 2.105 m); `speed`, `wheelSamples`, and `setCumulativeRevolutions(_:)` (always available after a successful wheel connect)
+- `WheelRevolutions` — client-managed `wheelCircumference` (default 2.105 m); `speed`, `wheelSamples`, and `setCumulativeRevolutions(_:)` (throws `ControlPointError.controlPointUnavailable` when the sensor did not expose SC Control Point)
 - `CrankRevolutions` — `cadence` and `crankSamples`
 - `SensorLocation` — peripheral-originated GATT location token with `kind` (for logic) and `displayName` (for UI)
 - `MultipleSensorLocations` — `supported`, `current`, and `update(_:)` for sensors with multiple location support

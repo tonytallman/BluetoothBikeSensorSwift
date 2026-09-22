@@ -4,8 +4,9 @@ public enum ControlPointError: Error, Sendable, Equatable {
     case unsupportedLocation
     /// The sensor has no SC Control Point characteristic.
     ///
-    /// Unreachable after a successful wheel or wheel-and-crank connect; wheel data requires
-    /// SC Control Point at connect time per CSCS.
+    /// Wheel and wheel-and-crank connect can succeed when SC Control Point (`0x2A55`) was not
+    /// discovered. Set Cumulative Value, and any other control-point procedure, throws this case
+    /// when the characteristic was not discovered.
     case controlPointUnavailable
     /// Another control-point procedure is already in flight.
     case procedureInProgress
