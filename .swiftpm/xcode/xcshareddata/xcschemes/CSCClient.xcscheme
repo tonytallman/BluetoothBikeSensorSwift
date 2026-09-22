@@ -48,6 +48,20 @@
                ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "CSCServerTests"
+               BuildableName = "CSCServerTests"
+               BlueprintName = "CSCServerTests"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -76,6 +90,17 @@
                BlueprintIdentifier = "CSCWireTests"
                BuildableName = "CSCWireTests"
                BlueprintName = "CSCWireTests"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "CSCServerTests"
+               BuildableName = "CSCServerTests"
+               BlueprintName = "CSCServerTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>

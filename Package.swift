@@ -20,6 +20,7 @@ let package = Package(
             name: "CSCClient",
             dependencies: ["CSCWire"],
         ),
+        .target(name: "CSCServer"),
         .testTarget(
             name: "CSCWireTests",
             dependencies: ["CSCWire"],
@@ -30,6 +31,10 @@ let package = Package(
                 "CSCClient",
                 "CSCWire",
             ],
+        ),
+        .testTarget(
+            name: "CSCServerTests",
+            dependencies: ["CSCServer"],
         ),
     ]
 )
