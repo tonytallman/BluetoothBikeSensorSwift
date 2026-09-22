@@ -156,6 +156,87 @@ struct CSCMeasurementStreamTests {
         #expect(ConnectedSensorTestHelpers.crank(from: connected) == nil)
     }
 
+    @Test func speedStreamsWhenWheelFeatureLacksControlPoint() async throws {
+        let fake = FakeBluetoothCentral()
+        let sensorID = UUID()
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData]).encode())
+        await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.crankOnlyCharacteristics())
+
+        let connected = try await makeSensor(fake: fake, id: sensorID).connect()
+        guard let wheel = ConnectedSensorTestHelpers.wheel(from: connected) else {
+            Issue.record("Expected wheel revolutions")
+            return
+        }
+
+        let speedStream = await wheel.speed
+
+        let collector = Task {
+            await AsyncTestHelpers.collectUntil(from: speedStream, maxCount: 1)
+        }
+
+        await waitForMeasurementLoop()
+
+        await emitWheelMeasurement(fake: fake, id: sensorID, revolutions: 100, eventTime: 1_024)
+        await emitWheelMeasurement(fake: fake, id: sensorID, revolutions: 102, eventTime: 2_048)
+
+        let speeds = await collector.value
+        #expect(speeds.count == 1)
+
+        _ = try await connected.disconnect()
+    }
+
+    @Test func speedAndCadenceStreamWhenWheelAndCrankLackControlPoint() async throws {
+        let fake = FakeBluetoothCentral()
+        let sensorID = UUID()
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData]).encode())
+        await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.crankOnlyCharacteristics())
+
+        let connected = try await makeSensor(fake: fake, id: sensorID).connect()
+
+        guard let wheel = ConnectedSensorTestHelpers.wheel(from: connected),
+              let crank = ConnectedSensorTestHelpers.crank(from: connected)
+        else {
+            Issue.record("Expected both revolution streams")
+            return
+        }
+
+        let speedStream = await wheel.speed
+        let cadenceStream = await crank.cadence
+
+        let speedCollector = Task {
+            await AsyncTestHelpers.collectUntil(from: speedStream, maxCount: 1)
+        }
+        let cadenceCollector = Task {
+            await AsyncTestHelpers.collectUntil(from: cadenceStream, maxCount: 1)
+        }
+
+        await waitForMeasurementLoop()
+
+        await emitCombinedMeasurement(
+            fake: fake,
+            id: sensorID,
+            wheelRevolutions: 100,
+            wheelEventTime: 1_024,
+            crankRevolutions: 10,
+            crankEventTime: 1_024,
+        )
+        await emitCombinedMeasurement(
+            fake: fake,
+            id: sensorID,
+            wheelRevolutions: 102,
+            wheelEventTime: 2_048,
+            crankRevolutions: 11,
+            crankEventTime: 2_048,
+        )
+
+        let speeds = await speedCollector.value
+        let cadences = await cadenceCollector.value
+        #expect(speeds.count == 1)
+        #expect(cadences.count == 1)
+
+        _ = try await connected.disconnect()
+    }
+
     @Test func wheelSamplesEmitAfterTwoNotifies() async throws {
         let fake = FakeBluetoothCentral()
         let sensorID = UUID()

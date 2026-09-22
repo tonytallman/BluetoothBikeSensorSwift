@@ -711,37 +711,160 @@ import Testing
         _ = try await connected.disconnect()
     }
 
-    @Test func wheelConnectRequiresControlPoint() async {
+    @Test func wheelConnectSucceedsWithoutControlPoint() async throws {
+        let fake = FakeBluetoothCentral()
+        let sensorID = UUID()
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData]).encode())
+        await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.crankOnlyCharacteristics())
+
+        let connected = try await makeSensor(fake: fake, id: sensorID).connect()
+
+        switch connected.revolutions {
+        case .wheel:
+            break
+        default:
+            Issue.record("Expected wheel-only revolution data")
+        }
+        #expect(ConnectedSensorTestHelpers.wheel(from: connected) != nil)
+
+        switch connected.location {
+        case .unavailable:
+            break
+        default:
+            Issue.record("Expected unavailable location")
+        }
+
+        let calls = await fake.recordedCalls
+        #expect(calls.contains(
+            .setNotifyValue(
+                id: sensorID,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.measurementUUID,
+                enabled: true,
+            ),
+        ))
+        #expect(!calls.contains { call in
+            guard case let .setNotifyValue(
+                _,
+                serviceUUID,
+                characteristicUUID,
+                enabled,
+            ) = call else {
+                return false
+            }
+            return serviceUUID == CSCS.serviceUUID
+                && characteristicUUID == CSCS.controlPointUUID
+                && enabled
+        })
+
+        _ = try await connected.disconnect()
+    }
+
+    @Test func wheelAndCrankConnectSucceedsWithoutControlPoint() async throws {
+        let fake = FakeBluetoothCentral()
+        let sensorID = UUID()
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData]).encode())
+        await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.crankOnlyCharacteristics())
+
+        let connected = try await makeSensor(fake: fake, id: sensorID).connect()
+
+        switch connected.revolutions {
+        case .wheelAndCrank:
+            break
+        default:
+            Issue.record("Expected wheelAndCrank revolution data")
+        }
+
+        let calls = await fake.recordedCalls
+        #expect(calls.contains(
+            .setNotifyValue(
+                id: sensorID,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.measurementUUID,
+                enabled: true,
+            ),
+        ))
+        #expect(!calls.contains { call in
+            guard case let .setNotifyValue(
+                _,
+                serviceUUID,
+                characteristicUUID,
+                enabled,
+            ) = call else {
+                return false
+            }
+            return serviceUUID == CSCS.serviceUUID
+                && characteristicUUID == CSCS.controlPointUUID
+                && enabled
+        })
+
+        _ = try await connected.disconnect()
+    }
+
+    @Test func setCumulativeRevolutionsThrowsWhenControlPointMissing() async throws {
         let fake = FakeBluetoothCentral()
         await fake.setFeatureData(CSCFeature([.wheelRevolutionData]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.crankOnlyCharacteristics())
+
+        let connected = try await makeSensor(fake: fake).connect()
+        guard let wheel = ConnectedSensorTestHelpers.wheel(from: connected) else {
+            Issue.record("Expected wheel revolutions")
+            return
+        }
+
+        do {
+            try await wheel.setCumulativeRevolutions(0)
+            Issue.record("Expected controlPointUnavailable")
+        } catch let error as ControlPointError {
+            #expect(error == .controlPointUnavailable)
+        }
+
+        #expect(await ConnectedSensorTestHelpers.controlPointWriteCount(on: fake) == 0)
+
+        _ = try await connected.disconnect()
+    }
+
+    @Test func multipleLocationsConnectStillRequiresControlPoint() async {
+        let fake = FakeBluetoothCentral()
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .multipleSensorLocations]).encode())
+        await fake.setDiscoveredCharacteristicUUIDs([
+            CSCS.measurementUUID,
+            CSCS.featureUUID,
+            CSCS.sensorLocationUUID,
+        ])
+        await fake.setSensorLocationData(CSCSensorLocation(assignedNumber: 0x04).encode())
 
         do {
             _ = try await makeSensor(fake: fake).connect()
             Issue.record("Expected connect to throw")
         } catch let error as ConnectError {
             #expect(error == .serviceDiscoveryFailed(
-                reason: "SC Control Point characteristic missing for wheel data",
+                reason: "SC Control Point characteristic missing",
             ))
         } catch {
             Issue.record("Unexpected error: \(error)")
         }
     }
 
-    @Test func wheelAndCrankConnectRequiresControlPoint() async {
+    @Test func fixedLocationConnectSucceedsWithoutControlPoint() async throws {
         let fake = FakeBluetoothCentral()
-        await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.crankOnlyCharacteristics())
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData]).encode())
+        await fake.setDiscoveredCharacteristicUUIDs([
+            CSCS.measurementUUID,
+            CSCS.featureUUID,
+            CSCS.sensorLocationUUID,
+        ])
+        await fake.setSensorLocationData(CSCSensorLocation(assignedNumber: 0x04).encode())
 
-        do {
-            _ = try await makeSensor(fake: fake).connect()
-            Issue.record("Expected connect to throw")
-        } catch let error as ConnectError {
-            #expect(error == .serviceDiscoveryFailed(
-                reason: "SC Control Point characteristic missing for wheel data",
-            ))
-        } catch {
-            Issue.record("Unexpected error: \(error)")
+        let connected = try await makeSensor(fake: fake).connect()
+
+        guard case let .fixed(location) = connected.location else {
+            Issue.record("Expected fixed location")
+            return
         }
+        #expect(location.kind == .frontWheel)
+
+        _ = try await connected.disconnect()
     }
 
     @Test func crankOnlyConnectWithoutControlPointSucceeds() async throws {

@@ -14,7 +14,7 @@ BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and rea
 - **Sample app is iOS-only**, built with SwiftUI.
 - **Sample app uses a single Scan list screen** — no separate sensor detail screen; row content is driven by a State Pattern for discovered vs connected states.
 - **`Speed` and `Cadence` are Foundation `Measurement` typealiases** — `Speed` is `Measurement<UnitSpeed>`; `Cadence` is `Measurement<UnitFrequency>`. The library provides `UnitFrequency.revolutionsPerMinute` (`"rpm"`) for cadence values.
-- **Wheel data requires SC Control Point at connect** — per CSCS, Set Cumulative Value is mandatory when wheel data is supported; non-compliant peripherals fail `connect()`.
+- **Missing SC Control Point does not fail wheel or wheel-and-crank `connect()` when the multiple-locations bit is clear** — Set Cumulative Value still requires the control point and throws `ControlPointError.controlPointUnavailable`. Multiple-locations connect still fails when the control point is absent, because connect runs Request Supported Sensor Locations.
 - **`SensorLocation` is not publicly constructible** — clients obtain tokens from the peripheral and compare via `SensorLocation.Kind`; future `CSCServer` builder will accept `Kind` values.
 - **Start Sensor Calibration (`0x02`) is not supported** — the client does not expose this control-point procedure.
 
@@ -50,14 +50,14 @@ BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and rea
     - `.fixed(SensorLocation)` — fixed location read from Sensor Location (`0x2A5D`)
     - `.multiple(MultipleSensorLocations)` — supported locations and `update(_:)` via SC Control Point
 - Wheel/crank/location support is resolved from CSC Feature (`0x2A5C`) at connect time; advertisement flags are not used as a fallback.
-- Wheel or wheel-and-crank connect fails when SC Control Point (`0x2A55`) is missing.
+- Wheel or wheel-and-crank connect succeeds when SC Control Point (`0x2A55`) is missing and the multiple-locations bit is clear. Measurement notifications are enabled; control-point notifications stay off. Multiple-locations connect still fails with `ConnectError.serviceDiscoveryFailed(reason: "SC Control Point characteristic missing")` when `0x2A55` is absent.
 - Has a single function `disconnect()` returning `async` `DiscoveredSensor`, throwing `DisconnectError`.
 
 #### WheelRevolutions
 
 - Client-managed `wheelCircumference` (default 2.105 m); used for speed and wheel delta distance.
 - `speed: AsyncStream<Speed>` and `wheelSamples: AsyncStream<WheelSample>`.
-- `setCumulativeRevolutions(_:)` writes Set Cumulative Value (`0x01`) via SC Control Point.
+- `setCumulativeRevolutions(_:)` writes Set Cumulative Value (`0x01`) via SC Control Point and throws `ControlPointError.controlPointUnavailable` when the control point was not discovered.
 
 #### CrankRevolutions
 
