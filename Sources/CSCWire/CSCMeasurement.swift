@@ -24,6 +24,10 @@ package struct CSCMeasurement: Sendable, Equatable {
         }
 
         let flags = data[0]
+        guard flags & 0x01 != 0 || flags & 0x02 != 0 else {
+            return nil
+        }
+
         var offset = 1
         var cumulativeWheelRevolutions: UInt32?
         var lastWheelEventTime: UInt16?
@@ -58,6 +62,14 @@ package struct CSCMeasurement: Sendable, Equatable {
     }
 
     package func encode() -> Data? {
+        let wheelHalfSpecified =
+            (cumulativeWheelRevolutions != nil) != (lastWheelEventTime != nil)
+        let crankHalfSpecified =
+            (cumulativeCrankRevolutions != nil) != (lastCrankEventTime != nil)
+        guard !wheelHalfSpecified, !crankHalfSpecified else {
+            return nil
+        }
+
         var flags: UInt8 = 0
         var payload = Data()
 

@@ -3,7 +3,7 @@ import CSCWire
 import Foundation
 import Testing
 
-@Suite struct ScannerScanTests {
+@Suite(.timeLimit(.minutes(1))) struct ScannerScanTests {
     private static func waitForScanStart(_ fake: FakeBluetoothCentral) async {
         for _ in 0..<50 {
             let calls = await fake.recordedCalls

@@ -3,7 +3,7 @@ import CSCWire
 import Foundation
 import Testing
 
-@Suite struct SensorConnectionTests {
+@Suite(.timeLimit(.minutes(1))) struct SensorConnectionTests {
     private func makeSensor(
         fake: FakeBluetoothCentral,
         id: UUID = UUID(),

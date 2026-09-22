@@ -1,4 +1,4 @@
-import CSCWire
+package import CSCWire
 
 extension CSCFeature {
     var hasSpeed: Bool { contains(.wheelRevolutionData) }

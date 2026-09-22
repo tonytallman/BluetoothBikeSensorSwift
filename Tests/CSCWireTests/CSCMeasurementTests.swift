@@ -101,6 +101,30 @@ import Testing
         #expect(sample?.lastWheelEventTime == 1_024)
     }
 
+    @Test func mixedHalfSpecifiedPairsDoNotEncode() {
+        #expect(
+            CSCMeasurement(
+                cumulativeWheelRevolutions: 10,
+                cumulativeCrankRevolutions: 5,
+                lastCrankEventTime: 100,
+            ).encode() == nil,
+        )
+    }
+
+    @Test func completeWheelPairWithHalfCrankPairDoesNotEncode() {
+        #expect(
+            CSCMeasurement(
+                cumulativeWheelRevolutions: 10,
+                lastWheelEventTime: 100,
+                cumulativeCrankRevolutions: 5,
+            ).encode() == nil,
+        )
+    }
+
+    @Test func zeroFlagsDecodeReturnsNil() {
+        #expect(CSCMeasurement.decode(Data([0x00])) == nil)
+    }
+
     @Test func encodeIsCanonicalFlagsOnly() {
         let decoded = CSCMeasurement.decode(Data([0x81, 0x01, 0x00, 0x00, 0x00, 0x04, 0x00]))
         #expect(decoded?.cumulativeWheelRevolutions == 1)

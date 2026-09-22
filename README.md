@@ -196,7 +196,7 @@ The sample app provides a single scan list:
 
 Public types include DocC-style `///` comments in source. Test-only dependency injection (`BluetoothCentral`, `FakeBluetoothCentral`, `Scanner.init(central:)`) is `package`-visible within the Swift package, not part of the public client API.
 
-`CSCWire` holds shared CSCS wire codecs as an internal package target. It is not a library product and cannot be imported from an app that depends only on `CSCClient`.
+`CSCWire` holds shared CSCS wire codecs as an internal package target. It is not a library product.
 
 ## Limitations
 

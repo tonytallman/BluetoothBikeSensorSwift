@@ -13,6 +13,7 @@ package enum CSCControlPointRequest: Sendable, Equatable {
     case startSensorCalibration
     case updateSensorLocation(UInt8)
     case requestSupportedSensorLocations
+    case invalidParameter(opcode: UInt8, parameter: Data)
     case unknown(opcode: UInt8, parameter: Data)
 
     package static func decode(_ data: Data) -> CSCControlPointRequest? {
@@ -24,19 +25,25 @@ package enum CSCControlPointRequest: Sendable, Equatable {
 
         switch opcode {
         case CSCControlPointOpCode.setCumulativeValue.rawValue:
-            guard parameter.count >= 4 else {
-                return nil
+            guard parameter.count == 4 else {
+                return .invalidParameter(opcode: opcode, parameter: parameter)
             }
             let value = LittleEndian.readUInt32(parameter, 0)
             return .setCumulativeValue(value)
         case CSCControlPointOpCode.startSensorCalibration.rawValue:
+            guard parameter.isEmpty else {
+                return .invalidParameter(opcode: opcode, parameter: parameter)
+            }
             return .startSensorCalibration
         case CSCControlPointOpCode.updateSensorLocation.rawValue:
-            guard let location = parameter.first else {
-                return nil
+            guard parameter.count == 1 else {
+                return .invalidParameter(opcode: opcode, parameter: parameter)
             }
-            return .updateSensorLocation(location)
+            return .updateSensorLocation(parameter[0])
         case CSCControlPointOpCode.requestSupportedSensorLocations.rawValue:
+            guard parameter.isEmpty else {
+                return .invalidParameter(opcode: opcode, parameter: parameter)
+            }
             return .requestSupportedSensorLocations
         case CSCControlPointOpCode.responseCode.rawValue:
             return .unknown(opcode: opcode, parameter: parameter)
@@ -60,6 +67,10 @@ package enum CSCControlPointRequest: Sendable, Equatable {
             ])
         case .requestSupportedSensorLocations:
             return Data([CSCControlPointOpCode.requestSupportedSensorLocations.rawValue])
+        case let .invalidParameter(opcode, parameter):
+            var data = Data([opcode])
+            data.append(parameter)
+            return data
         case let .unknown(opcode, parameter):
             var data = Data([opcode])
             data.append(parameter)

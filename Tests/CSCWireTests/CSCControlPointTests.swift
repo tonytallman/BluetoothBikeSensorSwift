@@ -27,8 +27,11 @@ import Testing
         #expect(CSCControlPointRequest.decode(Data([0x02])) == .startSensorCalibration)
     }
 
-    @Test func startSensorCalibrationIgnoresExtraBytes() {
-        #expect(CSCControlPointRequest.decode(Data([0x02, 0xFF])) == .startSensorCalibration)
+    @Test func startSensorCalibrationRejectsExtraBytes() {
+        #expect(
+            CSCControlPointRequest.decode(Data([0x02, 0xFF]))
+                == .invalidParameter(opcode: 0x02, parameter: Data([0xFF])),
+        )
     }
 
     @Test func decodesUnknownOpcode() {
@@ -46,16 +49,41 @@ import Testing
     }
 
     @Test func rejectsShortSetCumulativeValue() {
-        #expect(CSCControlPointRequest.decode(Data([0x01, 0x00, 0x00, 0x00])) == nil)
+        #expect(
+            CSCControlPointRequest.decode(Data([0x01, 0x00, 0x00, 0x00]))
+                == .invalidParameter(opcode: 0x01, parameter: Data([0x00, 0x00, 0x00])),
+        )
     }
 
     @Test func rejectsShortUpdateSensorLocation() {
-        #expect(CSCControlPointRequest.decode(Data([0x03])) == nil)
+        #expect(
+            CSCControlPointRequest.decode(Data([0x03]))
+                == .invalidParameter(opcode: 0x03, parameter: Data()),
+        )
     }
 
-    @Test func ignoresExtraBytesOnKnownRequest() {
+    @Test func rejectsExtraBytesOnUpdateSensorLocation() {
+        #expect(
+            CSCControlPointRequest.decode(Data([0x03, 0x05, 0xFF]))
+                == .invalidParameter(opcode: 0x03, parameter: Data([0x05, 0xFF])),
+        )
+    }
+
+    @Test func rejectsExtraBytesOnRequestSupportedSensorLocations() {
+        #expect(
+            CSCControlPointRequest.decode(Data([0x04, 0xFF]))
+                == .invalidParameter(opcode: 0x04, parameter: Data([0xFF])),
+        )
+    }
+
+    @Test func rejectsExtraBytesOnKnownRequest() {
         let decoded = CSCControlPointRequest.decode(Data([0x01, 0x01, 0x00, 0x00, 0x00, 0xFF]))
-        #expect(decoded == .setCumulativeValue(1))
+        #expect(
+            decoded == .invalidParameter(
+                opcode: 0x01,
+                parameter: Data([0x01, 0x00, 0x00, 0x00, 0xFF]),
+            ),
+        )
     }
 
     @Test func encodesAndDecodesSuccessResponse() {
