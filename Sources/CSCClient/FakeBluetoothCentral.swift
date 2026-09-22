@@ -1,4 +1,4 @@
-package import CSCWire
+internal import CSCWire
 import Foundation
 
 /// Controllable `BluetoothCentral` for unit tests. Not intended for production use.

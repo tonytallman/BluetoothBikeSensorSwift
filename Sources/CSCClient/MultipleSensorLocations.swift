@@ -1,4 +1,4 @@
-package import CSCWire
+internal import CSCWire
 import Foundation
 
 /// Multiple sensor locations supported by a connected CSCS sensor.

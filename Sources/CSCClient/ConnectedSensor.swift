@@ -1,4 +1,4 @@
-package import CSCWire
+internal import CSCWire
 import Foundation
 
 /// A connected CSCS sensor emitting live speed and/or cadence measurements.

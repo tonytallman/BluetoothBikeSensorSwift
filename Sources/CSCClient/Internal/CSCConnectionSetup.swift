@@ -1,4 +1,4 @@
-package import CSCWire
+internal import CSCWire
 import Foundation
 
 package enum ResolvedRevolutions: Sendable {

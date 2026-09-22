@@ -1,4 +1,4 @@
-package import CSCWire
+internal import CSCWire
 import Foundation
 
 /// Live wheel revolution measurements from a connected CSCS sensor.
