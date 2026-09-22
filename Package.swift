@@ -10,17 +10,26 @@ let package = Package(
     ],
     products: [
         .library(
-            name: "BluetoothBikeSensorSwift",
-            targets: ["BluetoothBikeSensorSwift"],
+            name: "CSCClient",
+            targets: ["CSCClient"],
         ),
     ],
     targets: [
+        .target(name: "CSCWire"),
         .target(
-            name: "BluetoothBikeSensorSwift",
+            name: "CSCClient",
+            dependencies: ["CSCWire"],
         ),
         .testTarget(
-            name: "BluetoothBikeSensorSwiftTests",
-            dependencies: ["BluetoothBikeSensorSwift"],
+            name: "CSCWireTests",
+            dependencies: ["CSCWire"],
+        ),
+        .testTarget(
+            name: "CSCClientTests",
+            dependencies: [
+                "CSCClient",
+                "CSCWire",
+            ],
         ),
     ]
 )

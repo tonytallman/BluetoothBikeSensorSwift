@@ -1,3 +1,4 @@
+import CSCWire
 import Foundation
 
 /// A CSCS sensor discovered during an active scan.

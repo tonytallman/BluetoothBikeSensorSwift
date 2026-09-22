@@ -9,7 +9,7 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* SampleAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000011 /* SampleAppApp.swift */; };
 		A10000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000012 /* ContentView.swift */; };
-		A10000000000000000000003 /* BluetoothBikeSensorSwift in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000031 /* BluetoothBikeSensorSwift */; };
+		A10000000000000000000003 /* CSCClient in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000031 /* CSCClient */; };
 		A10000000000000000000004 /* ScanViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000014 /* ScanViewModel.swift */; };
 		A10000000000000000000005 /* SensorRowModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000015 /* SensorRowModel.swift */; };
 		A10000000000000000000006 /* SensorRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000016 /* SensorRowView.swift */; };
@@ -38,7 +38,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10000000000000000000003 /* BluetoothBikeSensorSwift in Frameworks */,
+				A10000000000000000000003 /* CSCClient in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -95,7 +95,7 @@
 			);
 			name = SampleApp;
 			packageProductDependencies = (
-				A10000000000000000000031 /* BluetoothBikeSensorSwift */,
+				A10000000000000000000031 /* CSCClient */,
 			);
 			productName = SampleApp;
 			productReference = A10000000000000000000010 /* SampleApp.app */;
@@ -375,10 +375,10 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		A10000000000000000000031 /* BluetoothBikeSensorSwift */ = {
+		A10000000000000000000031 /* CSCClient */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = A10000000000000000000030 /* XCLocalSwiftPackageReference ".." */;
-			productName = BluetoothBikeSensorSwift;
+			productName = CSCClient;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

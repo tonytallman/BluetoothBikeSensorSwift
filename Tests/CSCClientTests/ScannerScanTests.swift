@@ -1,4 +1,5 @@
-import BluetoothBikeSensorSwift
+import CSCClient
+import CSCWire
 import Foundation
 import Testing
 

@@ -1,3 +1,4 @@
+import CSCWire
 import Foundation
 
 private final class ListenerTaskBox: @unchecked Sendable {
@@ -69,8 +70,8 @@ package actor CSCControlPointSession {
     func perform(
         request: Data,
         expectedRequestOpcode: UInt8,
-        onSuccess: @Sendable (CSCControlPointParser.Response) async -> Void = { _ in },
-    ) async throws -> CSCControlPointParser.Response {
+        onSuccess: @Sendable (CSCControlPointResponse) async -> Void = { _ in },
+    ) async throws -> CSCControlPointResponse {
         guard controlPointAvailable else {
             throw ControlPointError.controlPointUnavailable
         }
@@ -229,9 +230,9 @@ package actor CSCControlPointSession {
     private static func handleResponse(
         _ indication: Data,
         expectedRequestOpcode: UInt8,
-        onSuccess: @Sendable (CSCControlPointParser.Response) async -> Void,
-    ) async throws -> CSCControlPointParser.Response {
-        guard let response = CSCControlPointParser.parseResponse(indication) else {
+        onSuccess: @Sendable (CSCControlPointResponse) async -> Void,
+    ) async throws -> CSCControlPointResponse {
+        guard let response = CSCControlPointResponse.decode(indication) else {
             throw ControlPointError.failed(reason: "Invalid control point response")
         }
 
@@ -239,18 +240,18 @@ package actor CSCControlPointSession {
             throw ControlPointError.failed(reason: "Unexpected request opcode in response")
         }
 
-        switch response.responseValue {
-        case CSCControlPointResponseValue.success:
+        switch response.value {
+        case CSCControlPointResponseValue.success.rawValue:
             await onSuccess(response)
             return response
-        case CSCControlPointResponseValue.opCodeNotSupported:
+        case CSCControlPointResponseValue.opCodeNotSupported.rawValue:
             throw ControlPointError.opCodeNotSupported
-        case CSCControlPointResponseValue.invalidParameter:
+        case CSCControlPointResponseValue.invalidParameter.rawValue:
             throw ControlPointError.invalidParameter
-        case CSCControlPointResponseValue.operationFailed:
+        case CSCControlPointResponseValue.operationFailed.rawValue:
             throw ControlPointError.operationFailed
         default:
-            throw ControlPointError.failed(reason: "Unknown response value \(response.responseValue)")
+            throw ControlPointError.failed(reason: "Unknown response value \(response.value)")
         }
     }
 
@@ -264,12 +265,12 @@ package actor CSCControlPointSession {
         if let centralError = error as? BluetoothCentralError {
             switch centralError {
             case let .attApplicationError(code):
-                switch code {
-                case 0x80:
+                switch CSCATTApplicationError(rawValue: code) {
+                case .procedureAlreadyInProgress:
                     return .procedureInProgress
-                case 0x81:
+                case .cccdImproperlyConfigured:
                     return .cccdImproperlyConfigured
-                default:
+                case .none:
                     return .failed(reason: "ATT error \(code)")
                 }
             default:

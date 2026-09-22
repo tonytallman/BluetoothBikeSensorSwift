@@ -2,9 +2,11 @@
 
 ## Summary
 
-BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and reads Bluetooth CSCS sensors. It includes the library and an iOS-only SwiftUI sample app. It uses SOLID principles and any other best practices as appropriate.
+BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and reads Bluetooth CSCS sensors. The Swift package name remains `BluetoothBikeSensorSwift`; the library product is **`CSCClient`**. It includes the library and an iOS-only SwiftUI sample app. It uses SOLID principles and any other best practices as appropriate.
 
 ## Decisions
+
+- **`CSCWire` holds shared CSCS wire codecs** — measurement, feature, location, and control-point encode/decode live in an internal package target; `CSCWire` is not a library product.
 
 - **`Scanner` is instantiable** with dependencies passed through its initializer (not a singleton).
 - **`DiscoveredSensor` and `ConnectedSensor` have internal initializers only** — no public `CBPeripheral` initializers.

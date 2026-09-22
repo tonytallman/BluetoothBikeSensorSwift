@@ -1,11 +1,5 @@
 import Foundation
 
-enum BluetoothUUID {
-    static func standard(_ shortUUID: String) -> UUID {
-        CBUUIDBridge(shortString: shortUUID).uuid
-    }
-}
-
 struct CBUUIDBridge: Sendable {
     let uuid: UUID
 

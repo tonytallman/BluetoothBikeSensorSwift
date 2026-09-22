@@ -1,3 +1,4 @@
+import CSCWire
 import Foundation
 
 /// Entry point for discovering CSCS (Cycling Speed and Cadence Service) sensors.

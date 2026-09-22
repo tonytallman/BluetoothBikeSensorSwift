@@ -1,3 +1,4 @@
+import CSCWire
 import Foundation
 
 enum DiscoveredSensorMapper {

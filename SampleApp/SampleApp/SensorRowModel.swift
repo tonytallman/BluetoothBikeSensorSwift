@@ -1,4 +1,4 @@
-import BluetoothBikeSensorSwift
+import CSCClient
 import Foundation
 
 struct SensorMetadata: Equatable, Sendable {
