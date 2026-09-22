@@ -1,4 +1,4 @@
-import BluetoothBikeSensorSwift
+import CSCClient
 import Foundation
 
 enum MeasurementFormatting {

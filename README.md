@@ -10,7 +10,7 @@ A Swift package that scans for, connects to, and reads Bluetooth CSCS (Cycling S
 
 ## Installation
 
-Add the package to your Xcode project or `Package.swift`:
+Add the package to your Xcode project or `Package.swift`. The library product was renamed from `BluetoothBikeSensorSwift` to **`CSCClient`** (breaking change for adopters).
 
 ```swift
 dependencies: [
@@ -20,7 +20,7 @@ targets: [
     .target(
         name: "YourApp",
         dependencies: [
-            .product(name: "BluetoothBikeSensorSwift", package: "BluetoothBikeSensorSwift"),
+            .product(name: "CSCClient", package: "BluetoothBikeSensorSwift"),
         ],
     ),
 ]
@@ -35,7 +35,7 @@ For local development, use a path dependency:
 ## Usage
 
 ```swift
-import BluetoothBikeSensorSwift
+import CSCClient
 
 let scanner = Scanner()
 
@@ -111,10 +111,12 @@ See [`SampleApp/SampleApp/Info.plist`](SampleApp/SampleApp/Info.plist) for an ex
 ## Project layout
 
 ```
-BluetoothBikeSensorSwift/          # Swift package (library)
+BluetoothBikeSensorSwift/          # Swift package (library product: CSCClient)
   Package.swift                    # open this in Xcode to run unit tests
-  Sources/BluetoothBikeSensorSwift/
-  Tests/BluetoothBikeSensorSwiftTests/
+  Sources/CSCClient/
+  Sources/CSCWire/                 # internal target; not a library product
+  Tests/CSCClientTests/
+  Tests/CSCWireTests/
 SampleApp/                         # iOS SwiftUI sample app
   SampleApp.xcodeproj
   SampleApp/
@@ -145,7 +147,7 @@ CI runs the same command on macOS for pushes and pull requests to `main`.
 In Xcode:
 
 1. Open `Package.swift` (File → Open → select the package root or `Package.swift`).
-2. Select the **BluetoothBikeSensorSwift** scheme.
+2. Select the **CSCClient** scheme.
 3. Choose a **My Mac** destination (package tests run on macOS).
 4. Product → Test (⌘U).
 
@@ -193,6 +195,8 @@ The sample app provides a single scan list:
 - `DisconnectError` — `failed`, `alreadyDisconnected`
 
 Public types include DocC-style `///` comments in source. Test-only dependency injection (`BluetoothCentral`, `FakeBluetoothCentral`, `Scanner.init(central:)`) is `package`-visible within the Swift package, not part of the public client API.
+
+`CSCWire` holds shared CSCS wire codecs as an internal package target. It is not a library product.
 
 ## Limitations
 

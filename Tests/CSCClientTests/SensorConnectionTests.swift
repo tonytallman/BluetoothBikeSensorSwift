@@ -1,8 +1,9 @@
-import BluetoothBikeSensorSwift
+import CSCClient
+import CSCWire
 import Foundation
 import Testing
 
-@Suite struct SensorConnectionTests {
+@Suite(.timeLimit(.minutes(1))) struct SensorConnectionTests {
     private func makeSensor(
         fake: FakeBluetoothCentral,
         id: UUID = UUID(),
@@ -291,7 +292,7 @@ import Testing
 
     @Test func zeroFeatureFlagsThrowConnectError() async {
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x00, 0x00]))
+        await fake.setFeatureData(CSCFeature([]).encode())
 
         do {
             _ = try await makeSensor(fake: fake).connect()
@@ -305,7 +306,7 @@ import Testing
 
     @Test func advertisementFlagsDoNotOverrideFeatureBits() async throws {
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x02, 0x00]))
+        await fake.setFeatureData(CSCFeature([.crankRevolutionData]).encode())
 
         let connected = try await makeSensor(fake: fake, hasSpeed: true, hasCadence: true).connect()
 
@@ -348,7 +349,7 @@ import Testing
     @Test func fixedLocationConnect() async throws {
         let fake = FakeBluetoothCentral()
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
-        await fake.setSensorLocationData(Data([0x04]))
+        await fake.setSensorLocationData(CSCSensorLocation(assignedNumber: 0x04).encode())
 
         let connected = try await makeSensor(fake: fake).connect()
 
@@ -364,9 +365,9 @@ import Testing
 
     @Test func multipleLocationConnect() async throws {
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x07, 0x00]))
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
-        await fake.setSensorLocationData(Data([0x05]))
+        await fake.setSensorLocationData(CSCSensorLocation(assignedNumber: 0x05).encode())
         await fake.setSupportedSensorLocationBytes([0x05, 0x06, 0x0A])
 
         let connected = try await makeSensor(fake: fake).connect()
@@ -383,7 +384,7 @@ import Testing
 
     @Test func multipleLocationConnectEnablesControlPointNotifyBeforeWrite() async throws {
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x07, 0x00]))
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
 
         let connected = try await makeSensor(fake: fake).connect()
@@ -413,7 +414,7 @@ import Testing
             }
             return serviceUUID == CSCS.serviceUUID
                 && characteristicUUID == CSCS.controlPointUUID
-                && value.first == CSCControlPointOpCode.requestSupportedSensorLocations
+                && value.first == CSCControlPointOpCode.requestSupportedSensorLocations.rawValue
         }
 
         guard let notifyIndex, let requestLocationsWriteIndex else {
@@ -427,9 +428,9 @@ import Testing
 
     @Test func multipleLocationUpdateWorksAfterConnectedSensorReleased() async throws {
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x07, 0x00]))
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
-        await fake.setSensorLocationData(Data([0x05]))
+        await fake.setSensorLocationData(CSCSensorLocation(assignedNumber: 0x05).encode())
         await fake.setSupportedSensorLocationBytes([0x05, 0x06, 0x0A])
 
         var connected: ConnectedSensor? = try await makeSensor(fake: fake).connect()
@@ -451,7 +452,7 @@ import Testing
         defer { CSCControlPointSession.procedureTimeoutNanoseconds = originalTimeout }
 
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x07, 0x00]))
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
 
         let connected = try await makeSensor(fake: fake).connect()
@@ -482,7 +483,7 @@ import Testing
         defer { CSCControlPointSession.procedureTimeoutNanoseconds = originalTimeout }
 
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x07, 0x00]))
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
         await fake.holdNextControlPointIndication()
 
@@ -498,7 +499,7 @@ import Testing
 
     @Test func heldControlPointIndicationCompletesConnect() async throws {
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x07, 0x00]))
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
         await fake.holdNextControlPointIndication()
 
@@ -525,7 +526,7 @@ import Testing
 
     @Test func controlPointWriteFailureDoesNotHangUpdate() async throws {
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x07, 0x00]))
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
 
         let connected = try await makeSensor(fake: fake).connect()
@@ -534,7 +535,7 @@ import Testing
             return
         }
 
-        await fake.failNextWriteWithATTCode(0x81)
+        await fake.failNextWriteWithATTCode(CSCATTApplicationError.cccdImproperlyConfigured.rawValue)
 
         let start = ContinuousClock.now
         do {
@@ -551,9 +552,9 @@ import Testing
 
     @Test func multipleLocationUpdateSuccess() async throws {
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x07, 0x00]))
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
-        await fake.setSensorLocationData(Data([0x05]))
+        await fake.setSensorLocationData(CSCSensorLocation(assignedNumber: 0x05).encode())
         await fake.setSupportedSensorLocationBytes([0x05, 0x06, 0x0A])
 
         let connected = try await makeSensor(fake: fake).connect()
@@ -571,15 +572,15 @@ import Testing
 
     @Test func multipleLocationUpdateRejectsUnsupportedToken() async throws {
         let source = FakeBluetoothCentral()
-        await source.setFeatureData(Data([0x07, 0x00]))
+        await source.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await source.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
-        await source.setSensorLocationData(Data([0x04]))
+        await source.setSensorLocationData(CSCSensorLocation(assignedNumber: 0x04).encode())
         await source.setSupportedSensorLocationBytes([0x04])
 
         let target = FakeBluetoothCentral()
-        await target.setFeatureData(Data([0x07, 0x00]))
+        await target.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await target.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
-        await target.setSensorLocationData(Data([0x05]))
+        await target.setSensorLocationData(CSCSensorLocation(assignedNumber: 0x05).encode())
         await target.setSupportedSensorLocationBytes([0x05, 0x06, 0x0A])
 
         let sourceConnected = try await makeSensor(fake: source).connect()
@@ -609,9 +610,9 @@ import Testing
         defer { CSCControlPointSession.procedureTimeoutNanoseconds = originalTimeout }
 
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x07, 0x00]))
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
-        await fake.setSensorLocationData(Data([0x05]))
+        await fake.setSensorLocationData(CSCSensorLocation(assignedNumber: 0x05).encode())
         await fake.setSupportedSensorLocationBytes([0x05, 0x06, 0x0A])
 
         let connected = try await makeSensor(fake: fake).connect()
@@ -643,7 +644,7 @@ import Testing
 
     @Test func multipleLocationUpdateMapsOpCodeNotSupported() async throws {
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x07, 0x00]))
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
 
         let connected = try await makeSensor(fake: fake).connect()
@@ -666,7 +667,7 @@ import Testing
 
     @Test func multipleLocationUpdateMapsInvalidParameter() async throws {
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x07, 0x00]))
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
 
         let connected = try await makeSensor(fake: fake).connect()
@@ -689,7 +690,7 @@ import Testing
 
     @Test func multipleLocationUpdateMapsOperationFailed() async throws {
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x07, 0x00]))
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
 
         let connected = try await makeSensor(fake: fake).connect()
@@ -712,7 +713,7 @@ import Testing
 
     @Test func wheelConnectRequiresControlPoint() async {
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x01, 0x00]))
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.crankOnlyCharacteristics())
 
         do {
@@ -745,7 +746,7 @@ import Testing
 
     @Test func crankOnlyConnectWithoutControlPointSucceeds() async throws {
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x02, 0x00]))
+        await fake.setFeatureData(CSCFeature([.crankRevolutionData]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.crankOnlyCharacteristics())
 
         let connected = try await makeSensor(fake: fake).connect()
@@ -863,7 +864,7 @@ import Testing
 
     @Test func controlPointProcedureInProgressGate() async throws {
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x07, 0x00]))
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
 
         let connected = try await makeSensor(fake: fake).connect()
@@ -899,7 +900,7 @@ import Testing
 
     @Test func attProcedureAlreadyInProgressMapsToControlPointError() async throws {
         let fake = FakeBluetoothCentral()
-        await fake.setFeatureData(Data([0x07, 0x00]))
+        await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
 
         let connected = try await makeSensor(fake: fake).connect()
@@ -909,7 +910,7 @@ import Testing
             return
         }
 
-        await fake.failNextWriteWithATTCode(0x80)
+        await fake.failNextWriteWithATTCode(CSCATTApplicationError.procedureAlreadyInProgress.rawValue)
 
         do {
             try await locations.update(locations.supported[1])
@@ -927,30 +928,18 @@ import Testing
         revolutions: UInt32,
         eventTime: UInt16,
     ) async {
-        var data = Data([0x01])
-        data.append(contentsOf: encodeUInt32LE(revolutions))
-        data.append(contentsOf: encodeUInt16LE(eventTime))
+        let payload = CSCMeasurementFixtures.wheelMeasurement(
+            revolutions: revolutions,
+            eventTime: eventTime,
+        )
         await fake.emitGATT(
             .characteristicValue(
                 id: id,
                 serviceUUID: CSCS.serviceUUID,
                 characteristicUUID: CSCS.measurementUUID,
-                value: data,
+                value: payload,
             ),
         )
         try? await Task.sleep(nanoseconds: 50_000_000)
-    }
-
-    private func encodeUInt16LE(_ value: UInt16) -> [UInt8] {
-        [UInt8(value & 0xFF), UInt8(value >> 8)]
-    }
-
-    private func encodeUInt32LE(_ value: UInt32) -> [UInt8] {
-        [
-            UInt8(value & 0xFF),
-            UInt8((value >> 8) & 0xFF),
-            UInt8((value >> 16) & 0xFF),
-            UInt8(value >> 24),
-        ]
     }
 }

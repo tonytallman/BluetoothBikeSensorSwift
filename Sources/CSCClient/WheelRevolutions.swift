@@ -1,3 +1,4 @@
+internal import CSCWire
 import Foundation
 
 /// Live wheel revolution measurements from a connected CSCS sensor.
@@ -43,8 +44,8 @@ public final class WheelRevolutions: Sendable {
     public func setCumulativeRevolutions(_ value: UInt32) async throws {
         let stateBox = stateBox
         try await controlPointSession.perform(
-            request: CSCControlPointParser.encodeSetCumulativeValue(value),
-            expectedRequestOpcode: CSCControlPointOpCode.setCumulativeValue,
+            request: CSCControlPointRequest.setCumulativeValue(value).encode(),
+            expectedRequestOpcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
         ) { _ in
             stateBox.resetWheelBaseline()
         }

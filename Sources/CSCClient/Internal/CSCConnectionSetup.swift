@@ -1,3 +1,4 @@
+internal import CSCWire
 import Foundation
 
 package enum ResolvedRevolutions: Sendable {
@@ -45,18 +46,18 @@ enum CSCConnectionSetup {
             throw ConnectError.serviceDiscoveryFailed(reason: "CSC Feature read failed")
         }
 
-        guard let capabilities = CSCFeatureParser.parse(featureData) else {
+        guard let feature = CSCFeature.decode(featureData) else {
             throw ConnectError.serviceDiscoveryFailed(reason: "Invalid CSC Feature value")
         }
 
-        guard capabilities.hasSpeed || capabilities.hasCadence else {
+        guard feature.hasSpeed || feature.hasCadence else {
             throw ConnectError.serviceDiscoveryFailed(reason: "Sensor supports neither wheel nor crank data")
         }
 
         let controlPointAvailable = discovered.contains(CSCS.controlPointUUID)
         let sensorLocationAvailable = discovered.contains(CSCS.sensorLocationUUID)
 
-        if capabilities.hasSpeed && !controlPointAvailable {
+        if feature.hasSpeed && !controlPointAvailable {
             throw ConnectError.serviceDiscoveryFailed(
                 reason: "SC Control Point characteristic missing for wheel data",
             )
@@ -74,7 +75,7 @@ enum CSCConnectionSetup {
         let location = try await resolveLocation(
             central: central,
             id: id,
-            capabilities: capabilities,
+            feature: feature,
             sensorLocationAvailable: sensorLocationAvailable,
             controlPointAvailable: controlPointAvailable,
         )
@@ -87,7 +88,7 @@ enum CSCConnectionSetup {
         )
 
         let revolutions: ResolvedRevolutions
-        switch (capabilities.hasSpeed, capabilities.hasCadence) {
+        switch (feature.hasSpeed, feature.hasCadence) {
         case (true, true):
             revolutions = .wheelAndCrank
         case (true, false):
@@ -108,11 +109,11 @@ enum CSCConnectionSetup {
     private static func resolveLocation(
         central: any BluetoothCentral,
         id: UUID,
-        capabilities: CSCFeatureParser.Capabilities,
+        feature: CSCFeature,
         sensorLocationAvailable: Bool,
         controlPointAvailable: Bool,
     ) async throws -> ResolvedLocation {
-        if capabilities.hasMultipleSensorLocations {
+        if feature.hasMultipleSensorLocations {
             guard sensorLocationAvailable else {
                 throw ConnectError.serviceDiscoveryFailed(reason: "Sensor Location characteristic missing")
             }
@@ -125,10 +126,10 @@ enum CSCConnectionSetup {
                 serviceUUID: CSCS.serviceUUID,
                 characteristicUUID: CSCS.sensorLocationUUID,
             )
-            guard let currentByte = currentData.first else {
+            guard let wireLocation = CSCSensorLocation.decode(currentData) else {
                 throw ConnectError.serviceDiscoveryFailed(reason: "Invalid Sensor Location value")
             }
-            let current = SensorLocation.fromAssignedNumber(currentByte)
+            let current = SensorLocation.fromAssignedNumber(wireLocation.assignedNumber)
 
             let supported = try await requestSupportedSensorLocations(
                 central: central,
@@ -148,10 +149,10 @@ enum CSCConnectionSetup {
                 serviceUUID: CSCS.serviceUUID,
                 characteristicUUID: CSCS.sensorLocationUUID,
             )
-            guard let locationByte = locationData.first else {
+            guard let wireLocation = CSCSensorLocation.decode(locationData) else {
                 throw ConnectError.serviceDiscoveryFailed(reason: "Invalid Sensor Location value")
             }
-            return .fixed(SensorLocation.fromAssignedNumber(locationByte))
+            return .fixed(SensorLocation.fromAssignedNumber(wireLocation.assignedNumber))
         }
 
         return .unavailable
@@ -168,11 +169,11 @@ enum CSCConnectionSetup {
         )
         await session.startListener()
 
-        let response: CSCControlPointParser.Response
+        let response: CSCControlPointResponse
         do {
             response = try await session.perform(
-                request: CSCControlPointParser.encodeRequestSupportedSensorLocations(),
-                expectedRequestOpcode: CSCControlPointOpCode.requestSupportedSensorLocations,
+                request: CSCControlPointRequest.requestSupportedSensorLocations.encode(),
+                expectedRequestOpcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
             )
         } catch let error as ControlPointError {
             await session.cancel()
@@ -183,7 +184,7 @@ enum CSCConnectionSetup {
         }
         await session.cancel()
 
-        guard let supported = CSCControlPointParser.supportedLocations(from: response) else {
+        guard let supported = CSCControlPointClient.supportedLocations(from: response) else {
             throw ConnectError.serviceDiscoveryFailed(reason: "Request Supported Sensor Locations failed")
         }
         return supported

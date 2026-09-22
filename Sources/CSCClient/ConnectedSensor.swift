@@ -1,3 +1,4 @@
+internal import CSCWire
 import Foundation
 
 /// A connected CSCS sensor emitting live speed and/or cadence measurements.
@@ -217,7 +218,7 @@ public final class ConnectedSensor: Sendable {
         crankRevolutions: CrankRevolutions?,
         stateBox: MeasurementStateBox,
     ) async {
-        guard let sample = CSCMeasurementParser.parse(data) else {
+        guard let sample = CSCMeasurement.decode(data) else {
             return
         }
 

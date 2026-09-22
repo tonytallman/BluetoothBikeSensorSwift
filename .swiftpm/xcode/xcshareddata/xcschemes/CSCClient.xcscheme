@@ -14,9 +14,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "BluetoothBikeSensorSwift"
-               BuildableName = "BluetoothBikeSensorSwift"
-               BlueprintName = "BluetoothBikeSensorSwift"
+               BlueprintIdentifier = "CSCClient"
+               BuildableName = "CSCClient"
+               BlueprintName = "CSCClient"
                ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>
@@ -28,9 +28,23 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "BluetoothBikeSensorSwiftTests"
-               BuildableName = "BluetoothBikeSensorSwiftTests"
-               BlueprintName = "BluetoothBikeSensorSwiftTests"
+               BlueprintIdentifier = "CSCClientTests"
+               BuildableName = "CSCClientTests"
+               BlueprintName = "CSCClientTests"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "CSCWireTests"
+               BuildableName = "CSCWireTests"
+               BlueprintName = "CSCWireTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>
@@ -48,9 +62,20 @@
             parallelizable = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "BluetoothBikeSensorSwiftTests"
-               BuildableName = "BluetoothBikeSensorSwiftTests"
-               BlueprintName = "BluetoothBikeSensorSwiftTests"
+               BlueprintIdentifier = "CSCClientTests"
+               BuildableName = "CSCClientTests"
+               BlueprintName = "CSCClientTests"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "CSCWireTests"
+               BuildableName = "CSCWireTests"
+               BlueprintName = "CSCWireTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>

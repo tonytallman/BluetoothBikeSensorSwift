@@ -1,3 +1,4 @@
+internal import CSCWire
 import Foundation
 
 /// Multiple sensor locations supported by a connected CSCS sensor.
@@ -37,8 +38,8 @@ public final class MultipleSensorLocations: @unchecked Sendable {
 
         let locationToApply = location
         try await controlPointSession.perform(
-            request: CSCControlPointParser.encodeUpdateSensorLocation(location),
-            expectedRequestOpcode: CSCControlPointOpCode.updateSensorLocation,
+            request: CSCControlPointRequest.updateSensorLocation(location.assignedNumber).encode(),
+            expectedRequestOpcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
         ) { _ in
             setCurrent(locationToApply)
         }

@@ -1,3 +1,4 @@
+internal import CSCWire
 import Foundation
 
 /// Controllable `BluetoothCentral` for unit tests. Not intended for production use.
@@ -37,13 +38,13 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     private var shouldHangNextConnect = false
     private var shouldHoldNextControlPointIndication = false
     private var heldControlPointIndication: GATTEvent?
-    private var featureData = Data([0x03, 0x00])
+    private var featureData = CSCFeature([.wheelRevolutionData, .crankRevolutionData]).encode()
     private var discoveredCharacteristicUUIDs: [UUID] = [
         CSCS.measurementUUID,
         CSCS.featureUUID,
         CSCS.controlPointUUID,
     ]
-    private var sensorLocationData = Data([0x05])
+    private var sensorLocationData = CSCSensorLocation(assignedNumber: 0x05).encode()
     private var supportedSensorLocationBytes: [UInt8] = [0x05, 0x06, 0x0A]
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
@@ -359,17 +360,33 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         supportedLocationBytes: [UInt8],
     ) -> Data {
         guard let requestOpcode = request.first else {
-            return Data([0x10, 0x00, responseValue])
+            return CSCControlPointResponse(
+                requestOpcode: 0x00,
+                value: responseValue,
+                parameter: Data(),
+            ).encode()
         }
 
         switch requestOpcode {
-        case 0x04:
-            if responseValue == 0x01 {
-                return Data([0x10, 0x04, 0x01] + supportedLocationBytes)
+        case CSCControlPointOpCode.requestSupportedSensorLocations.rawValue:
+            if responseValue == CSCControlPointResponseValue.success.rawValue {
+                return CSCControlPointResponse(
+                    requestOpcode: requestOpcode,
+                    value: responseValue,
+                    parameter: Data(supportedLocationBytes),
+                ).encode()
             }
-            return Data([0x10, 0x04, responseValue])
+            return CSCControlPointResponse(
+                requestOpcode: requestOpcode,
+                value: responseValue,
+                parameter: Data(),
+            ).encode()
         default:
-            return Data([0x10, requestOpcode, responseValue])
+            return CSCControlPointResponse(
+                requestOpcode: requestOpcode,
+                value: responseValue,
+                parameter: Data(),
+            ).encode()
         }
     }
 }
