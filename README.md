@@ -21,6 +21,7 @@ targets: [
         name: "YourApp",
         dependencies: [
             .product(name: "CSCClient", package: "BluetoothBikeSensorSwift"),
+            .product(name: "CSCServer", package: "BluetoothBikeSensorSwift"),
         ],
     ),
 ]
@@ -93,6 +94,60 @@ for await sensor in scanner.scan() {
 
 Cancel the scan stream to stop scanning. Multiple sensors may be connected at once.
 
+### CSC server builder
+
+Phase 2 adds a configuration builder on `CSCServer`. `build()` records CSCS feature bits, the GATT characteristic inventory, revolution sequences, and delegates. It does not advertise or serve GATT traffic (`start()`, advertising, and read/write servicing arrive in later phases).
+
+```swift
+import CSCServer
+
+// Crank only
+let crankOnly = Server.crankRevolutions(crankStream).build()
+
+// Crank + static location
+let crankStatic = Server.crankRevolutions(crankStream)
+    .staticSensorLocation(.leftCrank)
+    .build()
+
+// Wheel only (set-cumulative delegate required)
+let wheelOnly = Server.wheelRevolutions(wheelStream, setCumulativeWheelRevolutions: cumulative)
+    .build()
+
+// Wheel + static location
+let wheelStatic = Server.wheelRevolutions(wheelStream, setCumulativeWheelRevolutions: cumulative)
+    .staticSensorLocation(.rearDropout)
+    .build()
+
+// Wheel + crank
+let wheelCrank = Server.wheelRevolutions(wheelStream, setCumulativeWheelRevolutions: cumulative)
+    .crankRevolutions(crankStream)
+    .build()
+
+// Wheel + crank + static location
+let wheelCrankStatic = Server.wheelRevolutions(wheelStream, setCumulativeWheelRevolutions: cumulative)
+    .crankRevolutions(crankStream)
+    .staticSensorLocation(.rearWheel)
+    .build()
+
+// Crank + multiple locations
+let crankMultiple = Server.crankRevolutions(crankStream)
+    .multipleSensorLocations(locationsDelegate)
+    .build()
+
+// Wheel + multiple locations
+let wheelMultiple = Server.wheelRevolutions(wheelStream, setCumulativeWheelRevolutions: cumulative)
+    .multipleSensorLocations(locationsDelegate)
+    .build()
+
+// Wheel + crank + multiple locations
+let wheelCrankMultiple = Server.wheelRevolutions(wheelStream, setCumulativeWheelRevolutions: cumulative)
+    .crankRevolutions(crankStream)
+    .multipleSensorLocations(locationsDelegate)
+    .build()
+```
+
+`Server` has no public initializer and no `start()` in Phase 2.
+
 ## Wheel size
 
 Speed is derived from wheel revolutions and **client-managed wheel circumference** on ``WheelRevolutions``. Set `wheel.wheelCircumference` before or during streaming; the default is 2.105 m (700×25C). The library does **not** read, write, or persist wheel size.
@@ -111,10 +166,10 @@ See [`SampleApp/SampleApp/Info.plist`](SampleApp/SampleApp/Info.plist) for an ex
 ## Project layout
 
 ```
-BluetoothBikeSensorSwift/          # Swift package (library product: CSCClient)
+BluetoothBikeSensorSwift/          # Swift package (library products: CSCClient, CSCServer)
   Package.swift                    # open this in Xcode to run unit tests
   Sources/CSCClient/
-  Sources/CSCServer/               # internal target; not a library product (Phase 2 adds product + public Server)
+  Sources/CSCServer/               # library product; peripheral seam + Phase 2 builder
   Sources/CSCWire/                 # internal target; not a library product
   Tests/CSCClientTests/
   Tests/CSCServerTests/
@@ -200,7 +255,17 @@ Public types include DocC-style `///` comments in source. Test-only dependency i
 
 `CSCWire` holds shared CSCS wire codecs as an internal package target. It is not a library product.
 
-`CSCServer` holds the peripheral seam for a future CSC sensor server. It is an internal package target in Phase 1 — not importable by apps — and becomes a library product in Phase 2 with the first public `Server` type.
+`CSCServer` is a library product. Phase 2 exports the configuration builder and `Server`. `build()` records the CSCS feature bits, characteristic inventory, sequences, and delegates. It does not advertise or serve GATT. The peripheral seam stays package-visible inside the package.
+
+**CSCServer builder surface (Phase 2):**
+
+- `Server.wheelRevolutions(_:setCumulativeWheelRevolutions:)` — wheel entry point; set-cumulative delegate is required
+- `Server.crankRevolutions(_:)` — crank entry point
+- `wheelRevolutions(_:setCumulativeWheelRevolutions:)`, `crankRevolutions(_:)`, `staticSensorLocation(_:)`, `multipleSensorLocations(_:)` — chain methods
+- `build()` — returns a configured `Server` (no public `Server` initializer; no `start()` in Phase 2)
+- `WheelRevolution`, `CrankRevolution` — CSC Measurement wire units for server sequences
+- `SensorLocationKind` — GATT assigned numbers 0...16 for the builder
+- `SetCumulativeWheelRevolutions`, `MultipleSensorLocationsDelegate` — control-point delegates stored by `build()` and serviced in later phases
 
 ## Limitations
 
