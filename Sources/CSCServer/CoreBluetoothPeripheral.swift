@@ -189,7 +189,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
                     request.value = value
                 }
             case let .error(code):
-                cbResult = CBATTError.Code(rawValue: Int(code))
+                cbResult = CBATTError.Code(rawValue: Int(code))!
             }
 
             peripheralManager.respond(to: request, withResult: cbResult)
