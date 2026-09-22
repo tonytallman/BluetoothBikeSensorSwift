@@ -114,8 +114,10 @@ See [`SampleApp/SampleApp/Info.plist`](SampleApp/SampleApp/Info.plist) for an ex
 BluetoothBikeSensorSwift/          # Swift package (library product: CSCClient)
   Package.swift                    # open this in Xcode to run unit tests
   Sources/CSCClient/
+  Sources/CSCServer/               # internal target; not a library product (Phase 2 adds product + public Server)
   Sources/CSCWire/                 # internal target; not a library product
   Tests/CSCClientTests/
+  Tests/CSCServerTests/
   Tests/CSCWireTests/
 SampleApp/                         # iOS SwiftUI sample app
   SampleApp.xcodeproj
@@ -197,6 +199,8 @@ The sample app provides a single scan list:
 Public types include DocC-style `///` comments in source. Test-only dependency injection (`BluetoothCentral`, `FakeBluetoothCentral`, `Scanner.init(central:)`) is `package`-visible within the Swift package, not part of the public client API.
 
 `CSCWire` holds shared CSCS wire codecs as an internal package target. It is not a library product.
+
+`CSCServer` holds the peripheral seam for a future CSC sensor server. It is an internal package target in Phase 1 — not importable by apps — and becomes a library product in Phase 2 with the first public `Server` type.
 
 ## Limitations
 

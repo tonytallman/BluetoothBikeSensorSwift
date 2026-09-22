@@ -18,6 +18,18 @@ BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and rea
 - **`SensorLocation` is not publicly constructible** — clients obtain tokens from the peripheral and compare via `SensorLocation.Kind`; future `CSCServer` builder will accept `Kind` values.
 - **Start Sensor Calibration (`0x02`) is not supported** — the client does not expose this control-point procedure.
 
+### CSC Server
+
+- **`CSCServer` is an internal package target in Phase 1, not a library product** — it owns the peripheral seam (`BluetoothPeripheral`, `CoreBluetoothPeripheral`, `FakeBluetoothPeripheral`). `CSCClient` is unchanged. The `CSCServer` library product arrives in Phase 2 with the first `public` `Server`. Phase 3’s `Server` is the only production constructor of `CoreBluetoothPeripheral`; that instance is not passed into `Scanner`.
+- **`BluetoothPeripheral`** exposes Bluetooth state, add/remove GATT services, start/stop advertising, read requests, write transactions (one `respond` per batch), CCCD subscription changes, `respond` with a read payload, and notify `updateValue` plus `subscriberUpdatesReady` when the transmit queue has space.
+- **Queue crossing** — `CoreBluetoothPeripheral` creates `CBPeripheralManager` on serial queue `com.bluetoothbikesensor.peripheral`. The delegate bridge enqueues `Task { await handle(event) }` and returns. All manager calls run in `queue.sync` without holding the bridge lock across the sync. `add` and `startAdvertising` continuations resume on the actor. Only one in-flight `add` and one in-flight `startAdvertising` are allowed. `deinit` clears the handler and fails leftover continuations with `peripheralInvalidated` without calling `queue.sync`.
+- **Subscribe before `add` and `startAdvertising`** — inbound streams do not replay; use `currentState` for the latest Bluetooth state.
+- **Characteristic values** — a non-nil `value` is legal only when properties are exactly read and permissions are exactly readable (CoreBluetooth cached read). Any other combination throws `cachedValueNotReadOnly`. Nil `value` is dynamic; reads arrive on `readRequests`. The fake does not answer from a cached value.
+- **CCCD (`0x2902`)** — subscription enable/disable is `didSubscribeTo` / `didUnsubscribeFrom`, not `writeTransactions`.
+- **Read/write responses** — read success carries the offset slice in `respond`; the adaptor assigns it to `CBATTRequest.value` without re-slicing. One `respond` per write transaction uses the first `CBATTRequest`. Error bytes pass through `CBATTError.Code(rawValue:)` so application codes `0x80` / `0x81` survive.
+- **Notify backpressure** — when `updateValue` returns `false`, the caller waits on `subscriberUpdatesReady` and retries; this actor does not queue or retry internally.
+- **Control point** — the server adds SC Control Point only when a later builder requires it (same as issue #12 client behavior: wheel connect without control point when multiple-locations is clear).
+
 ## Detailed Design
 
 ### Library
