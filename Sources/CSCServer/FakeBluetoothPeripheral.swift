@@ -22,6 +22,22 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         case respond(id: UUID, result: ATTResult, value: Data?)
     }
 
+    private struct RecordedCallWaiter {
+        let id: UUID
+        let predicate: @Sendable ([RecordedCall]) -> Bool
+        let continuation: CheckedContinuation<Void, Error>
+        var cancelled = false
+        var resumed = false
+    }
+
+    private struct CurrentStateReadWaiter {
+        let id: UUID
+        let atLeast: Int
+        let continuation: CheckedContinuation<Void, Error>
+        var cancelled = false
+        var resumed = false
+    }
+
     private var state: BluetoothState
     private var advertising = false
     private var services: [UUID: PeripheralService] = [:]
@@ -30,7 +46,12 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
 
     private var shouldFailNextAdd = false
     private var shouldFailNextAdvertise = false
+    private var shouldFailNextUpdateValue = false
     private var nextUpdateValueAccepted = true
+
+    private var currentStateReadCount = 0
+    private var recordedCallWaiters: [RecordedCallWaiter] = []
+    private var currentStateReadWaiters: [CurrentStateReadWaiter] = []
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
     private let readBroadcaster = StreamBroadcaster<PeripheralReadRequest>()
@@ -45,7 +66,11 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     }
 
     package var currentState: BluetoothState {
-        get async { state }
+        get async {
+            currentStateReadCount += 1
+            resumeCurrentStateReadWaiters()
+            return state
+        }
     }
 
     package var stateUpdates: AsyncStream<BluetoothState> {
@@ -63,14 +88,14 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
 
         if shouldFailNextAdd {
             shouldFailNextAdd = false
-            recordedCalls.append(.add(service))
+            record(.add(service))
             throw BluetoothPeripheralError.addServiceFailed(
                 serviceUUID: service.uuid,
                 reason: "Test failure",
             )
         }
 
-        recordedCalls.append(.add(service))
+        record(.add(service))
         services[service.uuid] = service
     }
 
@@ -79,17 +104,17 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
             throw BluetoothPeripheralError.serviceNotFound
         }
 
-        recordedCalls.append(.removeService(uuid: uuid))
+        record(.removeService(uuid: uuid))
         services.removeValue(forKey: uuid)
     }
 
     package func removeAllServices() async {
-        recordedCalls.append(.removeAllServices)
+        record(.removeAllServices)
         services.removeAll()
     }
 
     package func startAdvertising(_ advertisement: Advertisement) async throws {
-        recordedCalls.append(.startAdvertising(advertisement))
+        record(.startAdvertising(advertisement))
 
         if shouldFailNextAdvertise {
             shouldFailNextAdvertise = false
@@ -100,7 +125,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     }
 
     package func stopAdvertising() async {
-        recordedCalls.append(.stopAdvertising)
+        record(.stopAdvertising)
         advertising = false
     }
 
@@ -157,7 +182,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
             }
         }
 
-        recordedCalls.append(.respond(id: requestID, result: result, value: value))
+        record(.respond(id: requestID, result: result, value: value))
         outstandingReadRequestIDs.remove(requestID)
         outstandingWriteTransactionIDs.remove(requestID)
     }
@@ -179,7 +204,20 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
             filter = .all
         }
 
-        recordedCalls.append(
+        if shouldFailNextUpdateValue {
+            shouldFailNextUpdateValue = false
+            record(
+                .updateValue(
+                    value: value,
+                    serviceUUID: serviceUUID,
+                    characteristicUUID: characteristicUUID,
+                    centralIDs: filter,
+                ),
+            )
+            throw BluetoothPeripheralError.peripheralInvalidated
+        }
+
+        record(
             .updateValue(
                 value: value,
                 serviceUUID: serviceUUID,
@@ -221,8 +259,139 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         shouldFailNextAdvertise = true
     }
 
+    package func failNextUpdateValue() {
+        shouldFailNextUpdateValue = true
+    }
+
     package func setNextUpdateValueAccepted(_ accepted: Bool) {
         nextUpdateValueAccepted = accepted
+    }
+
+    package func waitUntilRecordedCallsSatisfy(
+        _ predicate: @Sendable @escaping ([RecordedCall]) -> Bool,
+    ) async throws {
+        if predicate(recordedCalls) {
+            return
+        }
+
+        let waiterID = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let waiter = RecordedCallWaiter(
+                    id: waiterID,
+                    predicate: predicate,
+                    continuation: continuation,
+                )
+                recordedCallWaiters.append(waiter)
+                resumeRecordedCallWaiters()
+            }
+        } onCancel: {
+            Task {
+                await self.cancelRecordedCallWaiter(id: waiterID)
+            }
+        }
+    }
+
+    package func waitUntilCurrentStateReadCount(atLeast count: Int) async throws {
+        if currentStateReadCount >= count {
+            return
+        }
+
+        let waiterID = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let waiter = CurrentStateReadWaiter(
+                    id: waiterID,
+                    atLeast: count,
+                    continuation: continuation,
+                )
+                currentStateReadWaiters.append(waiter)
+                resumeCurrentStateReadWaiters()
+            }
+        } onCancel: {
+            Task {
+                await self.cancelCurrentStateReadWaiter(id: waiterID)
+            }
+        }
+    }
+
+    private func record(_ call: RecordedCall) {
+        recordedCalls.append(call)
+        resumeRecordedCallWaiters()
+    }
+
+    private func resumeRecordedCallWaiters() {
+        var remaining: [RecordedCallWaiter] = []
+        for index in recordedCallWaiters.indices {
+            var waiter = recordedCallWaiters[index]
+            if waiter.cancelled {
+                if !waiter.resumed {
+                    waiter.resumed = true
+                    waiter.continuation.resume(throwing: CancellationError())
+                }
+                continue
+            }
+            if waiter.predicate(recordedCalls) {
+                if !waiter.resumed {
+                    waiter.resumed = true
+                    waiter.continuation.resume()
+                }
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        recordedCallWaiters = remaining
+    }
+
+    private func cancelRecordedCallWaiter(id: UUID) {
+        for index in recordedCallWaiters.indices {
+            if recordedCallWaiters[index].id == id {
+                recordedCallWaiters[index].cancelled = true
+                if !recordedCallWaiters[index].resumed {
+                    recordedCallWaiters[index].resumed = true
+                    recordedCallWaiters[index].continuation.resume(throwing: CancellationError())
+                }
+                recordedCallWaiters.remove(at: index)
+                return
+            }
+        }
+    }
+
+    private func resumeCurrentStateReadWaiters() {
+        var remaining: [CurrentStateReadWaiter] = []
+        for index in currentStateReadWaiters.indices {
+            var waiter = currentStateReadWaiters[index]
+            if waiter.cancelled {
+                if !waiter.resumed {
+                    waiter.resumed = true
+                    waiter.continuation.resume(throwing: CancellationError())
+                }
+                continue
+            }
+            if currentStateReadCount >= waiter.atLeast {
+                if !waiter.resumed {
+                    waiter.resumed = true
+                    waiter.continuation.resume()
+                }
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        currentStateReadWaiters = remaining
+    }
+
+    private func cancelCurrentStateReadWaiter(id: UUID) {
+        for index in currentStateReadWaiters.indices {
+            if currentStateReadWaiters[index].id == id {
+                currentStateReadWaiters[index].cancelled = true
+                if !currentStateReadWaiters[index].resumed {
+                    currentStateReadWaiters[index].resumed = true
+                    currentStateReadWaiters[index].continuation.resume(throwing: CancellationError())
+                }
+                currentStateReadWaiters.remove(at: index)
+                return
+            }
+        }
     }
 
     private func hasCharacteristic(serviceUUID: UUID, characteristicUUID: UUID) -> Bool {

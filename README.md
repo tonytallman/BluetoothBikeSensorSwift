@@ -96,7 +96,7 @@ Cancel the scan stream to stop scanning. Multiple sensors may be connected at on
 
 ### CSC server builder
 
-Phase 2 adds a configuration builder on `CSCServer`. `build()` records CSCS feature bits, the GATT characteristic inventory, revolution sequences, and delegates. It does not advertise or serve GATT traffic (`start()`, advertising, and read/write servicing arrive in later phases).
+`CSCServer` provides a type-state builder and a `Server` runtime. `build()` records CSCS feature bits, the GATT characteristic inventory, revolution sequences, and delegates. **Phase 3** adds `start()` / `stop()` for crank-only and crank-plus-static-location configurations: the server publishes CSCS (`0x1816`), serves feature and static-location reads, and notifies crank measurements. Wheel and multiple-location configurations still throw `ServerError.unsupportedConfiguration` until later phases.
 
 ```swift
 import CSCServer
@@ -146,7 +146,25 @@ let wheelCrankMultiple = Server.wheelRevolutions(wheelStream, setCumulativeWheel
     .build()
 ```
 
-`Server` has no public initializer and no `start()` in Phase 2.
+`Server` has no public initializer. Call `start()` after `build()` on supported crank configurations; call `stop()` to tear down advertising and the published service.
+
+```swift
+let server = Server.crankRevolutions(crankStream)
+    .staticSensorLocation(.leftCrank)
+    .build()
+
+Task {
+    do {
+        try await server.start() // advertises 0x1816 until stop() or cancellation
+    } catch {
+        // ServerError: unsupportedConfiguration, alreadyStarted,
+        // bluetoothUnavailable, publishFailed, advertisingFailed, revolutionSequenceFailed
+    }
+}
+
+// later:
+await server.stop()
+```
 
 ## Wheel size
 
@@ -255,14 +273,16 @@ Public types include DocC-style `///` comments in source. Test-only dependency i
 
 `CSCWire` holds shared CSCS wire codecs as an internal package target. It is not a library product.
 
-`CSCServer` is a library product. Phase 2 exports the configuration builder and `Server`. `build()` records the CSCS feature bits, characteristic inventory, sequences, and delegates. It does not advertise or serve GATT. The peripheral seam stays package-visible inside the package.
+`CSCServer` is a library product: configuration builder, `Server`, and (for crank-only / crank-plus-static location) `start()` / `stop()`. The peripheral seam stays package-visible for unit tests.
 
-**CSCServer builder surface (Phase 2):**
+**CSCServer builder surface:**
 
 - `Server.wheelRevolutions(_:setCumulativeWheelRevolutions:)` — wheel entry point; set-cumulative delegate is required
 - `Server.crankRevolutions(_:)` — crank entry point
 - `wheelRevolutions(_:setCumulativeWheelRevolutions:)`, `crankRevolutions(_:)`, `staticSensorLocation(_:)`, `multipleSensorLocations(_:)` — chain methods
-- `build()` — returns a configured `Server` (no public `Server` initializer; no `start()` in Phase 2)
+- `build()` — returns a configured `Server` (no public `Server` initializer)
+- `start()` / `stop()` — publish and advertise CSCS for crank-only and crank-plus-static location; unsupported configurations throw `ServerError.unsupportedConfiguration`
+- `ServerError` — session failures (`unsupportedConfiguration`, `alreadyStarted`, `bluetoothUnavailable`, `publishFailed`, `advertisingFailed`, `revolutionSequenceFailed`)
 - `WheelRevolution`, `CrankRevolution` — CSC Measurement wire units for server sequences
 - `SensorLocationKind` — GATT assigned numbers 0...16 for the builder
 - `SetCumulativeWheelRevolutions`, `MultipleSensorLocationsDelegate` — control-point delegates stored by `build()` and serviced in later phases

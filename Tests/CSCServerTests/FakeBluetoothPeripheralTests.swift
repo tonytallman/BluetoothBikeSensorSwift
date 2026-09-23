@@ -486,6 +486,151 @@ struct FakeBluetoothPeripheralTests {
         }
     }
 
+    @Test func waitUntilRecordedCallsSatisfyAlreadyTrue() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let service = Self.sampleService()
+        try await fake.add(service)
+        try await fake.waitUntilRecordedCallsSatisfy { calls in
+            calls.contains { if case .add = $0 { return true } else { return false } }
+        }
+    }
+
+    @Test func waitUntilRecordedCallsSatisfyBecomesTrueOnNextAppend() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let service = Self.sampleService()
+        let waiter = Task {
+            try await fake.waitUntilRecordedCallsSatisfy { calls in
+                calls.contains { if case .stopAdvertising = $0 { return true } else { return false } }
+            }
+        }
+        await fake.stopAdvertising()
+        try await waiter.value
+    }
+
+    @Test func waitUntilRecordedCallsSatisfyMatchingWaiterResumes() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let service = Self.sampleService()
+        let matching = Task {
+            try await fake.waitUntilRecordedCallsSatisfy { calls in
+                calls.contains { if case .add = $0 { return true } else { return false } }
+            }
+        }
+        let nonMatching = Task {
+            try await fake.waitUntilRecordedCallsSatisfy { _ in false }
+        }
+        try await fake.add(service)
+        try await matching.value
+        nonMatching.cancel()
+        await #expect(throws: CancellationError.self) { try await nonMatching.value }
+    }
+
+    @Test func waitUntilCurrentStateReadCountAlreadySatisfied() async throws {
+        let fake = FakeBluetoothPeripheral()
+        try await fake.waitUntilCurrentStateReadCount(atLeast: 0)
+        _ = await fake.currentState
+        try await fake.waitUntilCurrentStateReadCount(atLeast: 1)
+    }
+
+    @Test func waitUntilCurrentStateReadCountWaitsForRead() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let waiter = Task {
+            try await fake.waitUntilCurrentStateReadCount(atLeast: 1)
+        }
+        _ = await fake.currentState
+        try await waiter.value
+    }
+
+    @Test func waitUntilCurrentStateReadCountTwoWaiters() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let first = Task { try await fake.waitUntilCurrentStateReadCount(atLeast: 1) }
+        let second = Task { try await fake.waitUntilCurrentStateReadCount(atLeast: 1) }
+        _ = await fake.currentState
+        try await first.value
+        try await second.value
+    }
+
+    @Test func waitUntilCurrentStateReadCountCancel() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let waiter = Task { try await fake.waitUntilCurrentStateReadCount(atLeast: 5) }
+        waiter.cancel()
+        await #expect(throws: CancellationError.self) { try await waiter.value }
+    }
+
+    @Test func failNextUpdateValueRecordsThenThrows() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let service = Self.sampleService(notifyCharacteristic: true)
+        try await fake.add(service)
+        let characteristicUUID = service.characteristics[0].uuid
+        let value = Data([0x01])
+
+        await fake.failNextUpdateValue()
+        await #expect(throws: BluetoothPeripheralError.peripheralInvalidated) {
+            try await fake.updateValue(
+                value,
+                serviceUUID: service.uuid,
+                characteristicUUID: characteristicUUID,
+                onSubscribedCentrals: nil,
+            )
+        }
+
+        let accepted = try await fake.updateValue(
+            value,
+            serviceUUID: service.uuid,
+            characteristicUUID: characteristicUUID,
+            onSubscribedCentrals: nil,
+        )
+        #expect(accepted == true)
+        #expect(await fake.recordedCalls.filter {
+            if case .updateValue = $0 { return true }
+            return false
+        }.count == 2)
+    }
+
+    @Test func failNextUpdateValueAbsentCharacteristicDoesNotClearFlag() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let service = Self.sampleService(notifyCharacteristic: true)
+        try await fake.add(service)
+        let characteristicUUID = service.characteristics[0].uuid
+
+        await fake.failNextUpdateValue()
+        await #expect(throws: BluetoothPeripheralError.characteristicNotFound) {
+            try await fake.updateValue(
+                Data([0x01]),
+                serviceUUID: UUID(),
+                characteristicUUID: UUID(),
+                onSubscribedCentrals: nil,
+            )
+        }
+
+        await #expect(throws: BluetoothPeripheralError.peripheralInvalidated) {
+            try await fake.updateValue(
+                Data([0x01]),
+                serviceUUID: service.uuid,
+                characteristicUUID: characteristicUUID,
+                onSubscribedCentrals: nil,
+            )
+        }
+    }
+
+    @Test func failNextUpdateValueWinsOverRejectedAccept() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let service = Self.sampleService(notifyCharacteristic: true)
+        try await fake.add(service)
+        let characteristicUUID = service.characteristics[0].uuid
+
+        await fake.failNextUpdateValue()
+        await fake.setNextUpdateValueAccepted(false)
+        await #expect(throws: BluetoothPeripheralError.peripheralInvalidated) {
+            try await fake.updateValue(
+                Data([0x01]),
+                serviceUUID: service.uuid,
+                characteristicUUID: characteristicUUID,
+                onSubscribedCentrals: nil,
+            )
+        }
+        await fake.setNextUpdateValueAccepted(true)
+    }
+
     private static func sampleService(notifyCharacteristic: Bool = false) -> PeripheralService {
         PeripheralService(
             uuid: UUID(),

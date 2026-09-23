@@ -21,7 +21,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     private let readyBroadcaster = StreamBroadcaster<Void>()
 
     package init() {
-        let bridge = PeripheralDelegateBridge()
+        let bridge = PeripheralDelegateBridge(queue: queue)
         let box = InFlightContinuationBox()
         delegateBridge = bridge
         inFlightBox = box
@@ -404,17 +404,35 @@ private final class InFlightContinuationBox: @unchecked Sendable {
 
 private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDelegate, @unchecked Sendable {
     private let lock = NSLock()
+    private let queue: DispatchQueue
     private var handler: (@Sendable (PeripheralDelegateEvent) -> Void)?
+    private var pendingState: BluetoothState?
     private var services: [UUID: CBMutableService] = [:]
     private var characteristics: [CharacteristicKey: CBMutableCharacteristic] = [:]
     private var centrals: [UUID: CBCentral] = [:]
     private var attRequests: [UUID: CBATTRequest] = [:]
     private var attRequestKinds: [UUID: StoredRequestKind] = [:]
 
+    init(queue: DispatchQueue) {
+        self.queue = queue
+    }
+
     func bind(handler: @escaping @Sendable (PeripheralDelegateEvent) -> Void) {
         lock.lock()
         self.handler = handler
         lock.unlock()
+
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let pending = self.pendingState
+            self.pendingState = nil
+            let handler = self.handler
+            self.lock.unlock()
+            if let pending, let handler {
+                handler(.stateUpdated(pending))
+            }
+        }
     }
 
     func clearHandler() {
@@ -502,6 +520,14 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
 
     private func emit(_ event: PeripheralDelegateEvent) {
         lock.lock()
+        if case let .stateUpdated(state) = event {
+            if handler == nil {
+                pendingState = state
+                lock.unlock()
+                return
+            }
+            pendingState = nil
+        }
         let handler = handler
         lock.unlock()
         handler?(event)
