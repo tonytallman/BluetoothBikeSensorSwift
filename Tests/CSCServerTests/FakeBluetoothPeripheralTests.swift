@@ -486,6 +486,32 @@ struct FakeBluetoothPeripheralTests {
         }
     }
 
+    @Test func waitForRecordedCallResumesWhenMatchingCallAppears() async {
+        let fake = FakeBluetoothPeripheral()
+        let service = Self.sampleService()
+
+        let waiter = Task {
+            await fake.waitForRecordedCall { call in
+                if case .add = call { return true }
+                return false
+            }
+        }
+
+        try? await fake.add(service)
+        await waiter.value
+    }
+
+    @Test func waitForStateUpdatesSubscriberResumesWhenStreamRequested() async {
+        let fake = FakeBluetoothPeripheral(initialState: .unknown)
+
+        let waiter = Task {
+            await fake.waitForStateUpdatesSubscriber()
+        }
+
+        _ = await fake.stateUpdates
+        await waiter.value
+    }
+
     private static func sampleService(notifyCharacteristic: Bool = false) -> PeripheralService {
         PeripheralService(
             uuid: UUID(),

@@ -31,12 +31,30 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     private var shouldFailNextAdd = false
     private var shouldFailNextAdvertise = false
     private var nextUpdateValueAccepted = true
+    private var isAdvertiseHeld = false
+    private var advertiseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var advertiseHeldWaiters: [CheckedContinuation<Void, Never>] = []
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
     private let readBroadcaster = StreamBroadcaster<PeripheralReadRequest>()
     private let writeBroadcaster = StreamBroadcaster<PeripheralWriteTransaction>()
     private let subscriptionBroadcaster = StreamBroadcaster<SubscriptionChange>()
     private let readyBroadcaster = StreamBroadcaster<Void>()
+
+    private struct RecordedCallWaiter {
+        let predicate: @Sendable (RecordedCall) -> Bool
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
+    private struct RecordedCallsWaiter {
+        let predicate: @Sendable ([RecordedCall]) -> Bool
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
+    private var recordedCallWaiters: [RecordedCallWaiter] = []
+    private var recordedCallsWaiters: [RecordedCallsWaiter] = []
+    private var stateUpdatesSubscriberWaiters: [CheckedContinuation<Void, Never>] = []
+    private var stateUpdatesSubscriberCount = 0
 
     package private(set) var recordedCalls: [RecordedCall] = []
 
@@ -50,7 +68,10 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
 
     package var stateUpdates: AsyncStream<BluetoothState> {
         get async {
-            await stateBroadcaster.makeStream()
+            stateUpdatesSubscriberCount += 1
+            let stream = await stateBroadcaster.makeStream()
+            resumeStateUpdatesSubscriberWaiters()
+            return stream
         }
     }
 
@@ -63,14 +84,14 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
 
         if shouldFailNextAdd {
             shouldFailNextAdd = false
-            recordedCalls.append(.add(service))
+            appendRecordedCall(.add(service))
             throw BluetoothPeripheralError.addServiceFailed(
                 serviceUUID: service.uuid,
                 reason: "Test failure",
             )
         }
 
-        recordedCalls.append(.add(service))
+        appendRecordedCall(.add(service))
         services[service.uuid] = service
     }
 
@@ -79,17 +100,24 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
             throw BluetoothPeripheralError.serviceNotFound
         }
 
-        recordedCalls.append(.removeService(uuid: uuid))
+        appendRecordedCall(.removeService(uuid: uuid))
         services.removeValue(forKey: uuid)
     }
 
     package func removeAllServices() async {
-        recordedCalls.append(.removeAllServices)
+        appendRecordedCall(.removeAllServices)
         services.removeAll()
     }
 
     package func startAdvertising(_ advertisement: Advertisement) async throws {
-        recordedCalls.append(.startAdvertising(advertisement))
+        if isAdvertiseHeld {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                advertiseWaiters.append(continuation)
+                resumeAdvertiseHeldWaiters()
+            }
+        }
+
+        appendRecordedCall(.startAdvertising(advertisement))
 
         if shouldFailNextAdvertise {
             shouldFailNextAdvertise = false
@@ -100,7 +128,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     }
 
     package func stopAdvertising() async {
-        recordedCalls.append(.stopAdvertising)
+        appendRecordedCall(.stopAdvertising)
         advertising = false
     }
 
@@ -157,7 +185,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
             }
         }
 
-        recordedCalls.append(.respond(id: requestID, result: result, value: value))
+        appendRecordedCall(.respond(id: requestID, result: result, value: value))
         outstandingReadRequestIDs.remove(requestID)
         outstandingWriteTransactionIDs.remove(requestID)
     }
@@ -179,7 +207,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
             filter = .all
         }
 
-        recordedCalls.append(
+        appendRecordedCall(
             .updateValue(
                 value: value,
                 serviceUUID: serviceUUID,
@@ -223,6 +251,122 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
 
     package func setNextUpdateValueAccepted(_ accepted: Bool) {
         nextUpdateValueAccepted = accepted
+    }
+
+    package func holdNextAdvertise() {
+        isAdvertiseHeld = true
+    }
+
+    package func releaseAdvertise() {
+        isAdvertiseHeld = false
+        let waiters = advertiseWaiters
+        advertiseWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    package func waitUntilAdvertiseHeld() async {
+        if !advertiseWaiters.isEmpty {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            advertiseHeldWaiters.append(continuation)
+            resumeAdvertiseHeldWaiters()
+        }
+    }
+
+    package func waitUntilReadRequestSubscriberCount(_ count: Int) async {
+        await readBroadcaster.waitUntilSubscriberCount(count)
+    }
+
+    package func waitForRecordedCall(
+        where predicate: @escaping @Sendable (RecordedCall) -> Bool,
+    ) async {
+        if recordedCalls.contains(where: predicate) {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            recordedCallWaiters.append(
+                RecordedCallWaiter(predicate: predicate, continuation: continuation),
+            )
+            resumeRecordedCallWaiters()
+        }
+    }
+
+    package func waitForStateUpdatesSubscriber() async {
+        if stateUpdatesSubscriberCount > 0 {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            stateUpdatesSubscriberWaiters.append(continuation)
+        }
+    }
+
+    package func waitUntilRecordedCallsSatisfy(
+        _ predicate: @escaping @Sendable ([RecordedCall]) -> Bool,
+    ) async {
+        if predicate(recordedCalls) {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            recordedCallsWaiters.append(
+                RecordedCallsWaiter(predicate: predicate, continuation: continuation),
+            )
+            resumeRecordedCallsWaiters()
+        }
+    }
+
+    private func resumeRecordedCallWaiters() {
+        var remaining: [RecordedCallWaiter] = []
+        for waiter in recordedCallWaiters {
+            if recordedCalls.contains(where: waiter.predicate) {
+                waiter.continuation.resume()
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        recordedCallWaiters = remaining
+    }
+
+    private func resumeRecordedCallsWaiters() {
+        var remaining: [RecordedCallsWaiter] = []
+        for waiter in recordedCallsWaiters {
+            if waiter.predicate(recordedCalls) {
+                waiter.continuation.resume()
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        recordedCallsWaiters = remaining
+    }
+
+    private func resumeStateUpdatesSubscriberWaiters() {
+        guard stateUpdatesSubscriberCount > 0 else {
+            return
+        }
+        let waiters = stateUpdatesSubscriberWaiters
+        stateUpdatesSubscriberWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func resumeAdvertiseHeldWaiters() {
+        guard !advertiseWaiters.isEmpty else {
+            return
+        }
+        let waiters = advertiseHeldWaiters
+        advertiseHeldWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func appendRecordedCall(_ call: RecordedCall) {
+        recordedCalls.append(call)
+        resumeRecordedCallWaiters()
+        resumeRecordedCallsWaiters()
     }
 
     private func hasCharacteristic(serviceUUID: UUID, characteristicUUID: UUID) -> Bool {
