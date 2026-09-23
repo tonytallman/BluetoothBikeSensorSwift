@@ -31,6 +31,8 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     private var shouldFailNextAdd = false
     private var shouldFailNextAdvertise = false
     private var nextUpdateValueAccepted = true
+    private var isAdvertiseHeld = false
+    private var advertiseWaiters: [CheckedContinuation<Void, Never>] = []
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
     private let readBroadcaster = StreamBroadcaster<PeripheralReadRequest>()
@@ -43,7 +45,13 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         let continuation: CheckedContinuation<Void, Never>
     }
 
+    private struct RecordedCallsWaiter {
+        let predicate: @Sendable ([RecordedCall]) -> Bool
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
     private var recordedCallWaiters: [RecordedCallWaiter] = []
+    private var recordedCallsWaiters: [RecordedCallsWaiter] = []
     private var stateUpdatesSubscriberWaiters: [CheckedContinuation<Void, Never>] = []
     private var stateUpdatesSubscriberCount = 0
 
@@ -60,8 +68,9 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     package var stateUpdates: AsyncStream<BluetoothState> {
         get async {
             stateUpdatesSubscriberCount += 1
+            let stream = await stateBroadcaster.makeStream()
             resumeStateUpdatesSubscriberWaiters()
-            return await stateBroadcaster.makeStream()
+            return stream
         }
     }
 
@@ -100,6 +109,12 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     }
 
     package func startAdvertising(_ advertisement: Advertisement) async throws {
+        if isAdvertiseHeld {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                advertiseWaiters.append(continuation)
+            }
+        }
+
         appendRecordedCall(.startAdvertising(advertisement))
 
         if shouldFailNextAdvertise {
@@ -236,6 +251,19 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         nextUpdateValueAccepted = accepted
     }
 
+    package func holdNextAdvertise() {
+        isAdvertiseHeld = true
+    }
+
+    package func releaseAdvertise() {
+        isAdvertiseHeld = false
+        let waiters = advertiseWaiters
+        advertiseWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
     package func waitForRecordedCall(
         where predicate: @escaping @Sendable (RecordedCall) -> Bool,
     ) async {
@@ -256,6 +284,20 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             stateUpdatesSubscriberWaiters.append(continuation)
+        }
+    }
+
+    package func waitUntilRecordedCallsSatisfy(
+        _ predicate: @escaping @Sendable ([RecordedCall]) -> Bool,
+    ) async {
+        if predicate(recordedCalls) {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            recordedCallsWaiters.append(
+                RecordedCallsWaiter(predicate: predicate, continuation: continuation),
+            )
+            resumeRecordedCallsWaiters()
         }
     }
 

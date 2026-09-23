@@ -23,12 +23,17 @@ actor ServerSession {
     private let peripheral: any BluetoothPeripheral
 
     private var publishStage: PublishStage = .none
+    private var closed = false
     private var measurementSubscribers: Set<UUID> = []
     private var subscriberWaiters: [SubscriberWaiter] = []
+
+    private var notifyReady = false
+    private var notifyReadyWaiter: CheckedContinuation<Void, Never>?
 
     private var readTask: Task<Void, Never>?
     private var writeTask: Task<Void, Never>?
     private var subscriptionTask: Task<Void, Never>?
+    private var readyTask: Task<Void, Never>?
     private var crankTask: Task<Void, Never>?
 
     private init(
@@ -68,7 +73,7 @@ actor ServerSession {
     }
 
     func waitForMeasurementSubscribers(_ ids: Set<UUID>) async {
-        if measurementSubscribers == ids {
+        if closed || measurementSubscribers == ids {
             return
         }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -79,6 +84,8 @@ actor ServerSession {
     }
 
     func close() async {
+        beginShutdown()
+
         crankTask?.cancel()
         _ = await crankTask?.value
         crankTask = nil
@@ -93,15 +100,23 @@ actor ServerSession {
         readTask?.cancel()
         writeTask?.cancel()
         subscriptionTask?.cancel()
+        readyTask?.cancel()
         _ = await readTask?.value
         _ = await writeTask?.value
         _ = await subscriptionTask?.value
+        _ = await readyTask?.value
         readTask = nil
         writeTask = nil
         subscriptionTask = nil
+        readyTask = nil
 
         measurementSubscribers.removeAll()
-        resumeSubscriberWaiters()
+    }
+
+    private func beginShutdown() {
+        closed = true
+        resumeNotifyReadyWaiter()
+        resumeAllSubscriberWaiters()
     }
 
     private func startup() async throws {
@@ -110,10 +125,12 @@ actor ServerSession {
         let readStream = await peripheral.readRequests
         let writeStream = await peripheral.writeTransactions
         let subscriptionStream = await peripheral.subscriptionChanges
+        let readyStream = await peripheral.subscriberUpdatesReady
 
         readTask = spawnReadLoop(stream: readStream)
         writeTask = spawnWriteLoop(stream: writeStream)
         subscriptionTask = spawnSubscriptionLoop(stream: subscriptionStream)
+        readyTask = spawnReadyLoop(stream: readyStream)
 
         do {
             try await peripheral.add(service)
@@ -139,6 +156,8 @@ actor ServerSession {
     }
 
     private func rollbackStartup() async {
+        beginShutdown()
+
         crankTask?.cancel()
         _ = await crankTask?.value
         crankTask = nil
@@ -155,15 +174,17 @@ actor ServerSession {
         readTask?.cancel()
         writeTask?.cancel()
         subscriptionTask?.cancel()
+        readyTask?.cancel()
         _ = await readTask?.value
         _ = await writeTask?.value
         _ = await subscriptionTask?.value
+        _ = await readyTask?.value
         readTask = nil
         writeTask = nil
         subscriptionTask = nil
+        readyTask = nil
 
         measurementSubscribers.removeAll()
-        resumeSubscriberWaiters()
     }
 
     private func waitForPoweredOn() async throws {
@@ -193,7 +214,7 @@ actor ServerSession {
                 if Task.isCancelled {
                     break
                 }
-                await handleRead(request)
+                await self.handleRead(request)
             }
         }
     }
@@ -204,7 +225,7 @@ actor ServerSession {
                 if Task.isCancelled {
                     break
                 }
-                await handleWrite(transaction)
+                await self.handleWrite(transaction)
             }
         }
     }
@@ -215,8 +236,57 @@ actor ServerSession {
                 if Task.isCancelled {
                     break
                 }
-                await handleSubscription(change)
+                await self.handleSubscription(change)
             }
+        }
+    }
+
+    private func spawnReadyLoop(stream: AsyncStream<Void>) -> Task<Void, Never> {
+        Task {
+            for await _ in stream {
+                if Task.isCancelled {
+                    break
+                }
+                await self.signalNotifyReady()
+            }
+        }
+    }
+
+    private func signalNotifyReady() {
+        if let waiter = notifyReadyWaiter {
+            notifyReadyWaiter = nil
+            waiter.resume()
+        } else {
+            notifyReady = true
+        }
+    }
+
+    private func resumeNotifyReadyWaiter() {
+        if let waiter = notifyReadyWaiter {
+            notifyReadyWaiter = nil
+            waiter.resume()
+        }
+    }
+
+    private func waitForNotifyReady() async {
+        if closed {
+            return
+        }
+        if notifyReady {
+            notifyReady = false
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if closed {
+                continuation.resume()
+                return
+            }
+            if notifyReady {
+                notifyReady = false
+                continuation.resume()
+                return
+            }
+            notifyReadyWaiter = continuation
         }
     }
 
@@ -294,6 +364,14 @@ actor ServerSession {
         }
     }
 
+    private func resumeAllSubscriberWaiters() {
+        let pending = subscriberWaiters
+        subscriberWaiters.removeAll()
+        for waiter in pending {
+            waiter.continuation.resume()
+        }
+    }
+
     private func startCrankLoopIfNeeded() {
         guard let crankRevolutions else {
             return
@@ -316,7 +394,7 @@ actor ServerSession {
                     return
                 }
 
-                await send(revolution)
+                await self.send(revolution)
             }
         }
     }
@@ -334,7 +412,7 @@ actor ServerSession {
             return
         }
 
-        while !Task.isCancelled {
+        while !Task.isCancelled, !closed {
             guard !measurementSubscribers.isEmpty else {
                 return
             }
@@ -355,11 +433,7 @@ actor ServerSession {
                 return
             }
 
-            let readyStream = await peripheral.subscriberUpdatesReady
-            var readyIterator = readyStream.makeAsyncIterator()
-            guard await readyIterator.next() != nil else {
-                return
-            }
+            await waitForNotifyReady()
         }
     }
 

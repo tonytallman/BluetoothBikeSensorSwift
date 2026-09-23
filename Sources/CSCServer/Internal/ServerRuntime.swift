@@ -52,16 +52,16 @@ actor ServerRuntime {
         case .idle:
             return
         case .starting(let startupTask):
+            phase = .idle
             startupTask.cancel()
             do {
                 let session = try await startupTask.value
                 await session.close()
             } catch {
             }
-            phase = .idle
         case .running(let session):
-            await session.close()
             phase = .idle
+            await session.close()
         }
     }
 
@@ -105,12 +105,14 @@ actor ServerRuntime {
         do {
             let session = try await startupTask.value
             try Task.checkCancellation()
+            guard case .starting(let currentTask) = phase, currentTask == startupTask else {
+                throw CancellationError()
+            }
             phase = .running(session)
         } catch {
-            if let session = try? await startupTask.value {
-                await session.close()
+            if case .starting(let currentTask) = phase, currentTask == startupTask {
+                phase = .idle
             }
-            phase = .idle
             throw error
         }
     }
