@@ -420,9 +420,11 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
     }
 
     func replayCurrentState(from peripheral: CBPeripheralManager, on queue: DispatchQueue) {
+        let state = queue.sync {
+            BluetoothState(peripheral.state)
+        }
         queue.async { [weak self] in
             guard let self else { return }
-            let state = BluetoothState(peripheral.state)
             self.emit(.stateUpdated(state))
         }
     }

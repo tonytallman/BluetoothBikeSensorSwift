@@ -266,7 +266,7 @@ actor ServerSession {
                 if Task.isCancelled {
                     break
                 }
-                await self.signalNotifyReady()
+                self.signalNotifyReady()
             }
         }
     }

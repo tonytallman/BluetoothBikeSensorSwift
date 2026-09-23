@@ -364,14 +364,85 @@ struct ServerTests {
         await server.waitForMeasurementSubscribers([centralID])
 
         await yield(CrankRevolution(cumulativeRevolutions: 0xFFFF, lastEventTime: 100))
-        await yield(CrankRevolution(cumulativeRevolutions: 0x0000, lastEventTime: 200))
 
+        let rolloverSample = CSCMeasurement(
+            cumulativeCrankRevolutions: 0xFFFF,
+            lastCrankEventTime: 100,
+        ).encode()!
         await fake.waitForRecordedCall { call in
             if case let .updateValue(value, _, _, _) = call {
-                return value == CSCMeasurement(
-                    cumulativeCrankRevolutions: 0x0000,
-                    lastCrankEventTime: 200,
-                ).encode()
+                return value == rolloverSample
+            }
+            return false
+        }
+
+        await yield(CrankRevolution(cumulativeRevolutions: 0x0000, lastEventTime: 200))
+
+        await fake.waitUntilRecordedCallsSatisfy { calls in
+            calls.filter { call in
+                if case let .updateValue(value, _, _, _) = call {
+                    return value == CSCMeasurement(
+                        cumulativeCrankRevolutions: 0x0000,
+                        lastCrankEventTime: 200,
+                    ).encode()
+                }
+                return false
+            }.count == 1
+        }
+    }
+
+    @Test func crankSequenceEndingStopsNotificationsOnly() async throws {
+        let sequence = ControlledCrankSequence(samples: [
+            CrankRevolution(cumulativeRevolutions: 1, lastEventTime: 2),
+        ])
+        let fake = FakeBluetoothPeripheral()
+        await fake.holdNextAdvertise()
+        let server = Server.crankRevolutions(sequence).build()
+
+        let startTask = Task {
+            try await server.start(peripheral: fake)
+        }
+
+        await fake.waitForRecordedCall { call in
+            if case .add = call { return true }
+            return false
+        }
+
+        let centralID = UUID()
+        await fake.emitSubscription(
+            .subscribed(
+                centralID: centralID,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.measurementUUID,
+            ),
+        )
+
+        await fake.releaseAdvertise()
+        try await startTask.value
+
+        await sequence.waitForNextRequest(count: 1)
+
+        await fake.waitForRecordedCall { call in
+            if case .updateValue = call { return true }
+            return false
+        }
+
+        #expect(await fake.isAdvertising)
+
+        let requestID = UUID()
+        await fake.emitRead(
+            PeripheralReadRequest(
+                id: requestID,
+                centralID: centralID,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.featureUUID,
+                offset: 0,
+            ),
+        )
+
+        await fake.waitForRecordedCall { call in
+            if case let .respond(id, .success, value) = call {
+                return id == requestID && value == Data([0x02, 0x00])
             }
             return false
         }
