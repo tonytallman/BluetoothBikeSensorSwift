@@ -52,4 +52,9 @@ public final class Server: Sendable {
     package func waitForMeasurementSubscribers(_ ids: Set<UUID>) async {
         await runtime.waitForMeasurementSubscribers(ids)
     }
+
+    /// Returns once a subscriber waiter is parked on the running session.
+    package func waitUntilMeasurementSubscriberWaiterParked() async {
+        await runtime.waitUntilMeasurementSubscriberWaiterParked()
+    }
 }

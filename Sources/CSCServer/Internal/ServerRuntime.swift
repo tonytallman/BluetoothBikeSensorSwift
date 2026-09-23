@@ -71,6 +71,12 @@ actor ServerRuntime {
         }
     }
 
+    func waitUntilMeasurementSubscriberWaiterParked() async {
+        if case .running(let session) = phase {
+            await session.waitUntilMeasurementSubscriberWaiterParked()
+        }
+    }
+
     private var isUnsupportedConfiguration: Bool {
         wheel != nil || crankRevolutions == nil || {
             if case .multiple = location {
@@ -110,8 +116,17 @@ actor ServerRuntime {
             }
             phase = .running(session)
         } catch {
-            if case .starting(let currentTask) = phase, currentTask == startupTask {
+            let stillOwnsStartup = {
+                if case .starting(let currentTask) = phase, currentTask == startupTask {
+                    return true
+                }
+                return false
+            }()
+            if stillOwnsStartup {
                 phase = .idle
+                if let session = try? await startupTask.value {
+                    await session.close()
+                }
             }
             throw error
         }

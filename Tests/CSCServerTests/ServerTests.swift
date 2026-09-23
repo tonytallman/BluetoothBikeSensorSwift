@@ -67,6 +67,8 @@ struct ServerTests {
             try await server.start(peripheral: fake)
         }
 
+        await fake.waitUntilReadRequestSubscriberCount(0)
+
         let calls = await fake.recordedCalls
         #expect(calls.contains { call in
             if case .add = call { return true }
@@ -378,12 +380,13 @@ struct ServerTests {
     @Test func sampleWithoutSubscribersIsDropped() async throws {
         let sequence = ControlledCrankSequence(samples: [
             CrankRevolution(cumulativeRevolutions: 1, lastEventTime: 2),
+            CrankRevolution(cumulativeRevolutions: 3, lastEventTime: 4),
         ])
         let fake = FakeBluetoothPeripheral()
         let server = Server.crankRevolutions(sequence).build()
         try await server.start(peripheral: fake)
 
-        await sequence.waitForNextRequest(count: 1)
+        await sequence.waitForNextRequest(count: 2)
 
         let updateCalls = await fake.recordedCalls.filter { call in
             if case .updateValue = call { return true }
@@ -467,23 +470,92 @@ struct ServerTests {
         await fake.setNextUpdateValueAccepted(true)
         await fake.emitReadyToUpdateSubscribers()
 
-        while true {
-            let updateCalls = await fake.recordedCalls.filter { call in
+        await fake.waitUntilRecordedCallsSatisfy { calls in
+            calls.filter { call in
                 if case let .updateValue(value, _, _, _) = call {
                     return value == expected
                 }
                 return false
-            }
-            if updateCalls.count == 2 {
-                break
-            }
-            await fake.waitForRecordedCall { call in
-                if case let .updateValue(value, _, _, _) = call {
-                    return value == expected
-                }
-                return false
-            }
+            }.count == 2
         }
+    }
+
+    @Test func stopDuringBackpressureReturnsAndStopsAdvertising() async throws {
+        let (sequence, yield) = makeYieldingCrankSequence()
+        let fake = FakeBluetoothPeripheral()
+        await fake.setNextUpdateValueAccepted(false)
+        let server = Server.crankRevolutions(sequence).build()
+        try await server.start(peripheral: fake)
+
+        let centralID = UUID()
+        await fake.emitSubscription(
+            .subscribed(
+                centralID: centralID,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.measurementUUID,
+            ),
+        )
+        await server.waitForMeasurementSubscribers([centralID])
+
+        await yield(CrankRevolution(cumulativeRevolutions: 1, lastEventTime: 2))
+
+        await fake.waitForRecordedCall { call in
+            if case .updateValue = call { return true }
+            return false
+        }
+
+        await server.stop()
+
+        #expect(await fake.isAdvertising == false)
+    }
+
+    @Test func stopDuringAdvertiseHoldCleansUpAndLaterStartSucceeds() async throws {
+        let fake = FakeBluetoothPeripheral()
+        await fake.holdNextAdvertise()
+        let server = Server.crankRevolutions(EmptyCrankSequence()).build()
+
+        let startTask = Task {
+            try await server.start(peripheral: fake)
+        }
+
+        await fake.waitUntilAdvertiseHeld()
+
+        let stopTask = Task {
+            await server.stop()
+        }
+
+        await fake.waitForRecordedCall { call in
+            if case .removeService = call { return true }
+            return false
+        }
+        await fake.releaseAdvertise()
+
+        await stopTask.value
+
+        await #expect(throws: CancellationError.self) {
+            try await startTask.value
+        }
+
+        #expect(await fake.isAdvertising == false)
+
+        try await server.start(peripheral: fake)
+        #expect(await fake.isAdvertising)
+    }
+
+    @Test func waitForMeasurementSubscribersReturnsWhenStopRuns() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let server = Server.crankRevolutions(EmptyCrankSequence()).build()
+        try await server.start(peripheral: fake)
+
+        let missingID = UUID()
+        let waiterTask = Task {
+            await server.waitForMeasurementSubscribers([missingID])
+        }
+
+        await server.waitUntilMeasurementSubscriberWaiterParked()
+
+        await server.stop()
+        await waiterTask.value
     }
 
     @Test func stopRecordsStopAdvertisingAndRemoveService() async throws {

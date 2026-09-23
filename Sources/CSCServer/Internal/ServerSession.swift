@@ -26,6 +26,7 @@ actor ServerSession {
     private var closed = false
     private var measurementSubscribers: Set<UUID> = []
     private var subscriberWaiters: [SubscriberWaiter] = []
+    private var subscriberWaiterParkedWaiters: [CheckedContinuation<Void, Never>] = []
 
     private var notifyReady = false
     private var notifyReadyWaiter: CheckedContinuation<Void, Never>?
@@ -66,9 +67,9 @@ actor ServerSession {
             }
             try Task.checkCancellation()
             return session
-        } catch is CancellationError {
+        } catch {
             await session.rollbackStartup()
-            throw CancellationError()
+            throw error
         }
     }
 
@@ -80,6 +81,17 @@ actor ServerSession {
             subscriberWaiters.append(
                 SubscriberWaiter(expected: ids, continuation: continuation),
             )
+            resumeSubscriberWaiterParkedWaiters()
+        }
+    }
+
+    func waitUntilMeasurementSubscriberWaiterParked() async {
+        if !subscriberWaiters.isEmpty {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            subscriberWaiterParkedWaiters.append(continuation)
+            resumeSubscriberWaiterParkedWaiters()
         }
     }
 
@@ -139,18 +151,25 @@ actor ServerSession {
             throw mapPublishError(error)
         }
 
-        try Task.checkCancellation()
+        if closed || Task.isCancelled {
+            throw CancellationError()
+        }
 
         do {
             try await peripheral.startAdvertising(
                 Advertisement(localName: nil, serviceUUIDs: [service.uuid]),
             )
-            publishStage = .advertising
         } catch {
             try? await peripheral.removeService(uuid: service.uuid)
             publishStage = .none
             throw mapAdvertisingError(error)
         }
+
+        if closed || Task.isCancelled {
+            await peripheral.stopAdvertising()
+            throw CancellationError()
+        }
+        publishStage = .advertising
 
         startCrankLoopIfNeeded()
     }
@@ -369,6 +388,17 @@ actor ServerSession {
         subscriberWaiters.removeAll()
         for waiter in pending {
             waiter.continuation.resume()
+        }
+    }
+
+    private func resumeSubscriberWaiterParkedWaiters() {
+        guard !subscriberWaiters.isEmpty else {
+            return
+        }
+        let waiters = subscriberWaiterParkedWaiters
+        subscriberWaiterParkedWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
         }
     }
 

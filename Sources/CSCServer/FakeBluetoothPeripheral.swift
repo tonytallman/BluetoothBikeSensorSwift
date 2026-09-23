@@ -33,6 +33,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     private var nextUpdateValueAccepted = true
     private var isAdvertiseHeld = false
     private var advertiseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var advertiseHeldWaiters: [CheckedContinuation<Void, Never>] = []
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
     private let readBroadcaster = StreamBroadcaster<PeripheralReadRequest>()
@@ -112,6 +113,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         if isAdvertiseHeld {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 advertiseWaiters.append(continuation)
+                resumeAdvertiseHeldWaiters()
             }
         }
 
@@ -264,6 +266,20 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
+    package func waitUntilAdvertiseHeld() async {
+        if !advertiseWaiters.isEmpty {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            advertiseHeldWaiters.append(continuation)
+            resumeAdvertiseHeldWaiters()
+        }
+    }
+
+    package func waitUntilReadRequestSubscriberCount(_ count: Int) async {
+        await readBroadcaster.waitUntilSubscriberCount(count)
+    }
+
     package func waitForRecordedCall(
         where predicate: @escaping @Sendable (RecordedCall) -> Bool,
     ) async {
@@ -313,6 +329,18 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         recordedCallWaiters = remaining
     }
 
+    private func resumeRecordedCallsWaiters() {
+        var remaining: [RecordedCallsWaiter] = []
+        for waiter in recordedCallsWaiters {
+            if waiter.predicate(recordedCalls) {
+                waiter.continuation.resume()
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        recordedCallsWaiters = remaining
+    }
+
     private func resumeStateUpdatesSubscriberWaiters() {
         guard stateUpdatesSubscriberCount > 0 else {
             return
@@ -324,9 +352,21 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
+    private func resumeAdvertiseHeldWaiters() {
+        guard !advertiseWaiters.isEmpty else {
+            return
+        }
+        let waiters = advertiseHeldWaiters
+        advertiseHeldWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
     private func appendRecordedCall(_ call: RecordedCall) {
         recordedCalls.append(call)
         resumeRecordedCallWaiters()
+        resumeRecordedCallsWaiters()
     }
 
     private func hasCharacteristic(serviceUUID: UUID, characteristicUUID: UUID) -> Bool {
