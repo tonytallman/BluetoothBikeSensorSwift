@@ -30,7 +30,7 @@ actor ServerRuntime {
         case stop
     }
 
-    private struct EpisodeCell<T: Sendable> {
+    private final class EpisodeCell<T: Sendable>: @unchecked Sendable {
         var continuation: CheckedContinuation<T, Error>?
         var cancelled = false
         var resumed = false
@@ -724,7 +724,10 @@ actor ServerRuntime {
     }
 
     private func handleReady() {
-        if let continuation = notifyReadyCell.continuation, !notifyReadyCell.resumed {
+        if let continuation = notifyReadyCell.continuation,
+           !notifyReadyCell.resumed,
+           !notifyReadyCell.cancelled
+        {
             notifyReadyCell.resumed = true
             notifyReadyCell.continuation = nil
             continuation.resume()
@@ -916,14 +919,17 @@ actor ServerRuntime {
             return
         }
         notifyReadyCell = cell
-        notifyReadyCell.continuation = continuation
+        cell.continuation = continuation
     }
 
     private func cancelNotifyReady(cell: EpisodeCell<Void>) {
-        notifyReadyCell.cancelled = true
-        if let continuation = notifyReadyCell.continuation, !notifyReadyCell.resumed {
-            notifyReadyCell.resumed = true
-            notifyReadyCell.continuation = nil
+        cell.cancelled = true
+        if notifyReadyCell === cell,
+           let continuation = cell.continuation,
+           !cell.resumed
+        {
+            cell.resumed = true
+            cell.continuation = nil
             continuation.resume(throwing: CancellationError())
         }
     }

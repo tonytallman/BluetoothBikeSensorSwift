@@ -19,9 +19,13 @@ struct ServerTests {
 
         let startTask = Task { try await server.start(peripheral: fake) }
         try await fake.waitUntilRecordedCallsSatisfy { calls in
-            calls.contains { if case .add = $0 { return true } else { return false } }
+            calls.contains { if case .add(server.service) = $0 { return true } else { return false } }
                 && calls.contains {
-                    if case .startAdvertising = $0 { return true } else { return false }
+                    if case .startAdvertising(Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID])) = $0 {
+                        return true
+                    } else {
+                        return false
+                    }
                 }
         }
 
@@ -56,8 +60,22 @@ struct ServerTests {
     }
 
     @Test func absentStaticLocationCharacteristic() async throws {
+        let fake = FakeBluetoothPeripheral(initialState: .poweredOn)
         let server = crankServer()
         #expect(!server.service.characteristics.contains { $0.uuid == CSCS.sensorLocationUUID })
+
+        let startTask = Task { try await server.start(peripheral: fake) }
+        try await waitForAdvertising(fake)
+        try await emitRead(
+            fake: fake,
+            server: server,
+            characteristicUUID: CSCS.sensorLocationUUID,
+            offset: 0,
+            expectedResult: .error(code: 0x0A),
+            expectedValue: nil,
+        )
+        await server.stop()
+        _ = try await startTask.value
     }
 
     @Test func featureReadOffsets() async throws {
@@ -220,7 +238,15 @@ struct ServerTests {
         sequence.release(CrankRevolution(cumulativeRevolutions: 500, lastEventTime: 2048))
 
         try await fake.waitUntilRecordedCallsSatisfy { calls in
-            hasUpdateValue(calls, value: expected)
+            updateValueCalls(calls).contains { call in
+                if case let .updateValue(payload, serviceUUID, characteristicUUID, .only(ids)) = call {
+                    return payload == expected
+                        && serviceUUID == CSCS.serviceUUID
+                        && characteristicUUID == CSCS.measurementUUID
+                        && ids == [centralID]
+                }
+                return false
+            }
         }
 
         await server.stop()
@@ -311,10 +337,28 @@ struct ServerTests {
         startTask.cancel()
         await #expect(throws: CancellationError.self) { try await startTask.value }
         #expect(await fake.isAdvertising == false)
+        #expect(await recordedContains(fake, .stopAdvertising))
+        #expect(await recordedContains(fake, .removeService(uuid: CSCS.serviceUUID)))
 
         sequence.release(CrankRevolution(cumulativeRevolutions: 2, lastEventTime: 2))
         try await sequence.waitUntilPullCompleted(count: 2)
         #expect(updateValueCalls(await fake.recordedCalls).count == 1)
+    }
+
+    @Test func gatedWaitersHonourCancellation() async throws {
+        let sequence = GatedCrankSequence()
+
+        let existsTask = Task { try await sequence.waitUntilIteratorExists() }
+        let pullTask = Task { try await sequence.waitUntilPullCompleted(count: 1) }
+        let suspendTask = Task { try await sequence.waitUntilIteratorSuspended(index: 0) }
+
+        existsTask.cancel()
+        pullTask.cancel()
+        suspendTask.cancel()
+
+        await #expect(throws: CancellationError.self) { try await existsTask.value }
+        await #expect(throws: CancellationError.self) { try await pullTask.value }
+        await #expect(throws: CancellationError.self) { try await suspendTask.value }
     }
 
     // MARK: - Unsupported and concurrency
@@ -418,12 +462,23 @@ struct ServerTests {
         #expect(sequence.overlapped == false)
 
         let subscriberStream = await server.measurementSubscriberUpdates()
-        try await subscribeAndWait(fake: fake, server: server, stream: subscriberStream)
+        let subscriberBox = LockedSubscriberSet()
+        let consumerTask = Task {
+            var iterator = subscriberStream.makeAsyncIterator()
+            while let set = await iterator.next() {
+                subscriberBox.set(set)
+            }
+        }
+        await fake.emitSubscription(
+            .subscribed(centralID: centralID, serviceUUID: CSCS.serviceUUID, characteristicUUID: CSCS.measurementUUID),
+        )
+        try await waitUntilSubscriberBoxContains(subscriberBox, centralID: centralID)
 
         sequence.release(CrankRevolution(cumulativeRevolutions: 1, lastEventTime: 1))
         try await sequence.waitUntilIteratorSuspended(index: 1)
         #expect(updateValueCalls(await fake.recordedCalls).isEmpty)
         #expect(sequence.overlapped == false)
+        #expect(subscriberBox.contains(centralID))
 
         let expected = CSCMeasurement(cumulativeCrankRevolutions: 2, lastCrankEventTime: 2).encode()!
         sequence.release(CrankRevolution(cumulativeRevolutions: 2, lastEventTime: 2))
@@ -432,6 +487,7 @@ struct ServerTests {
         }
         #expect(updateValueCalls(await fake.recordedCalls).count == 1)
 
+        consumerTask.cancel()
         await server.stop()
         _ = try await session2.value
     }
@@ -445,19 +501,34 @@ struct ServerTests {
         let sessionA = Task { try await server.start(peripheral: fakeA) }
         try await waitForAdvertising(fakeA)
         try await sequence.waitUntilSuspended()
+        #expect(sequence.overlapped == false)
         await server.stop()
         _ = try await sessionA.value
 
         let sessionB = Task { try await server.start(peripheral: fakeB) }
         try await waitForAdvertising(fakeB)
+        #expect(sequence.overlapped == false)
 
         let subscriberStream = await server.measurementSubscriberUpdates()
-        try await subscribeAndWait(fake: fakeB, server: server, stream: subscriberStream)
+        let subscriberBox = LockedSubscriberSet()
+        let consumerTask = Task {
+            var iterator = subscriberStream.makeAsyncIterator()
+            while let set = await iterator.next() {
+                subscriberBox.set(set)
+            }
+        }
+        await fakeB.emitSubscription(
+            .subscribed(centralID: centralID, serviceUUID: CSCS.serviceUUID, characteristicUUID: CSCS.measurementUUID),
+        )
+        try await waitUntilSubscriberBoxContains(subscriberBox, centralID: centralID)
+        #expect(sequence.overlapped == false)
 
         sequence.release(CrankRevolution(cumulativeRevolutions: 1, lastEventTime: 1))
         try await sequence.waitUntilIteratorSuspended(index: 1)
         #expect(updateValueCalls(await fakeB.recordedCalls).isEmpty)
         #expect(updateValueCalls(await fakeA.recordedCalls).isEmpty)
+        #expect(sequence.overlapped == false)
+        #expect(subscriberBox.contains(centralID))
 
         let expected = CSCMeasurement(cumulativeCrankRevolutions: 2, lastCrankEventTime: 2).encode()!
         sequence.release(CrankRevolution(cumulativeRevolutions: 2, lastEventTime: 2))
@@ -466,6 +537,7 @@ struct ServerTests {
         }
         #expect(updateValueCalls(await fakeA.recordedCalls).isEmpty)
 
+        consumerTask.cancel()
         await server.stop()
         _ = try await sessionB.value
     }
@@ -477,7 +549,10 @@ struct ServerTests {
         let server = crankServer()
 
         await fake.failNextAdd()
-        await #expect(throws: ServerError.self) {
+        await expectServerErrorCase { error in
+            if case .publishFailed = error { return true }
+            return false
+        } performing: {
             try await server.start(peripheral: fake)
         }
         let calls = await fake.recordedCalls
@@ -495,7 +570,10 @@ struct ServerTests {
         let server = Server.crankRevolutions(EmptyCrankSequence()).build()
 
         await fake.failNextAdvertise()
-        await #expect(throws: ServerError.self) {
+        await expectServerErrorCase { error in
+            if case .advertisingFailed = error { return true }
+            return false
+        } performing: {
             try await server.start(peripheral: fake)
         }
         #expect(await recordedContains(fake, .removeService(uuid: CSCS.serviceUUID)))
@@ -519,7 +597,12 @@ struct ServerTests {
         await fake.failNextUpdateValue()
         sequence.release(CrankRevolution(cumulativeRevolutions: 1, lastEventTime: 1))
 
-        await #expect(throws: ServerError.self) { try await startTask.value }
+        await expectServerErrorCase { error in
+            if case .publishFailed = error { return true }
+            return false
+        } performing: {
+            try await startTask.value
+        }
         #expect(updateValueCalls(await fake.recordedCalls).count == 1)
         #expect(await fake.isAdvertising == false)
         await server.stop()
@@ -532,6 +615,47 @@ struct ServerTests {
         try await fake.waitUntilRecordedCallsSatisfy { calls in updateValueCalls(calls).count >= 2 }
         await server.stop()
         _ = try await retry.value
+    }
+
+    @Test func inFlightDiscardAfterUnsubscribe() async throws {
+        let fake = FakeBluetoothPeripheral(initialState: .poweredOn)
+        let sequence = GatedCrankSequence()
+        let server = crankServer(sequence)
+
+        let startTask = Task { try await server.start(peripheral: fake) }
+        try await waitForAdvertising(fake)
+
+        let subscriberStream = await server.measurementSubscriberUpdates()
+        let subscriberBox = LockedSubscriberSet()
+        let consumerTask = Task {
+            var iterator = subscriberStream.makeAsyncIterator()
+            while let set = await iterator.next() {
+                subscriberBox.set(set)
+            }
+        }
+
+        await fake.emitSubscription(
+            .subscribed(centralID: centralID, serviceUUID: CSCS.serviceUUID, characteristicUUID: CSCS.measurementUUID),
+        )
+        try await waitUntilSubscriberBoxContains(subscriberBox, centralID: centralID)
+
+        await fake.setNextUpdateValueAccepted(false)
+        sequence.release(CrankRevolution(cumulativeRevolutions: 1, lastEventTime: 1))
+        try await fake.waitUntilRecordedCallsSatisfy { calls in updateValueCalls(calls).count == 1 }
+
+        await fake.emitSubscription(
+            .unsubscribed(centralID: centralID, serviceUUID: CSCS.serviceUUID, characteristicUUID: CSCS.measurementUUID),
+        )
+        try await waitUntilSubscriberBoxEmpty(subscriberBox)
+
+        await fake.setNextUpdateValueAccepted(true)
+        await fake.emitReadyToUpdateSubscribers()
+        #expect(updateValueCalls(await fake.recordedCalls).count == 1)
+        try await sequence.waitUntilSuspended()
+
+        consumerTask.cancel()
+        await server.stop()
+        _ = try await startTask.value
     }
 
     @Test func cancelWinsOverFailNextAdd() async throws {
@@ -804,13 +928,47 @@ struct ServerTests {
 
         let startTask = Task { try await server.start(peripheral: fake) }
         try await waitForAdvertising(fake)
-        await #expect(throws: ServerError.self) { try await startTask.value }
+        await expectServerErrorCase { error in
+            if case .revolutionSequenceFailed = error { return true }
+            return false
+        } performing: {
+            try await startTask.value
+        }
         #expect(await recordedContains(fake, .removeService(uuid: CSCS.serviceUUID)))
         #expect(await fake.isAdvertising == false)
         await server.stop()
     }
 
     // MARK: - Helpers
+
+    private func expectServerErrorCase(
+        _ matches: @escaping (ServerError) -> Bool,
+        performing operation: () async throws -> Void,
+    ) async {
+        do {
+            try await operation()
+            Issue.record("Expected ServerError")
+        } catch let error as ServerError {
+            #expect(matches(error))
+        } catch {
+            Issue.record("Expected ServerError, got \(error)")
+        }
+    }
+
+    private func waitUntilSubscriberBoxContains(
+        _ box: LockedSubscriberSet,
+        centralID: UUID,
+    ) async throws {
+        while !box.contains(centralID) {
+            await Task.yield()
+        }
+    }
+
+    private func waitUntilSubscriberBoxEmpty(_ box: LockedSubscriberSet) async throws {
+        while !box.isEmpty {
+            await Task.yield()
+        }
+    }
 
     private func waitForAdvertising(_ fake: FakeBluetoothPeripheral) async throws {
         try await waitForAdvertisingCount(fake, atLeast: 1)
@@ -943,14 +1101,35 @@ private final class GatedCrankSequence: @unchecked Sendable {
     private var iterators: [GatedIterator] = []
     private var pendingByIterator: [UUID: ReleaseValue] = [:]
     private var pendingBeforeIterator: ReleaseValue?
-    private var pullWaiters: [(count: Int, continuation: CheckedContinuation<Void, Error>)] = []
-    private var suspendWaiters: [(index: Int, continuation: CheckedContinuation<Void, Error>)] = []
-    private var iteratorExistenceWaiters: [CheckedContinuation<Void, Error>] = []
+    private var pullWaiters: [PullWaiter] = []
+    private var suspendWaiters: [SuspendWaiter] = []
+    private var iteratorExistenceWaiters: [ExistenceWaiter] = []
     private(set) var pullsCompleted = 0
     private(set) var makeAsyncIteratorCallCount = 0
     private(set) var overlapped = false
 
-    private func withLock<T>(_ body: () -> T) -> T {
+    private struct PullWaiter {
+        let count: Int
+        let cell: WaiterCell
+        let continuation: CheckedContinuation<Void, Error>
+    }
+
+    private struct SuspendWaiter {
+        let index: Int
+        let cell: WaiterCell
+        let continuation: CheckedContinuation<Void, Error>
+    }
+
+    private struct ExistenceWaiter {
+        let cell: WaiterCell
+        let continuation: CheckedContinuation<Void, Error>
+    }
+
+    private final class WaiterCell: @unchecked Sendable {
+        var cancelled = false
+    }
+
+    fileprivate func withLock<T>(_ body: () -> T) -> T {
         lock.lock()
         defer { lock.unlock() }
         return body()
@@ -959,6 +1138,15 @@ private final class GatedCrankSequence: @unchecked Sendable {
     enum ReleaseValue {
         case revolution(CrankRevolution)
         case nilValue
+    }
+
+    private enum ReleaseAction {
+        case store
+        case resumeSuspended(
+            continuation: CheckedContinuation<CrankRevolution?, Error>,
+            iterator: GatedIterator,
+            value: ReleaseValue,
+        )
     }
 
     func release(_ revolution: CrankRevolution) {
@@ -970,22 +1158,32 @@ private final class GatedCrankSequence: @unchecked Sendable {
     }
 
     private func release(_ value: ReleaseValue) {
-        let suspended: GatedIterator? = withLock {
-            if let suspended = iterators.first(where: { $0.isSuspended && $0.pendingRelease == nil }) {
-                return suspended
+        let action: ReleaseAction = withLock {
+            if let suspended = iterators.first(where: { $0.isSuspended && $0.continuation != nil }) {
+                let continuation = suspended.continuation!
+                suspended.continuation = nil
+                suspended.isSuspended = false
+                return .resumeSuspended(continuation: continuation, iterator: suspended, value: value)
             }
             if let target = iterators.last {
                 if pendingByIterator[target.id] != nil {
                     Issue.record("Second resume while one is already pending")
-                    return nil
+                    return .store
                 }
                 pendingByIterator[target.id] = value
-                return nil
+                return .store
+            }
+            if pendingBeforeIterator != nil {
+                Issue.record("Second resume while one is already pending")
+                return .store
             }
             pendingBeforeIterator = value
-            return nil
+            return .store
         }
-        suspended?.resume(value)
+
+        if case let .resumeSuspended(continuation, iterator, value) = action {
+            continuation.resume(returning: iterator.resolve(value))
+        }
     }
 
     func makeIterator() -> GatedIterator {
@@ -1002,39 +1200,45 @@ private final class GatedCrankSequence: @unchecked Sendable {
             iterators.append(iterator)
             let ready = iteratorExistenceWaiters
             iteratorExistenceWaiters = []
-            for waiter in ready {
-                waiter.resume()
+            for waiter in ready where !waiter.cell.cancelled {
+                waiter.continuation.resume()
             }
             return iterator
+        }
+    }
+
+    fileprivate func takePending(for iterator: GatedIterator) -> ReleaseValue? {
+        withLock { pendingByIterator.removeValue(forKey: iterator.id) }
+    }
+
+    fileprivate func armOrTakePending(
+        iterator: GatedIterator,
+        continuation: CheckedContinuation<CrankRevolution?, Error>,
+    ) -> ReleaseValue? {
+        withLock {
+            if let pending = pendingByIterator[iterator.id] {
+                pendingByIterator.removeValue(forKey: iterator.id)
+                return pending
+            }
+            iterator.continuation = continuation
+            iterator.isSuspended = true
+            if let index = iterators.firstIndex(where: { $0.id == iterator.id }) {
+                let ready = suspendWaiters.filter { $0.index == index }
+                suspendWaiters.removeAll { $0.index == index }
+                for waiter in ready where !waiter.cell.cancelled {
+                    waiter.continuation.resume()
+                }
+            }
+            return nil
         }
     }
 
     fileprivate func completePull(iterator: GatedIterator) {
         withLock {
             pullsCompleted += 1
-            pendingByIterator.removeValue(forKey: iterator.id)
             let ready = pullWaiters.filter { pullsCompleted >= $0.count }
             pullWaiters.removeAll { pullsCompleted >= $0.count }
-            for waiter in ready {
-                waiter.continuation.resume()
-            }
-        }
-    }
-
-    fileprivate func pendingRelease(for iterator: GatedIterator) -> ReleaseValue? {
-        withLock { pendingByIterator[iterator.id] }
-    }
-
-    fileprivate func clearPending(for iterator: GatedIterator) {
-        withLock { pendingByIterator.removeValue(forKey: iterator.id) }
-    }
-
-    fileprivate func markSuspended(_ iterator: GatedIterator) {
-        withLock {
-            guard let index = iterators.firstIndex(where: { $0.id == iterator.id }) else { return }
-            let ready = suspendWaiters.filter { $0.index == index }
-            suspendWaiters.removeAll { $0.index == index }
-            for waiter in ready {
+            for waiter in ready where !waiter.cell.cancelled {
                 waiter.continuation.resume()
             }
         }
@@ -1044,12 +1248,25 @@ private final class GatedCrankSequence: @unchecked Sendable {
         if withLock({ !iterators.isEmpty }) {
             return
         }
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        let cell = WaiterCell()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                withLock {
+                    if cell.cancelled {
+                        continuation.resume(throwing: CancellationError())
+                    } else if !iterators.isEmpty {
+                        continuation.resume()
+                    } else {
+                        iteratorExistenceWaiters.append(ExistenceWaiter(cell: cell, continuation: continuation))
+                    }
+                }
+            }
+        } onCancel: {
             withLock {
-                if !iterators.isEmpty {
-                    continuation.resume()
-                } else {
-                    iteratorExistenceWaiters.append(continuation)
+                cell.cancelled = true
+                if let index = iteratorExistenceWaiters.firstIndex(where: { $0.cell === cell }) {
+                    let waiter = iteratorExistenceWaiters.remove(at: index)
+                    waiter.continuation.resume(throwing: CancellationError())
                 }
             }
         }
@@ -1059,12 +1276,25 @@ private final class GatedCrankSequence: @unchecked Sendable {
         if withLock({ pullsCompleted >= count }) {
             return
         }
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        let cell = WaiterCell()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                withLock {
+                    if cell.cancelled {
+                        continuation.resume(throwing: CancellationError())
+                    } else if pullsCompleted >= count {
+                        continuation.resume()
+                    } else {
+                        pullWaiters.append(PullWaiter(count: count, cell: cell, continuation: continuation))
+                    }
+                }
+            }
+        } onCancel: {
             withLock {
-                if pullsCompleted >= count {
-                    continuation.resume()
-                } else {
-                    pullWaiters.append((count, continuation))
+                cell.cancelled = true
+                if let index = pullWaiters.firstIndex(where: { $0.cell === cell }) {
+                    let waiter = pullWaiters.remove(at: index)
+                    waiter.continuation.resume(throwing: CancellationError())
                 }
             }
         }
@@ -1078,12 +1308,25 @@ private final class GatedCrankSequence: @unchecked Sendable {
         if withLock({ iterators.indices.contains(index) && iterators[index].isSuspended }) {
             return
         }
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        let cell = WaiterCell()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                withLock {
+                    if cell.cancelled {
+                        continuation.resume(throwing: CancellationError())
+                    } else if iterators.indices.contains(index), iterators[index].isSuspended {
+                        continuation.resume()
+                    } else {
+                        suspendWaiters.append(SuspendWaiter(index: index, cell: cell, continuation: continuation))
+                    }
+                }
+            }
+        } onCancel: {
             withLock {
-                if iterators.indices.contains(index), iterators[index].isSuspended {
-                    continuation.resume()
-                } else {
-                    suspendWaiters.append((index, continuation))
+                cell.cancelled = true
+                if let index = suspendWaiters.firstIndex(where: { $0.cell === cell }) {
+                    let waiter = suspendWaiters.remove(at: index)
+                    waiter.continuation.resume(throwing: CancellationError())
                 }
             }
         }
@@ -1114,42 +1357,25 @@ private struct GatedAsyncSequence: AsyncSequence, Sendable {
 private final class GatedIterator: @unchecked Sendable {
     let id = UUID()
     private weak var sequence: GatedCrankSequence?
-    private var continuation: CheckedContinuation<CrankRevolution?, Error>?
-    private(set) var isSuspended = false
-    private(set) var pendingRelease: GatedCrankSequence.ReleaseValue?
+    fileprivate var continuation: CheckedContinuation<CrankRevolution?, Error>?
+    fileprivate(set) var isSuspended = false
 
     init(sequence: GatedCrankSequence) {
         self.sequence = sequence
     }
 
     func next() async throws -> CrankRevolution? {
-        if let pendingRelease {
-            let pending = pendingRelease
-            self.pendingRelease = nil
-            return resolve(pending)
-        }
-        if let pending = sequence?.pendingRelease(for: self) {
-            sequence?.clearPending(for: self)
+        if let pending = sequence?.takePending(for: self) {
             return resolve(pending)
         }
         return try await withCheckedThrowingContinuation { continuation in
-            self.continuation = continuation
-            self.isSuspended = true
-            self.sequence?.markSuspended(self)
+            if let pending = sequence?.armOrTakePending(iterator: self, continuation: continuation) {
+                continuation.resume(returning: resolve(pending))
+            }
         }
     }
 
-    func resume(_ value: GatedCrankSequence.ReleaseValue) {
-        if let continuation {
-            self.continuation = nil
-            self.isSuspended = false
-            continuation.resume(returning: resolve(value))
-        } else {
-            pendingRelease = value
-        }
-    }
-
-    private func resolve(_ value: GatedCrankSequence.ReleaseValue) -> CrankRevolution? {
+    fileprivate func resolve(_ value: GatedCrankSequence.ReleaseValue) -> CrankRevolution? {
         switch value {
         case let .revolution(revolution):
             sequence?.completePull(iterator: self)
@@ -1227,6 +1453,29 @@ private final class LockedFlag: @unchecked Sendable {
         lock.lock()
         flag = value
         lock.unlock()
+    }
+}
+
+private final class LockedSubscriberSet: @unchecked Sendable {
+    private let lock = NSLock()
+    private var subscribers: Set<UUID> = []
+
+    func set(_ value: Set<UUID>) {
+        lock.lock()
+        subscribers = value
+        lock.unlock()
+    }
+
+    var isEmpty: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return subscribers.isEmpty
+    }
+
+    func contains(_ id: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return subscribers.contains(id)
     }
 }
 
