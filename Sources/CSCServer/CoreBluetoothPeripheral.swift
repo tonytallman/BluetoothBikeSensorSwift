@@ -25,11 +25,13 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         let box = InFlightContinuationBox()
         delegateBridge = bridge
         inFlightBox = box
-        peripheralManager = CBPeripheralManager(delegate: bridge, queue: queue)
+        let manager = CBPeripheralManager(delegate: bridge, queue: queue)
+        peripheralManager = manager
         bridge.bind { [weak self] event in
             guard let self else { return }
             Task { await self.handle(event) }
         }
+        bridge.replayCurrentState(from: manager, on: queue)
     }
 
     deinit {
@@ -415,6 +417,14 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         lock.lock()
         self.handler = handler
         lock.unlock()
+    }
+
+    func replayCurrentState(from peripheral: CBPeripheralManager, on queue: DispatchQueue) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let state = BluetoothState(peripheral.state)
+            self.emit(.stateUpdated(state))
+        }
     }
 
     func clearHandler() {

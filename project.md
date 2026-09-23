@@ -21,7 +21,13 @@ BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and rea
 ### CSC Server
 
 - **`CSCServer` is a library product as of Phase 2.** Phase 1 added the target and the peripheral seam (`BluetoothPeripheral`, `CoreBluetoothPeripheral`, `FakeBluetoothPeripheral`) without a product. Phase 2 publishes the product and a builder-only `Server`: `build()` records feature bits, the GATT inventory, revolution sequences, and delegates. It does not advertise or serve reads and writes. `CSCClient` does not depend on `CSCServer`. Phase 3’s `Server` remains the only production constructor of `CoreBluetoothPeripheral`; that instance is not passed into `Scanner`.
-- **`Server` is builder-only in Phase 2.** There is no public initializer and no `start()`. `Server: Sendable`. The initializer is `internal`.
+- **`Server` is built then started.** There is no public initializer. `Server: Sendable`. The initializer is `internal`. Session state lives on an internal `ServerRuntime` actor and a per-cycle `ServerSession` actor.
+- **`start()` returns once advertising has started.** `stop()` is idempotent and returns only after advertising stops, the CSC service is removed, and measurement notifications end. Cancelling the task awaiting `start()` throws `CancellationError` after rolling back partial startup.
+- **Phase 3 `start()` scope.** Crank-only and crank-plus-static-location only. Wheel data, multiple locations, or a missing crank sequence throw `ServerError.unsupportedConfiguration` without touching the radio. That guard is interim until Phase 4–5.
+- **Power wait has no timeout.** On iOS the manager state can stay `.unknown` for the Bluetooth permission prompt. `CoreBluetoothPeripheral` replays the manager's current state on the peripheral queue immediately after `bind`, so a `didUpdateState` callback that fires during `init` is not lost.
+- **Read responses (fake central and dynamic paths).** Cached characteristics return an offset slice (`0x07` past the end). Measurement reads return `0x02`. Unknown characteristics return `0x0A`. Writes return `0x03`.
+- **Crank notifications.** Samples with no measurement subscribers are dropped. `updateValue` retries the same payload after `subscriberUpdatesReady` when the queue is full. `UInt16` crank cumulative rollover is passed through unchanged. When the crank sequence ends, reads and advertising continue; only notifications stop.
+- **Restart caveat.** `start()` after `stop()` is allowed. A single-pass `AsyncStream` source is finished once `stop()` cancels its iteration; use a multi-pass sequence or a new `Server` to publish again with the same stream.
 - **Stored configuration.** `wheel: WheelConfiguration?` pairs the sequence with the set-cumulative delegate. `location: ServerLocationConfiguration` is `.none`, `.staticLocation`, or `.multiple`. Set Cumulative Value follows `wheel != nil`. Update Sensor Location and Request Supported Sensor Locations follow `.multiple`. Start Sensor Calibration is not stored.
 - **Delegates and sequences are stored and not called.** `build()` copies multiple-location `supported` and `current` and does not iterate sequences.
 - **`BluetoothPeripheral`** exposes Bluetooth state, add/remove GATT services, start/stop advertising, read requests, write transactions (one `respond` per batch), CCCD subscription changes, `respond` with a read payload, and notify `updateValue` plus `subscriberUpdatesReady` when the transmit queue has space.
@@ -96,9 +102,9 @@ BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and rea
 
 **Resolved:** Wheel size is `WheelRevolutions.wheelCircumference` (client-managed, default 2.105 m). Clients that need to accumulate distance or cadence consume `wheelSamples` / `crankSamples` rather than raw CSC cumulative counters.
 
-#### CSC Server (Phase 2)
+#### CSC Server (Phase 2–3)
 
-Phase 2 adds a type-state builder on `Server` that records CSCS feature bits, the GATT characteristic inventory, revolution sequences, and delegates. `build()` does not advertise, serve reads/writes, or construct a peripheral.
+Phase 2 adds a type-state builder on `Server` that records CSCS feature bits, the GATT characteristic inventory, revolution sequences, and delegates. Phase 3 adds `start()` / `stop()` for crank-only and crank-plus-static-location configurations.
 
 Characteristic order when present: CSC Measurement (`0x2A5B`), CSC Feature (`0x2A5C`), Sensor Location (`0x2A5D`), SC Control Point (`0x2A55`).
 

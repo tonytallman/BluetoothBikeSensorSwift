@@ -1,3 +1,4 @@
+import Foundation
 package import CSCWire
 
 /// CSC sensor server configuration built from revolution sequences and optional location settings.
@@ -7,6 +8,8 @@ public final class Server: Sendable {
     package let wheel: WheelConfiguration?
     package let crankRevolutions: AnyAsyncSequence<CrankRevolution>?
     package let location: ServerLocationConfiguration
+
+    private let runtime: ServerRuntime
 
     internal init(
         feature: CSCFeature,
@@ -20,5 +23,33 @@ public final class Server: Sendable {
         self.wheel = wheel
         self.crankRevolutions = crankRevolutions
         self.location = location
+        runtime = ServerRuntime(
+            service: service,
+            wheel: wheel,
+            crankRevolutions: crankRevolutions,
+            location: location,
+        )
+    }
+
+    /// Publishes the CSC service and advertises `0x1816`. Returns once advertising has started.
+    public func start() async throws {
+        try await runtime.start(peripheral: nil)
+    }
+
+    /// Stops advertising, removes the CSC service, and ends measurement notifications.
+    ///
+    /// Returns only after teardown. Idempotent.
+    public func stop() async {
+        await runtime.stop()
+    }
+
+    /// Same-package tests inject ``FakeBluetoothPeripheral``.
+    package func start(peripheral: any BluetoothPeripheral) async throws {
+        try await runtime.start(peripheral: peripheral)
+    }
+
+    /// Blocks until the measurement subscriber set equals `ids`.
+    package func waitForMeasurementSubscribers(_ ids: Set<UUID>) async {
+        await runtime.waitForMeasurementSubscribers(ids)
     }
 }
