@@ -316,13 +316,13 @@ actor ServerSession {
         }
 
         senderTask = spawnSenderTask()
+        startCrankLoopIfNeeded()
+        startWheelLoopIfNeeded()
+        startupGateOpen = true
         await drainPendingInboundEvents()
         if closed || Task.isCancelled {
             throw CancellationError()
         }
-        startCrankLoopIfNeeded()
-        startWheelLoopIfNeeded()
-        startupGateOpen = true
     }
 
     /// Handles events buffered during startup, in arrival order, before the revolution loops
@@ -760,6 +760,14 @@ actor ServerSession {
                 drainOutboundQueueOnShutdown()
                 return
             }
+
+            guard isHeadIndication(indicationID) else {
+                return
+            }
+
+            if dropIndicationIfCentralDeparted(&indication) {
+                return
+            }
         }
     }
 
@@ -814,13 +822,13 @@ actor ServerSession {
             } catch {
                 return
             }
-            self.procedureTimeoutElapsed(generation)
+            await self.procedureTimeoutElapsed(generation)
         }
     }
 
     /// Ends the procedure without an indication. A delegate call still running is cancelled and
     /// the procedure ends when it returns, so delegate calls never overlap.
-    private func procedureTimeoutElapsed(_ generation: UInt64) {
+    private func procedureTimeoutElapsed(_ generation: UInt64) async {
         guard generation == procedureGeneration, procedureInProgress, !closed else {
             return
         }
