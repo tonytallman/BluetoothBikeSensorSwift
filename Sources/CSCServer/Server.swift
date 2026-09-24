@@ -32,24 +32,43 @@ public final class Server: Sendable {
         )
     }
 
+    deinit {
+        let runtime = runtime
+        Task {
+            await runtime.stop()
+        }
+    }
+
     /// Publishes the CSC service and advertises `0x1816`. Returns once advertising has started.
+    ///
+    /// Only one `Server` per process can be started at a time; another `Server`'s `start()` throws
+    /// ``ServerError/alreadyStarted`` until this one has stopped. Keep a strong reference while serving.
+    /// Releasing a started server stops it in the background; `await` ``stop()`` if you need to start
+    /// another server right away.
+    ///
+    /// If Bluetooth leaves the powered-on state while serving, the server stops advertising, drops all
+    /// subscriptions and samples, and republishes the same service when Bluetooth is powered on again.
+    /// If republishing fails, the server stays suspended until the next power cycle.
     public func start() async throws {
-        try await runtime.start(peripheral: nil, clock: ContinuousServerClock())
+        try await runtime.start(peripheral: nil, clock: ContinuousServerClock(), liveServers: .shared)
     }
 
     /// Stops advertising, removes the CSC service, and ends measurement notifications.
     ///
-    /// Returns only after teardown. Idempotent.
+    /// Cancels an in-flight control point delegate call and waits for it to return.
+    /// Returns only after teardown, when another `Server` can start. Idempotent.
     public func stop() async {
         await runtime.stop()
     }
 
-    /// Same-package tests inject ``FakeBluetoothPeripheral`` and, for the procedure timeout, a manual clock.
+    /// Same-package tests inject ``FakeBluetoothPeripheral``, a manual clock for the procedure timeout,
+    /// and a live-server registry. The default registry is fresh, so tests do not share the process slot.
     package func start(
         peripheral: any BluetoothPeripheral,
         clock: any ServerClock = ContinuousServerClock(),
+        liveServers: LiveServerRegistry = LiveServerRegistry(),
     ) async throws {
-        try await runtime.start(peripheral: peripheral, clock: clock)
+        try await runtime.start(peripheral: peripheral, clock: clock, liveServers: liveServers)
     }
 
     /// Blocks until the measurement subscriber set equals `ids`.
