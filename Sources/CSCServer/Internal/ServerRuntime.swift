@@ -36,13 +36,13 @@ actor ServerRuntime {
         }
     }
 
-    func start(peripheral: (any BluetoothPeripheral)?) async throws {
+    func start(peripheral: (any BluetoothPeripheral)?, clock: any ServerClock) async throws {
         guard case .idle = phase else {
             throw ServerError.alreadyStarted
         }
 
         try await withTaskCancellationHandler {
-            try await performStart(peripheral: peripheral)
+            try await performStart(peripheral: peripheral, clock: clock)
         } onCancel: {
             Task {
                 await self.abortStartup()
@@ -130,7 +130,7 @@ actor ServerRuntime {
         #endif
     }
 
-    private func performStart(peripheral: (any BluetoothPeripheral)?) async throws {
+    private func performStart(peripheral: (any BluetoothPeripheral)?, clock: any ServerClock) async throws {
         let startupTask = Task {
             let resolvedPeripheral = try self.resolvePeripheral(peripheral)
             return try await ServerSession.open(
@@ -140,6 +140,7 @@ actor ServerRuntime {
                 location: location,
                 servedSensorLocation: servedSensorLocation,
                 peripheral: resolvedPeripheral,
+                clock: clock,
             )
         }
         phase = .starting(startupTask)

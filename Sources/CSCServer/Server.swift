@@ -34,7 +34,7 @@ public final class Server: Sendable {
 
     /// Publishes the CSC service and advertises `0x1816`. Returns once advertising has started.
     public func start() async throws {
-        try await runtime.start(peripheral: nil)
+        try await runtime.start(peripheral: nil, clock: ContinuousServerClock())
     }
 
     /// Stops advertising, removes the CSC service, and ends measurement notifications.
@@ -44,9 +44,12 @@ public final class Server: Sendable {
         await runtime.stop()
     }
 
-    /// Same-package tests inject ``FakeBluetoothPeripheral``.
-    package func start(peripheral: any BluetoothPeripheral) async throws {
-        try await runtime.start(peripheral: peripheral)
+    /// Same-package tests inject ``FakeBluetoothPeripheral`` and, for the procedure timeout, a manual clock.
+    package func start(
+        peripheral: any BluetoothPeripheral,
+        clock: any ServerClock = ContinuousServerClock(),
+    ) async throws {
+        try await runtime.start(peripheral: peripheral, clock: clock)
     }
 
     /// Blocks until the measurement subscriber set equals `ids`.

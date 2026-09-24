@@ -10,8 +10,11 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
         var recordedKinds: [SensorLocationKind] = []
         var shouldThrow = false
         var parkArmed = false
+        var parkIgnoresCancellation = false
         var parkedContinuation: CheckedContinuation<Void, Error>?
         var updateCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+        var cancellationRequested = false
+        var cancellationWaiters: [CheckedContinuation<Void, Never>] = []
     }
 
     private let state: OSAllocatedUnfairLock<State>
@@ -56,6 +59,26 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
         state.withLock { $0.parkArmed = true }
     }
 
+    /// The next call parks until ``release()``; cancellation is only recorded.
+    func armParkIgnoringCancellationForNextCall() {
+        state.withLock { locked in
+            locked.parkArmed = true
+            locked.parkIgnoresCancellation = true
+        }
+    }
+
+    func waitUntilCancellationRequested() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            state.withLock { locked in
+                if locked.cancellationRequested {
+                    continuation.resume()
+                    return
+                }
+                locked.cancellationWaiters.append(continuation)
+            }
+        }
+    }
+
     func setShouldThrow(_ value: Bool) {
         state.withLock { $0.shouldThrow = value }
     }
@@ -72,15 +95,17 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
     }
 
     func update(_ location: SensorLocationKind) async throws {
-        let willPark = state.withLock { locked -> Bool in
+        let (willPark, ignoresCancellation) = state.withLock { locked -> (Bool, Bool) in
             if locked.shouldThrow {
-                return false
+                return (false, false)
             }
             if locked.parkArmed {
                 locked.parkArmed = false
-                return true
+                let ignores = locked.parkIgnoresCancellation
+                locked.parkIgnoresCancellation = false
+                return (true, ignores)
             }
-            return false
+            return (false, false)
         }
 
         if willPark {
@@ -94,7 +119,11 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
                     }
                 }
             } onCancel: {
-                self.cancelPark()
+                if ignoresCancellation {
+                    self.recordCancellationRequested()
+                } else {
+                    self.cancelPark()
+                }
             }
             return
         }
@@ -109,6 +138,18 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
 
         if shouldThrow {
             throw TestDelegateError.failure
+        }
+    }
+
+    private func recordCancellationRequested() {
+        let waiters = state.withLock { locked -> [CheckedContinuation<Void, Never>] in
+            locked.cancellationRequested = true
+            let waiters = locked.cancellationWaiters
+            locked.cancellationWaiters.removeAll()
+            return waiters
+        }
+        for waiter in waiters {
+            waiter.resume()
         }
     }
 

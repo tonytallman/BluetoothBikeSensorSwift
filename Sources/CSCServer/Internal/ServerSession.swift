@@ -42,6 +42,7 @@ actor ServerSession {
     private let wheel: WheelConfiguration?
     private let crankRevolutions: AnyAsyncSequence<CrankRevolution>?
     private let peripheral: any BluetoothPeripheral
+    private let clock: any ServerClock
 
     private var publishStage: PublishStage = .none
     private var closed = false
@@ -72,9 +73,14 @@ actor ServerSession {
     private var outboundQueue: [OutboundItem] = []
     private var outboundQueueWaiter: CheckedContinuation<Void, Never>?
 
+    private static let procedureTimeout: Duration = .seconds(30)
+
     private var procedureInProgress = false
     private var procedureIdleWaiters: [CheckedContinuation<Void, Never>] = []
     private var procedureIndicationID: UUID?
+    private var procedureGeneration: UInt64 = 0
+    private var procedureTimedOut = false
+    private var procedureTimeoutTask: Task<Void, Never>?
 
     private var acceptedMeasurementCount = 0
     private var acceptedMeasurementCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
@@ -97,6 +103,7 @@ actor ServerSession {
         location: ServerLocationConfiguration,
         servedSensorLocation: ServedSensorLocationBox?,
         peripheral: any BluetoothPeripheral,
+        clock: any ServerClock,
     ) {
         self.service = service
         self.wheel = wheel
@@ -104,6 +111,7 @@ actor ServerSession {
         self.location = location
         self.servedSensorLocation = servedSensorLocation
         self.peripheral = peripheral
+        self.clock = clock
     }
 
     static func open(
@@ -113,6 +121,7 @@ actor ServerSession {
         location: ServerLocationConfiguration,
         servedSensorLocation: ServedSensorLocationBox?,
         peripheral: any BluetoothPeripheral,
+        clock: any ServerClock,
     ) async throws -> ServerSession {
         let session = ServerSession(
             service: service,
@@ -121,6 +130,7 @@ actor ServerSession {
             location: location,
             servedSensorLocation: servedSensorLocation,
             peripheral: peripheral,
+            clock: clock,
         )
         do {
             try await withTaskCancellationHandler {
@@ -212,21 +222,7 @@ actor ServerSession {
 
     func close() async {
         beginShutdown()
-
-        senderTask?.cancel()
-        procedureTask?.cancel()
-        wheelTask?.cancel()
-        crankTask?.cancel()
-
-        _ = await senderTask?.value
-        _ = await procedureTask?.value
-        _ = await wheelTask?.value
-        _ = await crankTask?.value
-
-        senderTask = nil
-        procedureTask = nil
-        wheelTask = nil
-        crankTask = nil
+        await stopTasks()
 
         await peripheral.stopAdvertising()
 
@@ -252,6 +248,27 @@ actor ServerSession {
         resumeMeasurementSubscriberWaiterParkedWaiters()
         resumeAllAcceptedMeasurementCountWaiters()
         resumeAllOutboundCountWaiters()
+    }
+
+    private func stopTasks() async {
+        let timeoutTask = procedureTimeoutTask
+        senderTask?.cancel()
+        procedureTask?.cancel()
+        timeoutTask?.cancel()
+        wheelTask?.cancel()
+        crankTask?.cancel()
+
+        _ = await senderTask?.value
+        _ = await procedureTask?.value
+        _ = await timeoutTask?.value
+        _ = await wheelTask?.value
+        _ = await crankTask?.value
+
+        senderTask = nil
+        procedureTask = nil
+        procedureTimeoutTask = nil
+        wheelTask = nil
+        crankTask = nil
     }
 
     private func stopInboundTask() async {
@@ -319,21 +336,7 @@ actor ServerSession {
 
     private func rollbackStartup() async {
         beginShutdown()
-
-        senderTask?.cancel()
-        procedureTask?.cancel()
-        wheelTask?.cancel()
-        crankTask?.cancel()
-
-        _ = await senderTask?.value
-        _ = await procedureTask?.value
-        _ = await wheelTask?.value
-        _ = await crankTask?.value
-
-        senderTask = nil
-        procedureTask = nil
-        wheelTask = nil
-        crankTask = nil
+        await stopTasks()
 
         if publishStage == .advertising {
             await peripheral.stopAdvertising()
@@ -794,7 +797,42 @@ actor ServerSession {
         }
         procedureInProgress = false
         procedureIndicationID = nil
+        procedureTimeoutTask?.cancel()
+        procedureTimeoutTask = nil
         resumeProcedureIdleWaiters()
+    }
+
+    private func armProcedureTimeout() {
+        procedureGeneration &+= 1
+        procedureTimedOut = false
+        procedureIndicationID = nil
+        let generation = procedureGeneration
+        let clock = clock
+        procedureTimeoutTask = Task {
+            do {
+                try await clock.sleep(for: Self.procedureTimeout)
+            } catch {
+                return
+            }
+            self.procedureTimeoutElapsed(generation)
+        }
+    }
+
+    /// Ends the procedure without an indication. A delegate call still running is cancelled and
+    /// the procedure ends when it returns, so delegate calls never overlap.
+    private func procedureTimeoutElapsed(_ generation: UInt64) {
+        guard generation == procedureGeneration, procedureInProgress, !closed else {
+            return
+        }
+        procedureTimedOut = true
+        guard let indicationID = procedureIndicationID else {
+            procedureTask?.cancel()
+            return
+        }
+        if removeIndication(id: indicationID) == true {
+            wakeReadyWaiterWithoutLatch()
+        }
+        endProcedure()
     }
 
     private func resumeProcedureIdleWaiters() {
@@ -832,7 +870,7 @@ actor ServerSession {
     }
 
     private func enqueueIndication(_ response: CSCControlPointResponse, centralID: UUID) {
-        guard !closed else {
+        guard !closed, !procedureTimedOut else {
             endProcedure()
             return
         }
@@ -1204,6 +1242,7 @@ actor ServerSession {
             return
         }
 
+        armProcedureTimeout()
         let centralID = request.centralID
         let decodedRequest = decoded
         procedureTask = Task {
