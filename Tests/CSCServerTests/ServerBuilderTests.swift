@@ -254,6 +254,17 @@ struct ServerBuilderTests {
         #expect(crankElement == crankValue)
     }
 
+    @Test func asyncStreamSourcesBuild() {
+        let (wheelStream, _) = AsyncStream<WheelRevolution>.makeStream()
+        let (crankStream, _) = AsyncStream<CrankRevolution>.makeStream()
+
+        let server = Server.wheelRevolutions(wheelStream, setCumulativeWheelRevolutions: CumulativeSpy())
+            .crankRevolutions(crankStream)
+            .build()
+
+        #expect(server.feature.encode() == Data([0x03, 0x00]))
+    }
+
     @Test func allSeventeenLocationsBuildsSuccessfully() {
         let allLocations: [SensorLocationKind] = [
             .other,

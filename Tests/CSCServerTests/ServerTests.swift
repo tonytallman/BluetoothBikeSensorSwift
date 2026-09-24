@@ -877,6 +877,40 @@ struct ServerTests {
 
         #expect(await sequence.iterationWasCancelled())
     }
+
+    @Test func asyncStreamCrankSourceNotifies() async throws {
+        let (stream, continuation) = AsyncStream<CrankRevolution>.makeStream()
+        let fake = FakeBluetoothPeripheral()
+        let server = Server.crankRevolutions(stream).build()
+        try await server.start(peripheral: fake)
+
+        let centralID = UUID()
+        await fake.subscribeMeasurement(server: server, centralID: centralID)
+        continuation.yield(CrankRevolution(cumulativeRevolutions: 0x1234, lastEventTime: 0xABCD))
+
+        let expected = CSCMeasurement(
+            cumulativeCrankRevolutions: 0x1234,
+            lastCrankEventTime: 0xABCD,
+        ).encode()!
+        await fake.waitUntilUpdateValueCount(1, characteristic: CSCS.measurementUUID, matching: { $0 == expected })
+        await server.waitUntilAcceptedMeasurementCount(1)
+        await server.stop()
+    }
+
+    @Test func asyncStreamSourceTerminatesAfterStop() async throws {
+        let (stream, continuation) = AsyncStream<CrankRevolution>.makeStream()
+        let fake = FakeBluetoothPeripheral()
+        let server = Server.crankRevolutions(stream).build()
+        try await server.start(peripheral: fake)
+
+        await server.stop()
+
+        let result = continuation.yield(CrankRevolution(cumulativeRevolutions: 1, lastEventTime: 2))
+        guard case .terminated = result else {
+            Issue.record("Expected .terminated, got \(result)")
+            return
+        }
+    }
 }
 
 private struct EmptyCrankSequence: AsyncSequence, Sendable {
