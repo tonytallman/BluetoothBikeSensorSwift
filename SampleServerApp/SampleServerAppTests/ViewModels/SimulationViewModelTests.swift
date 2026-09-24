@@ -3,7 +3,7 @@ import Testing
 @testable import SampleServerApp
 
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.serialized, .timeLimit(.minutes(1)))
 struct RuntimeSimulationViewModelTests {
     @Test func automaticWheelTickYield() async {
         let time = ManualTimeSource()

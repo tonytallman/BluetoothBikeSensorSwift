@@ -68,10 +68,9 @@ struct ServerSubscriberCountTests {
         #expect(await iterator.next() == 0)
 
         try await server.start(peripheral: fake)
+        #expect(await iterator.next() == 0)
         await fake.subscribeMeasurement(server: server, centralID: central)
-        let afterResubscribe = await server.measurementSubscriberCount
-        var resubscribeIterator = afterResubscribe.makeAsyncIterator()
-        #expect(await resubscribeIterator.next() == 1)
+        #expect(await iterator.next() == 1)
     }
 
     @Test func duplicateSubscribeDoesNotDoubleCount() async throws {

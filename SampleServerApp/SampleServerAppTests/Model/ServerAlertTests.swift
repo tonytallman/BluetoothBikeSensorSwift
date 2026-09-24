@@ -2,7 +2,7 @@ import CSCServer
 import Testing
 @testable import SampleServerApp
 
-@Suite struct ServerAlertTests {
+@Suite(.serialized) struct ServerAlertTests {
     @Test func cancellationReturnsNil() {
         #expect(
             ServerAlert.startFailure(

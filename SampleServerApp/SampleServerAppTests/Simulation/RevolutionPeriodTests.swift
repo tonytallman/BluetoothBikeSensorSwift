@@ -1,7 +1,7 @@
 import Testing
 @testable import SampleServerApp
 
-@Suite struct RevolutionPeriodTests {
+@Suite(.serialized) struct RevolutionPeriodTests {
     @Test func wheelAtTwentyFiveKilometersPerHour() {
         let period = RevolutionPeriod.wheelPeriod(
             speedKilometersPerHour: 25,

@@ -299,7 +299,10 @@ final class RuntimeServerViewModel: ServerViewModel, ControlPointEventSink {
         }
 
         phase = .stopping
-        subscriberCountTask?.cancel()
+        if let task = subscriberCountTask {
+            task.cancel()
+            await task.value
+        }
         subscriberCountTask = nil
         subscribedCentralCount = 0
         runtimeSimulation.end()

@@ -2,7 +2,7 @@ import CSCServer
 import Testing
 @testable import SampleServerApp
 
-@Suite struct SensorLocationCatalogTests {
+@Suite(.serialized) struct SensorLocationCatalogTests {
     @Test func seventeenKindsInOrder() {
         #expect(SensorLocationCatalog.allKinds.count == 17)
         #expect(Set(SensorLocationCatalog.allKinds).count == 17)

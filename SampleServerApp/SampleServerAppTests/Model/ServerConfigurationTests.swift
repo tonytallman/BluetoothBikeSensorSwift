@@ -2,7 +2,7 @@ import CSCServer
 import Testing
 @testable import SampleServerApp
 
-@Suite struct ServerConfigurationTests {
+@Suite(.serialized) struct ServerConfigurationTests {
     @Test(arguments: [
         (RevolutionConfiguration.wheel, LocationConfiguration.none, UInt16(0x0001)),
         (RevolutionConfiguration.wheel, LocationConfiguration.fixed(.rearDropout), UInt16(0x0001)),

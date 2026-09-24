@@ -2,7 +2,7 @@ import CSCServer
 import Testing
 @testable import SampleServerApp
 
-@Suite struct RevolutionScheduleTests {
+@Suite(.serialized) struct RevolutionScheduleTests {
     @Test func automaticDoesNotFireAtStartInstant() {
         var schedule = RevolutionSchedule()
         schedule.beginAutomatic(at: .zero, period: .seconds(0.30312))
@@ -87,9 +87,10 @@ import Testing
     @Test func crankCounterTruncatesToUInt16() {
         var schedule = RevolutionSchedule()
         schedule.setCumulativeRevolutions(65535)
-        schedule.manualRevolution(at: .seconds(1))
-        let sample = schedule.manualRevolution(at: .seconds(2))
+        let sample = schedule.manualRevolution(at: .seconds(1))
         #expect(sample.crankRevolution.cumulativeRevolutions == 0)
+        let next = schedule.manualRevolution(at: .seconds(2))
+        #expect(next.crankRevolution.cumulativeRevolutions == 1)
     }
 }
 

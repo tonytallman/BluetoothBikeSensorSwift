@@ -1,7 +1,7 @@
 import Testing
 @testable import SampleServerApp
 
-@Suite struct ActiveTimelineTests {
+@Suite(.serialized) struct ActiveTimelineTests {
     @Test func pauseExcludesInterval() {
         var timeline = ActiveTimeline()
         timeline.pause(at: .seconds(10))
