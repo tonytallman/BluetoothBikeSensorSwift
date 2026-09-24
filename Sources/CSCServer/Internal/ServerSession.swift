@@ -51,6 +51,8 @@ actor ServerSession {
     private var controlPointSubscriberWaiters: [SubscriberWaiter] = []
     private var measurementSubscriberWaiterParkedWaiters: [CheckedContinuation<Void, Never>] = []
 
+    private var radioLossEpoch: UInt64 = 0
+
     private var notifyReady = false
     private var notifyReadyWaiter: CheckedContinuation<Void, Never>?
     private var notifyReadyWaiterParkedWaiters: [CheckedContinuation<Void, Never>] = []
@@ -444,13 +446,36 @@ actor ServerSession {
         return false
     }
 
+    private func isHeadIndication(_ id: UUID) -> Bool {
+        guard case .indication(let head) = outboundQueue.first else {
+            return false
+        }
+        return head.id == id
+    }
+
     private func removeHeadIndicationIfOwned(_ id: UUID, _ indication: inout IndicationItem) -> Bool {
-        guard case .indication(let head) = outboundQueue.first, head.id == id else {
+        guard isHeadIndication(id) else {
             return false
         }
         outboundQueue.removeFirst()
         completeIndication(&indication)
         return true
+    }
+
+    /// Removes the queued indication with `id` wherever it sits. Returns whether it was the head,
+    /// or `nil` when no such indication is queued.
+    private func removeIndication(id: UUID) -> Bool? {
+        let index = outboundQueue.firstIndex { item in
+            if case .indication(let indication) = item {
+                return indication.id == id
+            }
+            return false
+        }
+        guard let index, case var .indication(indication) = outboundQueue.remove(at: index) else {
+            return nil
+        }
+        completeIndication(&indication)
+        return index == 0
     }
 
     /// Returns `true` when the pump should stop processing this indication item.
@@ -487,6 +512,8 @@ actor ServerSession {
                 return
             }
 
+            notifyReady = false
+            let lossEpoch = radioLossEpoch
             let accepted: Bool
             do {
                 accepted = try await peripheral.updateValue(
@@ -502,19 +529,9 @@ actor ServerSession {
             }
 
             if accepted {
-                if isStaleWheelPayload(item) {
-                    if item.producedWheel == nil, let crank = item.producedCrank {
-                        crankCache = crank
-                    }
-                } else {
-                    if let wheel = item.producedWheel {
-                        wheelCache = wheel
-                    }
-                    if let crank = item.producedCrank {
-                        crankCache = crank
-                    }
-                    acceptedMeasurementCount += 1
-                    resumeAcceptedMeasurementCountWaiters(for: acceptedMeasurementCount)
+                // A send that overlapped a radio loss reached no current subscriber.
+                if radioLossEpoch == lossEpoch {
+                    recordAcceptedMeasurement(item)
                 }
                 outboundQueue.removeFirst()
                 completeEmit(&item)
@@ -546,6 +563,23 @@ actor ServerSession {
         }
     }
 
+    private func recordAcceptedMeasurement(_ item: MeasurementItem) {
+        if isStaleWheelPayload(item) {
+            if item.producedWheel == nil, let crank = item.producedCrank {
+                crankCache = crank
+            }
+            return
+        }
+        if let wheel = item.producedWheel {
+            wheelCache = wheel
+        }
+        if let crank = item.producedCrank {
+            crankCache = crank
+        }
+        acceptedMeasurementCount += 1
+        resumeAcceptedMeasurementCountWaiters(for: acceptedMeasurementCount)
+    }
+
     private func processIndicationItem() async {
         guard case var .indication(indication) = outboundQueue.first else {
             return
@@ -554,6 +588,12 @@ actor ServerSession {
         let indicationID = indication.id
 
         while !Task.isCancelled {
+            // A timeout, unsubscribe, or radio loss may have removed this item and ended its
+            // procedure while the pump was suspended; it must not be sent or ended again.
+            guard isHeadIndication(indicationID) else {
+                return
+            }
+
             if closed {
                 if removeHeadIndicationIfOwned(indicationID, &indication) {
                     endProcedure()
@@ -566,6 +606,7 @@ actor ServerSession {
                 return
             }
 
+            notifyReady = false
             let accepted: Bool
             do {
                 accepted = try await peripheral.updateValue(
@@ -578,6 +619,10 @@ actor ServerSession {
                 if removeHeadIndicationIfOwned(indicationID, &indication) {
                     endProcedure()
                 }
+                return
+            }
+
+            guard isHeadIndication(indicationID) else {
                 return
             }
 
@@ -601,10 +646,6 @@ actor ServerSession {
 
             if closed {
                 drainOutboundQueueOnShutdown()
-                return
-            }
-
-            if dropIndicationIfCentralDeparted(&indication) {
                 return
             }
         }
@@ -643,6 +684,7 @@ actor ServerSession {
             return
         }
         procedureInProgress = false
+        procedureIndicationID = nil
         resumeProcedureIdleWaiters()
     }
 
@@ -691,6 +733,7 @@ actor ServerSession {
             centralID: centralID,
             completionContinuation: nil,
         )
+        procedureIndicationID = item.id
         outboundQueue.append(.indication(item))
         resumeOutboundQueueWaiter()
         resumeOutboundCountWaiters()
@@ -1213,6 +1256,7 @@ actor ServerSession {
 
     private func runUpdateSensorLocationProcedure(assignedNumber: UInt8, centralID: UUID) async {
         guard let configuration = multipleSensorLocationsConfiguration else {
+            endProcedure()
             return
         }
 
@@ -1257,6 +1301,7 @@ actor ServerSession {
 
     private func runRequestSupportedSensorLocationsProcedure(centralID: UUID) async {
         guard let configuration = multipleSensorLocationsConfiguration else {
+            endProcedure()
             return
         }
 
@@ -1302,16 +1347,30 @@ actor ServerSession {
             case CSCS.controlPointUUID:
                 controlPointSubscribers.remove(centralID)
                 resumeControlPointSubscriberWaiters()
-                if case var .indication(indication) = outboundQueue.first,
-                   indication.centralID == centralID
-                {
-                    outboundQueue.removeFirst()
-                    completeIndication(&indication)
-                    endProcedure()
-                    wakeReadyWaiterWithoutLatch()
-                }
+                dropQueuedIndications(for: centralID)
             default:
                 return
+            }
+        }
+    }
+
+    private func dropQueuedIndications(for centralID: UUID) {
+        let ids = outboundQueue.compactMap { item -> UUID? in
+            if case .indication(let indication) = item, indication.centralID == centralID {
+                return indication.id
+            }
+            return nil
+        }
+        for id in ids {
+            let isProcedureIndication = id == procedureIndicationID
+            guard let wasHead = removeIndication(id: id) else {
+                continue
+            }
+            if wasHead {
+                endProcedure()
+                wakeReadyWaiterWithoutLatch()
+            } else if isProcedureIndication {
+                endProcedure()
             }
         }
     }
