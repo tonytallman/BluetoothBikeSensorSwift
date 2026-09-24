@@ -4,6 +4,12 @@ import Foundation
 
 /// Production `BluetoothPeripheral` backed by `CBPeripheralManager`.
 ///
+/// Delegate callbacks reach the actor through one FIFO channel, so ``events`` preserves
+/// callback order. Leaving `.poweredOn` fails an in-flight `add` or `startAdvertising` with
+/// `.notPoweredOn` and drops stored centrals and ATT requests. While not powered on, manager
+/// calls are skipped: `stopAdvertising` does nothing, service removal updates bookkeeping only,
+/// and `respond` drops the request and throws.
+///
 /// Queue crossing and actor isolation are documented in `project.md` (CSC Server).
 /// Manager queue: `com.bluetoothbikesensor.peripheral`.
 package actor CoreBluetoothPeripheral: BluetoothPeripheral {
@@ -14,6 +20,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     private let delegateEvents: AsyncStream<PeripheralDelegateEvent>.Continuation
 
     private var state: BluetoothState = .unknown
+    private var lossCount = 0
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
     private let eventBroadcaster = StreamBroadcaster<PeripheralEvent>()
@@ -55,6 +62,10 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
+    package var powerLossCount: Int {
+        get async { lossCount }
+    }
+
     package var isAdvertising: Bool {
         get async {
             queue.sync {
@@ -91,6 +102,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     }
 
     package func removeService(uuid: UUID) async throws {
+        let callsManager = state == .poweredOn
         try queue.sync {
             guard delegateBridge.service(for: uuid) != nil else {
                 throw BluetoothPeripheralError.serviceNotFound
@@ -98,14 +110,19 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
             guard let cbService = delegateBridge.removeService(for: uuid) else {
                 throw BluetoothPeripheralError.serviceNotFound
             }
-            peripheralManager.remove(cbService)
+            if callsManager {
+                peripheralManager.remove(cbService)
+            }
         }
     }
 
     package func removeAllServices() async {
+        let callsManager = state == .poweredOn
         queue.sync {
             delegateBridge.removeAllServices()
-            peripheralManager.removeAllServices()
+            if callsManager {
+                peripheralManager.removeAllServices()
+            }
         }
     }
 
@@ -135,6 +152,9 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     }
 
     package func stopAdvertising() async {
+        guard state == .poweredOn else {
+            return
+        }
         queue.sync {
             peripheralManager.stopAdvertising()
         }
@@ -153,6 +173,11 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     ) async throws {
         guard let requestKind = delegateBridge.requestKind(for: requestID) else {
             throw BluetoothPeripheralError.unknownRequest
+        }
+
+        guard state == .poweredOn else {
+            delegateBridge.removeRequest(for: requestID)
+            throw BluetoothPeripheralError.notPoweredOn
         }
 
         switch (requestKind, result) {
@@ -223,6 +248,11 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         switch event {
         case let .stateUpdated(newState):
             state = newState
+            if newState != .poweredOn {
+                lossCount += 1
+                inFlightBox.failAll(with: BluetoothPeripheralError.notPoweredOn)
+                delegateBridge.removeCentralsAndRequests()
+            }
             await eventBroadcaster.yield(.stateUpdated(newState))
             await stateBroadcaster.yield(newState)
 
@@ -480,6 +510,15 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         return attRequestKinds[id]
     }
 
+    func removeCentralsAndRequests() {
+        lock.lock()
+        centrals.removeAll()
+        attRequests.removeAll()
+        attRequestKinds.removeAll()
+        lock.unlock()
+    }
+
+    @discardableResult
     func removeRequest(for id: UUID) -> CBATTRequest? {
         lock.lock()
         defer { lock.unlock() }
