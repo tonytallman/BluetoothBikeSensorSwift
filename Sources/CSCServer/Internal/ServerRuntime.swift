@@ -104,6 +104,12 @@ actor ServerRuntime {
         }
     }
 
+    func waitUntilNotifyReadyWaiterParked() async {
+        if case .running(let session) = phase {
+            await session.waitUntilNotifyReadyWaiterParked()
+        }
+    }
+
     private func resolvePeripheral(_ peripheral: (any BluetoothPeripheral)?) throws -> any BluetoothPeripheral {
         if let peripheral {
             return peripheral

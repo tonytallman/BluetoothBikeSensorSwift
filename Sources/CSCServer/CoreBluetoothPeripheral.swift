@@ -11,31 +11,37 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     private let peripheralManager: CBPeripheralManager
     private let delegateBridge: PeripheralDelegateBridge
     private let inFlightBox: InFlightContinuationBox
+    private let delegateEvents: AsyncStream<PeripheralDelegateEvent>.Continuation
 
     private var state: BluetoothState = .unknown
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
-    private let readBroadcaster = StreamBroadcaster<PeripheralReadRequest>()
-    private let writeBroadcaster = StreamBroadcaster<PeripheralWriteTransaction>()
-    private let subscriptionBroadcaster = StreamBroadcaster<SubscriptionChange>()
-    private let readyBroadcaster = StreamBroadcaster<Void>()
+    private let eventBroadcaster = StreamBroadcaster<PeripheralEvent>()
 
     package init() {
         let bridge = PeripheralDelegateBridge()
         let box = InFlightContinuationBox()
+        let (stream, continuation) = AsyncStream.makeStream(of: PeripheralDelegateEvent.self)
         delegateBridge = bridge
         inFlightBox = box
+        delegateEvents = continuation
         let manager = CBPeripheralManager(delegate: bridge, queue: queue)
         peripheralManager = manager
-        bridge.bind { [weak self] event in
-            guard let self else { return }
-            Task { await self.handle(event) }
+        bridge.bind { event in
+            continuation.yield(event)
         }
         bridge.replayCurrentState(from: manager, on: queue)
+        Task { [weak self] in
+            for await event in stream {
+                guard let self else { return }
+                await self.handle(event)
+            }
+        }
     }
 
     deinit {
         delegateBridge.clearHandler()
+        delegateEvents.finish()
         inFlightBox.failAll(with: BluetoothPeripheralError.peripheralInvalidated)
     }
 
@@ -134,27 +140,9 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
-    package var readRequests: AsyncStream<PeripheralReadRequest> {
+    package var events: AsyncStream<PeripheralEvent> {
         get async {
-            await readBroadcaster.makeStream()
-        }
-    }
-
-    package var writeTransactions: AsyncStream<PeripheralWriteTransaction> {
-        get async {
-            await writeBroadcaster.makeStream()
-        }
-    }
-
-    package var subscriptionChanges: AsyncStream<SubscriptionChange> {
-        get async {
-            await subscriptionBroadcaster.makeStream()
-        }
-    }
-
-    package var subscriberUpdatesReady: AsyncStream<Void> {
-        get async {
-            await readyBroadcaster.makeStream()
+            await eventBroadcaster.makeStream()
         }
     }
 
@@ -235,6 +223,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         switch event {
         case let .stateUpdated(newState):
             state = newState
+            await eventBroadcaster.yield(.stateUpdated(newState))
             await stateBroadcaster.yield(newState)
 
         case let .serviceAdded(serviceUUID, errorReason):
@@ -262,16 +251,16 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
             }
 
         case let .read(request):
-            await readBroadcaster.yield(request)
+            await eventBroadcaster.yield(.read(request))
 
         case let .writeTransaction(transaction):
-            await writeBroadcaster.yield(transaction)
+            await eventBroadcaster.yield(.writeTransaction(transaction))
 
         case let .subscription(change):
-            await subscriptionBroadcaster.yield(change)
+            await eventBroadcaster.yield(.subscription(change))
 
         case .readyToUpdateSubscribers:
-            await readyBroadcaster.yield(())
+            await eventBroadcaster.yield(.readyToUpdateSubscribers)
         }
     }
 

@@ -53,6 +53,10 @@ actor ServerSession {
 
     private var notifyReady = false
     private var notifyReadyWaiter: CheckedContinuation<Void, Never>?
+    private var notifyReadyWaiterParkedWaiters: [CheckedContinuation<Void, Never>] = []
+
+    private var startupGateOpen = false
+    private var pendingInboundEvents: [PeripheralEvent] = []
 
     private var wheelCache: WheelRevolution?
     private var crankCache: CrankRevolution?
@@ -63,6 +67,7 @@ actor ServerSession {
 
     private var procedureInProgress = false
     private var procedureIdleWaiters: [CheckedContinuation<Void, Never>] = []
+    private var procedureIndicationID: UUID?
 
     private var acceptedMeasurementCount = 0
     private var acceptedMeasurementCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
@@ -72,10 +77,7 @@ actor ServerSession {
     private let location: ServerLocationConfiguration
     private let servedSensorLocation: ServedSensorLocationBox?
 
-    private var readTask: Task<Void, Never>?
-    private var writeTask: Task<Void, Never>?
-    private var subscriptionTask: Task<Void, Never>?
-    private var readyTask: Task<Void, Never>?
+    private var inboundTask: Task<Void, Never>?
     private var senderTask: Task<Void, Never>?
     private var wheelTask: Task<Void, Never>?
     private var crankTask: Task<Void, Never>?
@@ -226,18 +228,7 @@ actor ServerSession {
         }
         publishStage = .none
 
-        readTask?.cancel()
-        writeTask?.cancel()
-        subscriptionTask?.cancel()
-        readyTask?.cancel()
-        _ = await readTask?.value
-        _ = await writeTask?.value
-        _ = await subscriptionTask?.value
-        _ = await readyTask?.value
-        readTask = nil
-        writeTask = nil
-        subscriptionTask = nil
-        readyTask = nil
+        await stopInboundTask()
 
         measurementSubscribers.removeAll()
         controlPointSubscribers.removeAll()
@@ -245,7 +236,9 @@ actor ServerSession {
 
     private func beginShutdown() {
         closed = true
+        pendingInboundEvents.removeAll()
         resumeNotifyReadyWaiter()
+        resumeNotifyReadyWaiterParkedWaiters()
         resumeOutboundQueueWaiter()
         resumeAllMeasurementSubscriberWaiters()
         resumeAllControlPointSubscriberWaiters()
@@ -254,18 +247,18 @@ actor ServerSession {
         resumeAllOutboundCountWaiters()
     }
 
+    private func stopInboundTask() async {
+        inboundTask?.cancel()
+        _ = await inboundTask?.value
+        inboundTask = nil
+        pendingInboundEvents.removeAll()
+    }
+
     private func startup() async throws {
         try await waitForPoweredOn()
 
-        let readStream = await peripheral.readRequests
-        let writeStream = await peripheral.writeTransactions
-        let subscriptionStream = await peripheral.subscriptionChanges
-        let readyStream = await peripheral.subscriberUpdatesReady
-
-        readTask = spawnReadLoop(stream: readStream)
-        writeTask = spawnWriteLoop(stream: writeStream)
-        subscriptionTask = spawnSubscriptionLoop(stream: subscriptionStream)
-        readyTask = spawnReadyLoop(stream: readyStream)
+        let eventStream = await peripheral.events
+        inboundTask = spawnInboundTask(stream: eventStream)
 
         do {
             try await peripheral.add(service)
@@ -295,8 +288,22 @@ actor ServerSession {
         publishStage = .advertising
 
         senderTask = spawnSenderTask()
+        await drainPendingInboundEvents()
+        if closed || Task.isCancelled {
+            throw CancellationError()
+        }
         startCrankLoopIfNeeded()
         startWheelLoopIfNeeded()
+        startupGateOpen = true
+    }
+
+    /// Handles events buffered during startup, in arrival order, before the revolution loops
+    /// start. Returns with the buffer empty and no suspension before the caller opens the gate.
+    private func drainPendingInboundEvents() async {
+        while !closed, !pendingInboundEvents.isEmpty {
+            let event = pendingInboundEvents.removeFirst()
+            await handleInbound(event)
+        }
     }
 
     private func rollbackStartup() async {
@@ -326,18 +333,7 @@ actor ServerSession {
         }
         publishStage = .none
 
-        readTask?.cancel()
-        writeTask?.cancel()
-        subscriptionTask?.cancel()
-        readyTask?.cancel()
-        _ = await readTask?.value
-        _ = await writeTask?.value
-        _ = await subscriptionTask?.value
-        _ = await readyTask?.value
-        readTask = nil
-        writeTask = nil
-        subscriptionTask = nil
-        readyTask = nil
+        await stopInboundTask()
 
         measurementSubscribers.removeAll()
         controlPointSubscribers.removeAll()
@@ -845,47 +841,62 @@ actor ServerSession {
         }
     }
 
-    private func spawnReadLoop(stream: AsyncStream<PeripheralReadRequest>) -> Task<Void, Never> {
+    /// The only consumer of `peripheral.events`. Handlers run one at a time in arrival order.
+    private func spawnInboundTask(stream: AsyncStream<PeripheralEvent>) -> Task<Void, Never> {
         Task {
-            for await request in stream {
+            for await event in stream {
                 if Task.isCancelled {
                     break
                 }
-                await self.handleRead(request)
+                await self.receiveInbound(event)
             }
         }
     }
 
-    private func spawnWriteLoop(stream: AsyncStream<PeripheralWriteTransaction>) -> Task<Void, Never> {
-        Task {
-            for await transaction in stream {
-                if Task.isCancelled {
-                    break
-                }
-                await self.handleWrite(transaction)
-            }
+    private func receiveInbound(_ event: PeripheralEvent) async {
+        if closed {
+            return
+        }
+        guard startupGateOpen else {
+            pendingInboundEvents.append(event)
+            return
+        }
+        await handleInbound(event)
+    }
+
+    private func handleInbound(_ event: PeripheralEvent) async {
+        switch event {
+        case .stateUpdated:
+            break
+        case let .read(request):
+            await handleRead(request)
+        case let .writeTransaction(transaction):
+            await handleWrite(transaction)
+        case let .subscription(change):
+            await handleSubscription(change)
+        case .readyToUpdateSubscribers:
+            signalNotifyReady()
         }
     }
 
-    private func spawnSubscriptionLoop(stream: AsyncStream<SubscriptionChange>) -> Task<Void, Never> {
-        Task {
-            for await change in stream {
-                if Task.isCancelled {
-                    break
-                }
-                await self.handleSubscription(change)
+    func waitUntilNotifyReadyWaiterParked() async {
+        if closed || notifyReadyWaiter != nil {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if closed || notifyReadyWaiter != nil {
+                continuation.resume()
+                return
             }
+            notifyReadyWaiterParkedWaiters.append(continuation)
         }
     }
 
-    private func spawnReadyLoop(stream: AsyncStream<Void>) -> Task<Void, Never> {
-        Task {
-            for await _ in stream {
-                if Task.isCancelled {
-                    break
-                }
-                self.signalNotifyReady()
-            }
+    private func resumeNotifyReadyWaiterParkedWaiters() {
+        let waiters = notifyReadyWaiterParkedWaiters
+        notifyReadyWaiterParkedWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
         }
     }
 
@@ -924,6 +935,7 @@ actor ServerSession {
                 return
             }
             notifyReadyWaiter = continuation
+            resumeNotifyReadyWaiterParkedWaiters()
         }
     }
 

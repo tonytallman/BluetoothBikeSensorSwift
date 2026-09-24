@@ -150,6 +150,15 @@ package enum ATTResult: Sendable, Equatable {
     case error(code: UInt8)
 }
 
+/// One inbound peripheral event, delivered in the order the peripheral observed it.
+package enum PeripheralEvent: Sendable, Equatable {
+    case stateUpdated(BluetoothState)
+    case read(PeripheralReadRequest)
+    case writeTransaction(PeripheralWriteTransaction)
+    case subscription(SubscriptionChange)
+    case readyToUpdateSubscribers
+}
+
 enum PeripheralServiceValidation {
     static func validate(_ service: PeripheralService) throws {
         for characteristic in service.characteristics {

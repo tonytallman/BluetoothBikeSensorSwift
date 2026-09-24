@@ -78,4 +78,9 @@ public final class Server: Sendable {
     package func waitUntilOutboundCount(atLeast count: Int) async {
         await runtime.waitUntilOutboundCount(atLeast: count)
     }
+
+    /// Returns once the outbound pump is parked waiting for a ready-to-update signal.
+    package func waitUntilNotifyReadyWaiterParked() async {
+        await runtime.waitUntilNotifyReadyWaiterParked()
+    }
 }

@@ -67,7 +67,7 @@ struct ServerTests {
             try await server.start(peripheral: fake)
         }
 
-        await fake.waitUntilReadRequestSubscriberCount(0)
+        await fake.waitUntilEventSubscriberCount(0)
 
         let calls = await fake.recordedCalls
         #expect(calls.contains { call in

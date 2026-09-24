@@ -1,6 +1,16 @@
 import Foundation
 
 /// Controllable `BluetoothPeripheral` for unit tests. Not intended for production use.
+///
+/// Inbound events are yielded on one ``events`` stream in call order. When the state is not
+/// `.poweredOn`, `add`, `startAdvertising`, `updateValue`, and `respond` throw
+/// `BluetoothPeripheralError.notPoweredOn` and record nothing. Leaving `.poweredOn` stops
+/// advertising and increments ``powerLossCount`` but keeps added services.
+///
+/// A held `add` or `startAdvertising` re-checks the state when released: if the state is no
+/// longer `.poweredOn`, the call throws `.notPoweredOn` and records nothing. A held
+/// `updateValue` records its attempt before parking and returns the accepted value read at
+/// release time.
 package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     package enum UpdateValueCentralFilter: Sendable, Equatable {
         case all
@@ -22,8 +32,39 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         case respond(id: UUID, result: ATTResult, value: Data?)
     }
 
+    private struct Hold {
+        var isHeld = false
+        var parked: [CheckedContinuation<Void, Never>] = []
+        var parkedWaiters: [CheckedContinuation<Void, Never>] = []
+
+        mutating func park(_ continuation: CheckedContinuation<Void, Never>) {
+            parked.append(continuation)
+            let waiters = parkedWaiters
+            parkedWaiters.removeAll()
+            for waiter in waiters {
+                waiter.resume()
+            }
+        }
+
+        mutating func release() {
+            isHeld = false
+            let continuations = parked
+            parked.removeAll()
+            for continuation in continuations {
+                continuation.resume()
+            }
+        }
+    }
+
+    private enum HoldKind {
+        case add
+        case advertise
+        case updateValue
+    }
+
     private var state: BluetoothState
     private var advertising = false
+    private var lossCount = 0
     private var services: [UUID: PeripheralService] = [:]
     private var outstandingReadRequestIDs: Set<UUID> = []
     private var outstandingWriteTransactionIDs: Set<UUID> = []
@@ -31,15 +72,12 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     private var shouldFailNextAdd = false
     private var shouldFailNextAdvertise = false
     private var nextUpdateValueAccepted = true
-    private var isAdvertiseHeld = false
-    private var advertiseWaiters: [CheckedContinuation<Void, Never>] = []
-    private var advertiseHeldWaiters: [CheckedContinuation<Void, Never>] = []
+    private var addHold = Hold()
+    private var advertiseHold = Hold()
+    private var updateValueHold = Hold()
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
-    private let readBroadcaster = StreamBroadcaster<PeripheralReadRequest>()
-    private let writeBroadcaster = StreamBroadcaster<PeripheralWriteTransaction>()
-    private let subscriptionBroadcaster = StreamBroadcaster<SubscriptionChange>()
-    private let readyBroadcaster = StreamBroadcaster<Void>()
+    private let eventBroadcaster = StreamBroadcaster<PeripheralEvent>()
 
     private struct RecordedCallWaiter {
         let predicate: @Sendable (RecordedCall) -> Bool
@@ -75,12 +113,29 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
+    /// Number of transitions to a state other than `.poweredOn`.
+    package var powerLossCount: Int {
+        get async { lossCount }
+    }
+
     package var isAdvertising: Bool {
         get async { advertising }
     }
 
+    package var events: AsyncStream<PeripheralEvent> {
+        get async {
+            await eventBroadcaster.makeStream()
+        }
+    }
+
     package func add(_ service: PeripheralService) async throws {
         try PeripheralServiceValidation.validate(service)
+        try requirePoweredOn()
+
+        if addHold.isHeld {
+            await park(.add)
+            try requirePoweredOn()
+        }
 
         if shouldFailNextAdd {
             shouldFailNextAdd = false
@@ -110,11 +165,11 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     }
 
     package func startAdvertising(_ advertisement: Advertisement) async throws {
-        if isAdvertiseHeld {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                advertiseWaiters.append(continuation)
-                resumeAdvertiseHeldWaiters()
-            }
+        try requirePoweredOn()
+
+        if advertiseHold.isHeld {
+            await park(.advertise)
+            try requirePoweredOn()
         }
 
         appendRecordedCall(.startAdvertising(advertisement))
@@ -132,30 +187,6 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         advertising = false
     }
 
-    package var readRequests: AsyncStream<PeripheralReadRequest> {
-        get async {
-            await readBroadcaster.makeStream()
-        }
-    }
-
-    package var writeTransactions: AsyncStream<PeripheralWriteTransaction> {
-        get async {
-            await writeBroadcaster.makeStream()
-        }
-    }
-
-    package var subscriptionChanges: AsyncStream<SubscriptionChange> {
-        get async {
-            await subscriptionBroadcaster.makeStream()
-        }
-    }
-
-    package var subscriberUpdatesReady: AsyncStream<Void> {
-        get async {
-            await readyBroadcaster.makeStream()
-        }
-    }
-
     package func respond(
         to requestID: UUID,
         with result: ATTResult,
@@ -166,6 +197,12 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
 
         guard isRead || isWrite else {
             throw BluetoothPeripheralError.unknownRequest
+        }
+
+        guard state == .poweredOn else {
+            outstandingReadRequestIDs.remove(requestID)
+            outstandingWriteTransactionIDs.remove(requestID)
+            throw BluetoothPeripheralError.notPoweredOn
         }
 
         if isRead {
@@ -196,6 +233,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         characteristicUUID: UUID,
         onSubscribedCentrals centralIDs: [UUID]?,
     ) async throws -> Bool {
+        try requirePoweredOn()
         guard hasCharacteristic(serviceUUID: serviceUUID, characteristicUUID: characteristicUUID) else {
             throw BluetoothPeripheralError.characteristicNotFound
         }
@@ -215,30 +253,43 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
                 centralIDs: filter,
             ),
         )
+
+        if updateValueHold.isHeld {
+            await park(.updateValue)
+        }
         return nextUpdateValueAccepted
     }
 
+    /// Sets the state and yields `.stateUpdated` on ``events`` and on ``stateUpdates``.
+    ///
+    /// Leaving `.poweredOn` stops advertising and increments ``powerLossCount``. Added services
+    /// and held calls are left alone.
     package func setState(_ newState: BluetoothState) async {
         state = newState
+        if newState != .poweredOn {
+            advertising = false
+            lossCount += 1
+        }
+        await eventBroadcaster.yield(.stateUpdated(newState))
         await stateBroadcaster.yield(newState)
     }
 
     package func emitRead(_ request: PeripheralReadRequest) async {
         outstandingReadRequestIDs.insert(request.id)
-        await readBroadcaster.yield(request)
+        await eventBroadcaster.yield(.read(request))
     }
 
     package func emitWriteTransaction(_ transaction: PeripheralWriteTransaction) async {
         outstandingWriteTransactionIDs.insert(transaction.id)
-        await writeBroadcaster.yield(transaction)
+        await eventBroadcaster.yield(.writeTransaction(transaction))
     }
 
     package func emitSubscription(_ change: SubscriptionChange) async {
-        await subscriptionBroadcaster.yield(change)
+        await eventBroadcaster.yield(.subscription(change))
     }
 
     package func emitReadyToUpdateSubscribers() async {
-        await readyBroadcaster.yield(())
+        await eventBroadcaster.yield(.readyToUpdateSubscribers)
     }
 
     package func failNextAdd() {
@@ -253,31 +304,47 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         nextUpdateValueAccepted = accepted
     }
 
+    /// Parks every `add` until ``releaseAdd()``.
+    package func holdNextAdd() {
+        addHold.isHeld = true
+    }
+
+    package func releaseAdd() {
+        addHold.release()
+    }
+
+    package func waitUntilAddHeld() async {
+        await waitUntilParked(.add)
+    }
+
+    /// Parks every `startAdvertising` until ``releaseAdvertise()``.
     package func holdNextAdvertise() {
-        isAdvertiseHeld = true
+        advertiseHold.isHeld = true
     }
 
     package func releaseAdvertise() {
-        isAdvertiseHeld = false
-        let waiters = advertiseWaiters
-        advertiseWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
-        }
+        advertiseHold.release()
     }
 
     package func waitUntilAdvertiseHeld() async {
-        if !advertiseWaiters.isEmpty {
-            return
-        }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            advertiseHeldWaiters.append(continuation)
-            resumeAdvertiseHeldWaiters()
-        }
+        await waitUntilParked(.advertise)
     }
 
-    package func waitUntilReadRequestSubscriberCount(_ count: Int) async {
-        await readBroadcaster.waitUntilSubscriberCount(count)
+    /// Parks every `updateValue` after it is recorded, until ``releaseUpdateValue()``.
+    package func holdNextUpdateValue() {
+        updateValueHold.isHeld = true
+    }
+
+    package func releaseUpdateValue() {
+        updateValueHold.release()
+    }
+
+    package func waitUntilUpdateValueHeld() async {
+        await waitUntilParked(.updateValue)
+    }
+
+    package func waitUntilEventSubscriberCount(_ count: Int) async {
+        await eventBroadcaster.waitUntilSubscriberCount(count)
     }
 
     package func waitForRecordedCall(
@@ -317,6 +384,50 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
+    private func requirePoweredOn() throws {
+        guard state == .poweredOn else {
+            throw BluetoothPeripheralError.notPoweredOn
+        }
+    }
+
+    private func park(_ kind: HoldKind) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            switch kind {
+            case .add:
+                addHold.park(continuation)
+            case .advertise:
+                advertiseHold.park(continuation)
+            case .updateValue:
+                updateValueHold.park(continuation)
+            }
+        }
+    }
+
+    private func waitUntilParked(_ kind: HoldKind) async {
+        let isParked: Bool
+        switch kind {
+        case .add:
+            isParked = !addHold.parked.isEmpty
+        case .advertise:
+            isParked = !advertiseHold.parked.isEmpty
+        case .updateValue:
+            isParked = !updateValueHold.parked.isEmpty
+        }
+        if isParked {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            switch kind {
+            case .add:
+                addHold.parkedWaiters.append(continuation)
+            case .advertise:
+                advertiseHold.parkedWaiters.append(continuation)
+            case .updateValue:
+                updateValueHold.parkedWaiters.append(continuation)
+            }
+        }
+    }
+
     private func resumeRecordedCallWaiters() {
         var remaining: [RecordedCallWaiter] = []
         for waiter in recordedCallWaiters {
@@ -347,17 +458,6 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         }
         let waiters = stateUpdatesSubscriberWaiters
         stateUpdatesSubscriberWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
-        }
-    }
-
-    private func resumeAdvertiseHeldWaiters() {
-        guard !advertiseWaiters.isEmpty else {
-            return
-        }
-        let waiters = advertiseHeldWaiters
-        advertiseHeldWaiters.removeAll()
         for waiter in waiters {
             waiter.resume()
         }
