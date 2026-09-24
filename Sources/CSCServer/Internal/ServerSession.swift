@@ -251,6 +251,7 @@ actor ServerSession {
         resumeAllControlPointSubscriberWaiters()
         resumeMeasurementSubscriberWaiterParkedWaiters()
         resumeAllAcceptedMeasurementCountWaiters()
+        resumeAllOutboundCountWaiters()
     }
 
     private func startup() async throws {
@@ -710,6 +711,14 @@ actor ServerSession {
             }
         }
         outboundCountWaiters = remaining
+    }
+
+    private func resumeAllOutboundCountWaiters() {
+        let waiters = outboundCountWaiters
+        outboundCountWaiters.removeAll()
+        for (_, continuation) in waiters {
+            continuation.resume()
+        }
     }
 
     private func indicate(

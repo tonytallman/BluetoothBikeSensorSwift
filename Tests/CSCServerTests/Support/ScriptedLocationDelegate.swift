@@ -75,12 +75,16 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
         let preparation = state.withLock { locked -> (shouldThrow: Bool, park: Bool) in
             locked.recordedKinds.append(location)
             locked.updateCount += 1
-            resumeUpdateCountWaiters(locked: &locked, for: locked.updateCount)
             let throwNow = locked.shouldThrow
             var park = false
             if !throwNow, locked.parkArmed {
                 locked.parkArmed = false
                 park = true
+            }
+            if throwNow {
+                resumeUpdateCountWaiters(locked: &locked, for: locked.updateCount)
+            } else if !park {
+                resumeUpdateCountWaiters(locked: &locked, for: locked.updateCount)
             }
             return (throwNow, park)
         }
@@ -95,7 +99,10 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
 
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                state.withLock { $0.parkedContinuation = continuation }
+                state.withLock { locked in
+                    locked.parkedContinuation = continuation
+                    resumeUpdateCountWaiters(locked: &locked, for: locked.updateCount)
+                }
             }
         } onCancel: {
             self.cancelPark()

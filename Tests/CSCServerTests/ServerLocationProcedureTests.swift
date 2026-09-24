@@ -91,19 +91,23 @@ struct ServerLocationProcedureTests {
         let writer = UUID()
         await subscribeControlPoint(fake: fake, server: server, centralID: writer)
 
-        for assigned in [UInt8(0x0A), UInt8(0x11)] {
+        let invalidUpdateIndication = CSCControlPointResponse(
+            requestOpcode: 0x03,
+            value: 0x03,
+            parameter: Data(),
+        ).encode()
+        for nth in 1 ... 2 {
+            let assigned: UInt8 = nth == 1 ? 0x0A : 0x11
             await fake.emitWriteTransaction(
                 updateLocationWrite(centralID: writer, assignedNumber: assigned),
             )
-            await fake.waitForRecordedCall { call in
-                if case let .updateValue(value, _, CSCS.controlPointUUID, _) = call {
-                    return value == CSCControlPointResponse(
-                        requestOpcode: 0x03,
-                        value: 0x03,
-                        parameter: Data(),
-                    ).encode()
-                }
-                return false
+            await fake.waitUntilRecordedCallsSatisfy { calls in
+                calls.filter { call in
+                    if case let .updateValue(value, _, CSCS.controlPointUUID, _) = call {
+                        return value == invalidUpdateIndication
+                    }
+                    return false
+                }.count >= nth
             }
             await server.waitUntilControlPointProcedureIdle()
         }
@@ -129,7 +133,13 @@ struct ServerLocationProcedureTests {
         let writer = UUID()
         await subscribeControlPoint(fake: fake, server: server, centralID: writer)
 
-        for body in [Data([0x03]), Data([0x03, 0x05, 0xFF])] {
+        let malformedUpdateIndication = CSCControlPointResponse(
+            requestOpcode: 0x03,
+            value: 0x03,
+            parameter: Data(),
+        ).encode()
+        for nth in 1 ... 2 {
+            let body = nth == 1 ? Data([0x03]) : Data([0x03, 0x05, 0xFF])
             await fake.emitWriteTransaction(
                 PeripheralWriteTransaction(
                     id: UUID(),
@@ -144,15 +154,13 @@ struct ServerLocationProcedureTests {
                     ],
                 ),
             )
-            await fake.waitForRecordedCall { call in
-                if case let .updateValue(value, _, CSCS.controlPointUUID, _) = call {
-                    return value == CSCControlPointResponse(
-                        requestOpcode: 0x03,
-                        value: 0x03,
-                        parameter: Data(),
-                    ).encode()
-                }
-                return false
+            await fake.waitUntilRecordedCallsSatisfy { calls in
+                calls.filter { call in
+                    if case let .updateValue(value, _, CSCS.controlPointUUID, _) = call {
+                        return value == malformedUpdateIndication
+                    }
+                    return false
+                }.count >= nth
             }
             await server.waitUntilControlPointProcedureIdle()
         }
@@ -187,6 +195,16 @@ struct ServerLocationProcedureTests {
         }
         await server.waitUntilControlPointProcedureIdle()
 
+        await emitSensorLocationRead(fake: fake, offset: 0)
+        await fake.waitForRecordedCall { call in
+            if case let .respond(_, .success, value) = call {
+                return value == Data([0x05])
+            }
+            return false
+        }
+
+        await server.stop()
+        try await server.start(peripheral: fake)
         await emitSensorLocationRead(fake: fake, offset: 0)
         await fake.waitForRecordedCall { call in
             if case let .respond(_, .success, value) = call {
@@ -985,27 +1003,40 @@ struct ServerLocationProcedureTests {
         }
         #expect(!controlPointBeforeReady)
 
+        let callsBeforeReady = await fake.recordedCalls
+        let rejectedMeasurementAttempts = callsBeforeReady.filter { call in
+            if case let .updateValue(value, _, CSCS.measurementUUID, _) = call {
+                return value == wheelPayload
+            }
+            return false
+        }.count
+        #expect(rejectedMeasurementAttempts == 1)
+
         await fake.setNextUpdateValueAccepted(true)
         await fake.emitReadyToUpdateSubscribers()
 
+        let requestIndication = CSCControlPointResponse(
+            requestOpcode: 0x04,
+            value: 0x01,
+            parameter: Data([0x05]),
+        ).encode()
         await fake.waitUntilRecordedCallsSatisfy { calls in
-            let wheelAttempts = calls.filter { call in
-                if case let .updateValue(value, _, CSCS.measurementUUID, _) = call {
+            let wheelIndices = calls.indices.filter { index in
+                if case let .updateValue(value, _, CSCS.measurementUUID, _) = calls[index] {
                     return value == wheelPayload
                 }
                 return false
             }
-            let hasRequest = calls.contains { call in
-                if case let .updateValue(value, _, CSCS.controlPointUUID, _) = call {
-                    return value == CSCControlPointResponse(
-                        requestOpcode: 0x04,
-                        value: 0x01,
-                        parameter: Data([0x05]),
-                    ).encode()
+            let requestIndices = calls.indices.filter { index in
+                if case let .updateValue(value, _, CSCS.controlPointUUID, _) = calls[index] {
+                    return value == requestIndication
                 }
                 return false
             }
-            return wheelAttempts.count == 2 && hasRequest
+            guard wheelIndices.count >= 2, let requestIndex = requestIndices.first else {
+                return false
+            }
+            return wheelIndices[1] < requestIndex
         }
     }
 
