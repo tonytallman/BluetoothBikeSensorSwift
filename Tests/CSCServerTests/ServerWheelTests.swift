@@ -534,6 +534,7 @@ struct ServerWheelTests {
                 ],
             ),
         )
+        await delegate.waitUntilRecordedCount(1)
 
         await yield(WheelRevolution(cumulativeRevolutions: 5, lastEventTime: 6))
         await fake.waitForRecordedCall { call in
