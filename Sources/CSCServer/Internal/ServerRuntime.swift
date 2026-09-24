@@ -77,13 +77,29 @@ actor ServerRuntime {
         }
     }
 
+    func waitForControlPointSubscribers(_ ids: Set<UUID>) async {
+        if case .running(let session) = phase {
+            await session.waitForControlPointSubscribers(ids)
+        }
+    }
+
+    func waitUntilControlPointProcedureIdle() async {
+        if case .running(let session) = phase {
+            await session.waitUntilControlPointProcedureIdle()
+        }
+    }
+
+    func waitUntilAcceptedMeasurementCount(_ count: Int) async {
+        if case .running(let session) = phase {
+            await session.waitUntilAcceptedMeasurementCount(count)
+        }
+    }
+
     private var isUnsupportedConfiguration: Bool {
-        wheel != nil || crankRevolutions == nil || {
-            if case .multiple = location {
-                return true
-            }
-            return false
-        }()
+        if case .multiple = location {
+            return true
+        }
+        return false
     }
 
     private func resolvePeripheral(_ peripheral: (any BluetoothPeripheral)?) throws -> any BluetoothPeripheral {
@@ -102,6 +118,7 @@ actor ServerRuntime {
             let resolvedPeripheral = try self.resolvePeripheral(peripheral)
             return try await ServerSession.open(
                 service: service,
+                wheel: wheel,
                 crankRevolutions: crankRevolutions,
                 peripheral: resolvedPeripheral,
             )

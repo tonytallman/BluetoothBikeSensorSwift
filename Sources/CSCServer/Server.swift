@@ -57,4 +57,19 @@ public final class Server: Sendable {
     package func waitUntilMeasurementSubscriberWaiterParked() async {
         await runtime.waitUntilMeasurementSubscriberWaiterParked()
     }
+
+    /// Blocks until the control-point subscriber set equals `ids`.
+    package func waitForControlPointSubscribers(_ ids: Set<UUID>) async {
+        await runtime.waitForControlPointSubscribers(ids)
+    }
+
+    /// Blocks until no control-point procedure is in progress.
+    package func waitUntilControlPointProcedureIdle() async {
+        await runtime.waitUntilControlPointProcedureIdle()
+    }
+
+    /// Blocks until the accepted measurement count reaches `count`.
+    package func waitUntilAcceptedMeasurementCount(_ count: Int) async {
+        await runtime.waitUntilAcceptedMeasurementCount(count)
+    }
 }
