@@ -206,6 +206,7 @@ struct ServerControlPointTests {
             if case let .respond(_, .success, nil) = call { return true }
             return false
         }
+        await delegate.waitUntilRecordedCount(1)
 
         await fake.emitWriteTransaction(controlPointWrite(centralID: centralB))
         await fake.waitForRecordedCall { call in
@@ -879,6 +880,7 @@ struct ServerControlPointTests {
             if case let .respond(_, .success, nil) = call { return true }
             return false
         }
+        await delegate.waitUntilRecordedCount(1)
 
         await server.stop()
 

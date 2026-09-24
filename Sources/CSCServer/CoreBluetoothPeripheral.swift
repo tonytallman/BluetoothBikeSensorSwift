@@ -4,6 +4,12 @@ import Foundation
 
 /// Production `BluetoothPeripheral` backed by `CBPeripheralManager`.
 ///
+/// Delegate callbacks reach the actor through one FIFO channel, so ``events`` preserves
+/// callback order. Leaving `.poweredOn` fails an in-flight `add` or `startAdvertising` with
+/// `.notPoweredOn` and drops stored centrals and ATT requests. While not powered on, manager
+/// calls are skipped: `stopAdvertising` does nothing, service removal updates bookkeeping only,
+/// and `respond` drops the request and throws.
+///
 /// Queue crossing and actor isolation are documented in `project.md` (CSC Server).
 /// Manager queue: `com.bluetoothbikesensor.peripheral`.
 package actor CoreBluetoothPeripheral: BluetoothPeripheral {
@@ -11,31 +17,38 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     private let peripheralManager: CBPeripheralManager
     private let delegateBridge: PeripheralDelegateBridge
     private let inFlightBox: InFlightContinuationBox
+    private let delegateEvents: AsyncStream<PeripheralDelegateEvent>.Continuation
 
     private var state: BluetoothState = .unknown
+    private var lossCount = 0
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
-    private let readBroadcaster = StreamBroadcaster<PeripheralReadRequest>()
-    private let writeBroadcaster = StreamBroadcaster<PeripheralWriteTransaction>()
-    private let subscriptionBroadcaster = StreamBroadcaster<SubscriptionChange>()
-    private let readyBroadcaster = StreamBroadcaster<Void>()
+    private let eventBroadcaster = StreamBroadcaster<PeripheralEvent>()
 
     package init() {
         let bridge = PeripheralDelegateBridge()
         let box = InFlightContinuationBox()
+        let (stream, continuation) = AsyncStream.makeStream(of: PeripheralDelegateEvent.self)
         delegateBridge = bridge
         inFlightBox = box
+        delegateEvents = continuation
         let manager = CBPeripheralManager(delegate: bridge, queue: queue)
         peripheralManager = manager
-        bridge.bind { [weak self] event in
-            guard let self else { return }
-            Task { await self.handle(event) }
+        bridge.bind { event in
+            continuation.yield(event)
         }
         bridge.replayCurrentState(from: manager, on: queue)
+        Task { [weak self] in
+            for await event in stream {
+                guard let self else { return }
+                await self.handle(event)
+            }
+        }
     }
 
     deinit {
         delegateBridge.clearHandler()
+        delegateEvents.finish()
         inFlightBox.failAll(with: BluetoothPeripheralError.peripheralInvalidated)
     }
 
@@ -47,6 +60,10 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         get async {
             await stateBroadcaster.makeStream()
         }
+    }
+
+    package var powerLossCount: Int {
+        get async { lossCount }
     }
 
     package var isAdvertising: Bool {
@@ -85,6 +102,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     }
 
     package func removeService(uuid: UUID) async throws {
+        let callsManager = state == .poweredOn
         try queue.sync {
             guard delegateBridge.service(for: uuid) != nil else {
                 throw BluetoothPeripheralError.serviceNotFound
@@ -92,14 +110,19 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
             guard let cbService = delegateBridge.removeService(for: uuid) else {
                 throw BluetoothPeripheralError.serviceNotFound
             }
-            peripheralManager.remove(cbService)
+            if callsManager {
+                peripheralManager.remove(cbService)
+            }
         }
     }
 
     package func removeAllServices() async {
+        let callsManager = state == .poweredOn
         queue.sync {
             delegateBridge.removeAllServices()
-            peripheralManager.removeAllServices()
+            if callsManager {
+                peripheralManager.removeAllServices()
+            }
         }
     }
 
@@ -129,32 +152,17 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     }
 
     package func stopAdvertising() async {
+        guard state == .poweredOn else {
+            return
+        }
         queue.sync {
             peripheralManager.stopAdvertising()
         }
     }
 
-    package var readRequests: AsyncStream<PeripheralReadRequest> {
+    package var events: AsyncStream<PeripheralEvent> {
         get async {
-            await readBroadcaster.makeStream()
-        }
-    }
-
-    package var writeTransactions: AsyncStream<PeripheralWriteTransaction> {
-        get async {
-            await writeBroadcaster.makeStream()
-        }
-    }
-
-    package var subscriptionChanges: AsyncStream<SubscriptionChange> {
-        get async {
-            await subscriptionBroadcaster.makeStream()
-        }
-    }
-
-    package var subscriberUpdatesReady: AsyncStream<Void> {
-        get async {
-            await readyBroadcaster.makeStream()
+            await eventBroadcaster.makeStream()
         }
     }
 
@@ -165,6 +173,11 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     ) async throws {
         guard let requestKind = delegateBridge.requestKind(for: requestID) else {
             throw BluetoothPeripheralError.unknownRequest
+        }
+
+        guard state == .poweredOn else {
+            delegateBridge.removeRequest(for: requestID)
+            throw BluetoothPeripheralError.notPoweredOn
         }
 
         switch (requestKind, result) {
@@ -235,6 +248,12 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         switch event {
         case let .stateUpdated(newState):
             state = newState
+            if newState != .poweredOn {
+                lossCount += 1
+                inFlightBox.failAll(with: BluetoothPeripheralError.notPoweredOn)
+                delegateBridge.removeCentralsAndRequests()
+            }
+            await eventBroadcaster.yield(.stateUpdated(newState))
             await stateBroadcaster.yield(newState)
 
         case let .serviceAdded(serviceUUID, errorReason):
@@ -262,16 +281,16 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
             }
 
         case let .read(request):
-            await readBroadcaster.yield(request)
+            await eventBroadcaster.yield(.read(request))
 
         case let .writeTransaction(transaction):
-            await writeBroadcaster.yield(transaction)
+            await eventBroadcaster.yield(.writeTransaction(transaction))
 
         case let .subscription(change):
-            await subscriptionBroadcaster.yield(change)
+            await eventBroadcaster.yield(.subscription(change))
 
         case .readyToUpdateSubscribers:
-            await readyBroadcaster.yield(())
+            await eventBroadcaster.yield(.readyToUpdateSubscribers)
         }
     }
 
@@ -491,6 +510,15 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         return attRequestKinds[id]
     }
 
+    func removeCentralsAndRequests() {
+        lock.lock()
+        centrals.removeAll()
+        attRequests.removeAll()
+        attRequestKinds.removeAll()
+        lock.unlock()
+    }
+
+    @discardableResult
     func removeRequest(for id: UUID) -> CBATTRequest? {
         lock.lock()
         defer { lock.unlock() }

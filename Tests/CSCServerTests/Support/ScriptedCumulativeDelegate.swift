@@ -5,8 +5,11 @@ actor ScriptedCumulativeDelegate: SetCumulativeWheelRevolutions {
     private(set) var recordedValues: [UInt32] = []
     private var shouldThrow = false
     private var parkArmed = false
+    private var parkIgnoresCancellation = false
     private var parkedContinuation: CheckedContinuation<Void, Error>?
     private var recordedCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private(set) var cancellationRequested = false
+    private var cancellationWaiters: [CheckedContinuation<Void, Never>] = []
 
     func waitUntilRecordedCount(_ count: Int) async {
         if recordedValues.count >= count {
@@ -23,6 +26,25 @@ actor ScriptedCumulativeDelegate: SetCumulativeWheelRevolutions {
 
     func armParkForNextCall() {
         parkArmed = true
+    }
+
+    /// The next call parks until ``release()``; cancellation is only recorded.
+    func armParkIgnoringCancellationForNextCall() {
+        parkArmed = true
+        parkIgnoresCancellation = true
+    }
+
+    func waitUntilCancellationRequested() async {
+        if cancellationRequested {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if cancellationRequested {
+                continuation.resume()
+                return
+            }
+            cancellationWaiters.append(continuation)
+        }
     }
 
     func setShouldThrow(_ value: Bool) {
@@ -48,6 +70,8 @@ actor ScriptedCumulativeDelegate: SetCumulativeWheelRevolutions {
             return
         }
         parkArmed = false
+        let ignoresCancellation = parkIgnoresCancellation
+        parkIgnoresCancellation = false
 
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -55,8 +79,21 @@ actor ScriptedCumulativeDelegate: SetCumulativeWheelRevolutions {
             }
         } onCancel: {
             Task {
-                await self.cancelPark()
+                if ignoresCancellation {
+                    await self.recordCancellationRequested()
+                } else {
+                    await self.cancelPark()
+                }
             }
+        }
+    }
+
+    private func recordCancellationRequested() {
+        cancellationRequested = true
+        let waiters = cancellationWaiters
+        cancellationWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
         }
     }
 

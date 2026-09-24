@@ -42,6 +42,7 @@ actor ServerSession {
     private let wheel: WheelConfiguration?
     private let crankRevolutions: AnyAsyncSequence<CrankRevolution>?
     private let peripheral: any BluetoothPeripheral
+    private let clock: any ServerClock
 
     private var publishStage: PublishStage = .none
     private var closed = false
@@ -51,8 +52,19 @@ actor ServerSession {
     private var controlPointSubscriberWaiters: [SubscriberWaiter] = []
     private var measurementSubscriberWaiterParkedWaiters: [CheckedContinuation<Void, Never>] = []
 
+    private var startLossCount = 0
+    private var radioLost = false
+    private var radioLossEpoch: UInt64 = 0
+    private var lastRadioState: BluetoothState = .poweredOn
+    private var recoveryInProgress = false
+    private var recoveryIdleWaiters: [CheckedContinuation<Void, Never>] = []
+
     private var notifyReady = false
     private var notifyReadyWaiter: CheckedContinuation<Void, Never>?
+    private var notifyReadyWaiterParkedWaiters: [CheckedContinuation<Void, Never>] = []
+
+    private var startupGateOpen = false
+    private var pendingInboundEvents: [PeripheralEvent] = []
 
     private var wheelCache: WheelRevolution?
     private var crankCache: CrankRevolution?
@@ -61,8 +73,14 @@ actor ServerSession {
     private var outboundQueue: [OutboundItem] = []
     private var outboundQueueWaiter: CheckedContinuation<Void, Never>?
 
+    private static let procedureTimeout: Duration = .seconds(30)
+
     private var procedureInProgress = false
     private var procedureIdleWaiters: [CheckedContinuation<Void, Never>] = []
+    private var procedureIndicationID: UUID?
+    private var procedureGeneration: UInt64 = 0
+    private var procedureTimedOut = false
+    private var procedureTimeoutTask: Task<Void, Never>?
 
     private var acceptedMeasurementCount = 0
     private var acceptedMeasurementCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
@@ -72,10 +90,7 @@ actor ServerSession {
     private let location: ServerLocationConfiguration
     private let servedSensorLocation: ServedSensorLocationBox?
 
-    private var readTask: Task<Void, Never>?
-    private var writeTask: Task<Void, Never>?
-    private var subscriptionTask: Task<Void, Never>?
-    private var readyTask: Task<Void, Never>?
+    private var inboundTask: Task<Void, Never>?
     private var senderTask: Task<Void, Never>?
     private var wheelTask: Task<Void, Never>?
     private var crankTask: Task<Void, Never>?
@@ -88,6 +103,7 @@ actor ServerSession {
         location: ServerLocationConfiguration,
         servedSensorLocation: ServedSensorLocationBox?,
         peripheral: any BluetoothPeripheral,
+        clock: any ServerClock,
     ) {
         self.service = service
         self.wheel = wheel
@@ -95,6 +111,7 @@ actor ServerSession {
         self.location = location
         self.servedSensorLocation = servedSensorLocation
         self.peripheral = peripheral
+        self.clock = clock
     }
 
     static func open(
@@ -104,6 +121,7 @@ actor ServerSession {
         location: ServerLocationConfiguration,
         servedSensorLocation: ServedSensorLocationBox?,
         peripheral: any BluetoothPeripheral,
+        clock: any ServerClock,
     ) async throws -> ServerSession {
         let session = ServerSession(
             service: service,
@@ -112,6 +130,7 @@ actor ServerSession {
             location: location,
             servedSensorLocation: servedSensorLocation,
             peripheral: peripheral,
+            clock: clock,
         )
         do {
             try await withTaskCancellationHandler {
@@ -203,21 +222,7 @@ actor ServerSession {
 
     func close() async {
         beginShutdown()
-
-        senderTask?.cancel()
-        procedureTask?.cancel()
-        wheelTask?.cancel()
-        crankTask?.cancel()
-
-        _ = await senderTask?.value
-        _ = await procedureTask?.value
-        _ = await wheelTask?.value
-        _ = await crankTask?.value
-
-        senderTask = nil
-        procedureTask = nil
-        wheelTask = nil
-        crankTask = nil
+        await stopTasks()
 
         await peripheral.stopAdvertising()
 
@@ -226,18 +231,7 @@ actor ServerSession {
         }
         publishStage = .none
 
-        readTask?.cancel()
-        writeTask?.cancel()
-        subscriptionTask?.cancel()
-        readyTask?.cancel()
-        _ = await readTask?.value
-        _ = await writeTask?.value
-        _ = await subscriptionTask?.value
-        _ = await readyTask?.value
-        readTask = nil
-        writeTask = nil
-        subscriptionTask = nil
-        readyTask = nil
+        await stopInboundTask()
 
         measurementSubscribers.removeAll()
         controlPointSubscribers.removeAll()
@@ -245,7 +239,9 @@ actor ServerSession {
 
     private func beginShutdown() {
         closed = true
+        pendingInboundEvents.removeAll()
         resumeNotifyReadyWaiter()
+        resumeNotifyReadyWaiterParkedWaiters()
         resumeOutboundQueueWaiter()
         resumeAllMeasurementSubscriberWaiters()
         resumeAllControlPointSubscriberWaiters()
@@ -254,18 +250,40 @@ actor ServerSession {
         resumeAllOutboundCountWaiters()
     }
 
+    private func stopTasks() async {
+        let timeoutTask = procedureTimeoutTask
+        senderTask?.cancel()
+        procedureTask?.cancel()
+        timeoutTask?.cancel()
+        wheelTask?.cancel()
+        crankTask?.cancel()
+
+        _ = await senderTask?.value
+        _ = await procedureTask?.value
+        _ = await timeoutTask?.value
+        _ = await wheelTask?.value
+        _ = await crankTask?.value
+
+        senderTask = nil
+        procedureTask = nil
+        procedureTimeoutTask = nil
+        wheelTask = nil
+        crankTask = nil
+    }
+
+    private func stopInboundTask() async {
+        inboundTask?.cancel()
+        _ = await inboundTask?.value
+        inboundTask = nil
+        pendingInboundEvents.removeAll()
+    }
+
     private func startup() async throws {
         try await waitForPoweredOn()
+        startLossCount = await peripheral.powerLossCount
 
-        let readStream = await peripheral.readRequests
-        let writeStream = await peripheral.writeTransactions
-        let subscriptionStream = await peripheral.subscriptionChanges
-        let readyStream = await peripheral.subscriberUpdatesReady
-
-        readTask = spawnReadLoop(stream: readStream)
-        writeTask = spawnWriteLoop(stream: writeStream)
-        subscriptionTask = spawnSubscriptionLoop(stream: subscriptionStream)
-        readyTask = spawnReadyLoop(stream: readyStream)
+        let eventStream = await peripheral.events
+        inboundTask = spawnInboundTask(stream: eventStream)
 
         do {
             try await peripheral.add(service)
@@ -279,9 +297,7 @@ actor ServerSession {
         }
 
         do {
-            try await peripheral.startAdvertising(
-                Advertisement(localName: nil, serviceUUIDs: [service.uuid]),
-            )
+            try await peripheral.startAdvertising(advertisement)
         } catch {
             try? await peripheral.removeService(uuid: service.uuid)
             publishStage = .none
@@ -294,28 +310,34 @@ actor ServerSession {
         }
         publishStage = .advertising
 
+        // A loss during startup fails start() even if power came back before the calls finished.
+        if await peripheral.powerLossCount != startLossCount {
+            throw ServerError.notPoweredOn
+        }
+
         senderTask = spawnSenderTask()
+        await drainPendingInboundEvents()
+        if closed || Task.isCancelled {
+            throw CancellationError()
+        }
         startCrankLoopIfNeeded()
         startWheelLoopIfNeeded()
+        startupGateOpen = true
+    }
+
+    /// Handles events buffered during startup, in arrival order, before the startup gate
+    /// opens. Returns with the buffer empty; the caller opens the gate synchronously after
+    /// this returns, with no `await` in between.
+    private func drainPendingInboundEvents() async {
+        while !closed, !pendingInboundEvents.isEmpty {
+            let event = pendingInboundEvents.removeFirst()
+            await handleInbound(event)
+        }
     }
 
     private func rollbackStartup() async {
         beginShutdown()
-
-        senderTask?.cancel()
-        procedureTask?.cancel()
-        wheelTask?.cancel()
-        crankTask?.cancel()
-
-        _ = await senderTask?.value
-        _ = await procedureTask?.value
-        _ = await wheelTask?.value
-        _ = await crankTask?.value
-
-        senderTask = nil
-        procedureTask = nil
-        wheelTask = nil
-        crankTask = nil
+        await stopTasks()
 
         if publishStage == .advertising {
             await peripheral.stopAdvertising()
@@ -326,21 +348,110 @@ actor ServerSession {
         }
         publishStage = .none
 
-        readTask?.cancel()
-        writeTask?.cancel()
-        subscriptionTask?.cancel()
-        readyTask?.cancel()
-        _ = await readTask?.value
-        _ = await writeTask?.value
-        _ = await subscriptionTask?.value
-        _ = await readyTask?.value
-        readTask = nil
-        writeTask = nil
-        subscriptionTask = nil
-        readyTask = nil
+        await stopInboundTask()
 
         measurementSubscribers.removeAll()
         controlPointSubscribers.removeAll()
+    }
+
+    private var advertisement: Advertisement {
+        Advertisement(localName: nil, serviceUUIDs: [service.uuid])
+    }
+
+    /// Settles any recovery already in progress before answering.
+    func isRadioSuspended() async -> Bool {
+        if recoveryInProgress {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                if !recoveryInProgress {
+                    continuation.resume()
+                    return
+                }
+                recoveryIdleWaiters.append(continuation)
+            }
+        }
+        return radioLost
+    }
+
+    private func handleRadioState(_ state: BluetoothState) async {
+        let previous = lastRadioState
+        lastRadioState = state
+        guard state == .poweredOn else {
+            if !radioLost {
+                suspendForRadioLoss()
+            }
+            return
+        }
+        // Retrying needs a real transition back into .poweredOn, not a duplicate event.
+        guard previous != .poweredOn, radioLost, !closed else {
+            return
+        }
+        recoveryInProgress = true
+        await recoverFromRadioLoss()
+        recoveryInProgress = false
+        let waiters = recoveryIdleWaiters
+        recoveryIdleWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func suspendForRadioLoss() {
+        radioLost = true
+        radioLossEpoch &+= 1
+        measurementSubscribers.removeAll()
+        resumeMeasurementSubscriberWaiters()
+        controlPointSubscribers.removeAll()
+        resumeControlPointSubscriberWaiters()
+        notifyReady = false
+        wakeReadyWaiterWithoutLatch()
+    }
+
+    /// Republishes the build-time service. `close()` may run during any await here and owns
+    /// teardown; this removes only what it published after `closed` is set.
+    private func recoverFromRadioLoss() async {
+        await peripheral.stopAdvertising()
+        if closed {
+            return
+        }
+        if publishStage != .none {
+            try? await peripheral.removeService(uuid: service.uuid)
+            publishStage = .none
+        }
+        if closed {
+            return
+        }
+
+        do {
+            try await peripheral.add(service)
+        } catch {
+            return
+        }
+        publishStage = .serviceAdded
+        if closed {
+            try? await peripheral.removeService(uuid: service.uuid)
+            publishStage = .none
+            return
+        }
+
+        do {
+            try await peripheral.startAdvertising(advertisement)
+        } catch {
+            try? await peripheral.removeService(uuid: service.uuid)
+            publishStage = .none
+            return
+        }
+        if closed {
+            await peripheral.stopAdvertising()
+            if publishStage != .none {
+                try? await peripheral.removeService(uuid: service.uuid)
+                publishStage = .none
+            }
+            return
+        }
+
+        publishStage = .advertising
+        notifyReady = false
+        radioLost = false
     }
 
     private var hasControlPointCharacteristic: Bool {
@@ -448,13 +559,36 @@ actor ServerSession {
         return false
     }
 
+    private func isHeadIndication(_ id: UUID) -> Bool {
+        guard case .indication(let head) = outboundQueue.first else {
+            return false
+        }
+        return head.id == id
+    }
+
     private func removeHeadIndicationIfOwned(_ id: UUID, _ indication: inout IndicationItem) -> Bool {
-        guard case .indication(let head) = outboundQueue.first, head.id == id else {
+        guard isHeadIndication(id) else {
             return false
         }
         outboundQueue.removeFirst()
         completeIndication(&indication)
         return true
+    }
+
+    /// Removes the queued indication with `id` wherever it sits. Returns whether it was the head,
+    /// or `nil` when no such indication is queued.
+    private func removeIndication(id: UUID) -> Bool? {
+        let index = outboundQueue.firstIndex { item in
+            if case .indication(let indication) = item {
+                return indication.id == id
+            }
+            return false
+        }
+        guard let index, case var .indication(indication) = outboundQueue.remove(at: index) else {
+            return nil
+        }
+        completeIndication(&indication)
+        return index == 0
     }
 
     /// Returns `true` when the pump should stop processing this indication item.
@@ -491,6 +625,8 @@ actor ServerSession {
                 return
             }
 
+            notifyReady = false
+            let lossEpoch = radioLossEpoch
             let accepted: Bool
             do {
                 accepted = try await peripheral.updateValue(
@@ -506,19 +642,9 @@ actor ServerSession {
             }
 
             if accepted {
-                if isStaleWheelPayload(item) {
-                    if item.producedWheel == nil, let crank = item.producedCrank {
-                        crankCache = crank
-                    }
-                } else {
-                    if let wheel = item.producedWheel {
-                        wheelCache = wheel
-                    }
-                    if let crank = item.producedCrank {
-                        crankCache = crank
-                    }
-                    acceptedMeasurementCount += 1
-                    resumeAcceptedMeasurementCountWaiters(for: acceptedMeasurementCount)
+                // A send that overlapped a radio loss reached no current subscriber.
+                if radioLossEpoch == lossEpoch {
+                    recordAcceptedMeasurement(item)
                 }
                 outboundQueue.removeFirst()
                 completeEmit(&item)
@@ -550,6 +676,23 @@ actor ServerSession {
         }
     }
 
+    private func recordAcceptedMeasurement(_ item: MeasurementItem) {
+        if isStaleWheelPayload(item) {
+            if item.producedWheel == nil, let crank = item.producedCrank {
+                crankCache = crank
+            }
+            return
+        }
+        if let wheel = item.producedWheel {
+            wheelCache = wheel
+        }
+        if let crank = item.producedCrank {
+            crankCache = crank
+        }
+        acceptedMeasurementCount += 1
+        resumeAcceptedMeasurementCountWaiters(for: acceptedMeasurementCount)
+    }
+
     private func processIndicationItem() async {
         guard case var .indication(indication) = outboundQueue.first else {
             return
@@ -558,6 +701,12 @@ actor ServerSession {
         let indicationID = indication.id
 
         while !Task.isCancelled {
+            // A timeout, unsubscribe, or radio loss may have removed this item and ended its
+            // procedure while the pump was suspended; it must not be sent or ended again.
+            guard isHeadIndication(indicationID) else {
+                return
+            }
+
             if closed {
                 if removeHeadIndicationIfOwned(indicationID, &indication) {
                     endProcedure()
@@ -570,6 +719,7 @@ actor ServerSession {
                 return
             }
 
+            notifyReady = false
             let accepted: Bool
             do {
                 accepted = try await peripheral.updateValue(
@@ -582,6 +732,10 @@ actor ServerSession {
                 if removeHeadIndicationIfOwned(indicationID, &indication) {
                     endProcedure()
                 }
+                return
+            }
+
+            guard isHeadIndication(indicationID) else {
                 return
             }
 
@@ -605,6 +759,10 @@ actor ServerSession {
 
             if closed {
                 drainOutboundQueueOnShutdown()
+                return
+            }
+
+            guard isHeadIndication(indicationID) else {
                 return
             }
 
@@ -647,7 +805,44 @@ actor ServerSession {
             return
         }
         procedureInProgress = false
+        procedureIndicationID = nil
+        procedureTimeoutTask?.cancel()
+        procedureTimeoutTask = nil
+        procedureGeneration &+= 1
         resumeProcedureIdleWaiters()
+    }
+
+    private func armProcedureTimeout() {
+        procedureGeneration &+= 1
+        procedureTimedOut = false
+        procedureIndicationID = nil
+        let generation = procedureGeneration
+        let clock = clock
+        procedureTimeoutTask = Task {
+            do {
+                try await clock.sleep(for: Self.procedureTimeout)
+            } catch {
+                return
+            }
+            await self.procedureTimeoutElapsed(generation)
+        }
+    }
+
+    /// Ends the procedure without an indication. A delegate call still running is cancelled and
+    /// the procedure ends when it returns, so delegate calls never overlap.
+    private func procedureTimeoutElapsed(_ generation: UInt64) async {
+        guard generation == procedureGeneration, procedureInProgress, !closed else {
+            return
+        }
+        procedureTimedOut = true
+        guard let indicationID = procedureIndicationID else {
+            procedureTask?.cancel()
+            return
+        }
+        if removeIndication(id: indicationID) == true {
+            wakeReadyWaiterWithoutLatch()
+        }
+        endProcedure()
     }
 
     private func resumeProcedureIdleWaiters() {
@@ -685,7 +880,7 @@ actor ServerSession {
     }
 
     private func enqueueIndication(_ response: CSCControlPointResponse, centralID: UUID) {
-        guard !closed else {
+        guard !closed, !procedureTimedOut else {
             endProcedure()
             return
         }
@@ -695,6 +890,7 @@ actor ServerSession {
             centralID: centralID,
             completionContinuation: nil,
         )
+        procedureIndicationID = item.id
         outboundQueue.append(.indication(item))
         resumeOutboundQueueWaiter()
         resumeOutboundCountWaiters()
@@ -845,47 +1041,62 @@ actor ServerSession {
         }
     }
 
-    private func spawnReadLoop(stream: AsyncStream<PeripheralReadRequest>) -> Task<Void, Never> {
+    /// The only consumer of `peripheral.events`. Handlers run one at a time in arrival order.
+    private func spawnInboundTask(stream: AsyncStream<PeripheralEvent>) -> Task<Void, Never> {
         Task {
-            for await request in stream {
+            for await event in stream {
                 if Task.isCancelled {
                     break
                 }
-                await self.handleRead(request)
+                await self.receiveInbound(event)
             }
         }
     }
 
-    private func spawnWriteLoop(stream: AsyncStream<PeripheralWriteTransaction>) -> Task<Void, Never> {
-        Task {
-            for await transaction in stream {
-                if Task.isCancelled {
-                    break
-                }
-                await self.handleWrite(transaction)
-            }
+    private func receiveInbound(_ event: PeripheralEvent) async {
+        if closed {
+            return
+        }
+        guard startupGateOpen else {
+            pendingInboundEvents.append(event)
+            return
+        }
+        await handleInbound(event)
+    }
+
+    private func handleInbound(_ event: PeripheralEvent) async {
+        switch event {
+        case let .stateUpdated(state):
+            await handleRadioState(state)
+        case let .read(request):
+            await handleRead(request)
+        case let .writeTransaction(transaction):
+            await handleWrite(transaction)
+        case let .subscription(change):
+            await handleSubscription(change)
+        case .readyToUpdateSubscribers:
+            signalNotifyReady()
         }
     }
 
-    private func spawnSubscriptionLoop(stream: AsyncStream<SubscriptionChange>) -> Task<Void, Never> {
-        Task {
-            for await change in stream {
-                if Task.isCancelled {
-                    break
-                }
-                await self.handleSubscription(change)
+    func waitUntilNotifyReadyWaiterParked() async {
+        if closed || notifyReadyWaiter != nil {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if closed || notifyReadyWaiter != nil {
+                continuation.resume()
+                return
             }
+            notifyReadyWaiterParkedWaiters.append(continuation)
         }
     }
 
-    private func spawnReadyLoop(stream: AsyncStream<Void>) -> Task<Void, Never> {
-        Task {
-            for await _ in stream {
-                if Task.isCancelled {
-                    break
-                }
-                self.signalNotifyReady()
-            }
+    private func resumeNotifyReadyWaiterParkedWaiters() {
+        let waiters = notifyReadyWaiterParkedWaiters
+        notifyReadyWaiterParkedWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
         }
     }
 
@@ -924,6 +1135,7 @@ actor ServerSession {
                 return
             }
             notifyReadyWaiter = continuation
+            resumeNotifyReadyWaiterParkedWaiters()
         }
     }
 
@@ -1040,6 +1252,7 @@ actor ServerSession {
             return
         }
 
+        armProcedureTimeout()
         let centralID = request.centralID
         let decodedRequest = decoded
         procedureTask = Task {
@@ -1201,6 +1414,7 @@ actor ServerSession {
 
     private func runUpdateSensorLocationProcedure(assignedNumber: UInt8, centralID: UUID) async {
         guard let configuration = multipleSensorLocationsConfiguration else {
+            endProcedure()
             return
         }
 
@@ -1245,6 +1459,7 @@ actor ServerSession {
 
     private func runRequestSupportedSensorLocationsProcedure(centralID: UUID) async {
         guard let configuration = multipleSensorLocationsConfiguration else {
+            endProcedure()
             return
         }
 
@@ -1290,16 +1505,30 @@ actor ServerSession {
             case CSCS.controlPointUUID:
                 controlPointSubscribers.remove(centralID)
                 resumeControlPointSubscriberWaiters()
-                if case var .indication(indication) = outboundQueue.first,
-                   indication.centralID == centralID
-                {
-                    outboundQueue.removeFirst()
-                    completeIndication(&indication)
-                    endProcedure()
-                    wakeReadyWaiterWithoutLatch()
-                }
+                dropQueuedIndications(for: centralID)
             default:
                 return
+            }
+        }
+    }
+
+    private func dropQueuedIndications(for centralID: UUID) {
+        let ids = outboundQueue.compactMap { item -> UUID? in
+            if case .indication(let indication) = item, indication.centralID == centralID {
+                return indication.id
+            }
+            return nil
+        }
+        for id in ids {
+            let isProcedureIndication = id == procedureIndicationID
+            guard let wasHead = removeIndication(id: id) else {
+                continue
+            }
+            if wasHead {
+                endProcedure()
+                wakeReadyWaiterWithoutLatch()
+            } else if isProcedureIndication {
+                endProcedure()
             }
         }
     }
@@ -1435,6 +1664,8 @@ actor ServerSession {
         }
         if let peripheralError = error as? BluetoothPeripheralError {
             switch peripheralError {
+            case .notPoweredOn:
+                return .notPoweredOn
             case .advertisingFailed(let reason):
                 return .advertisingFailed(reason: reason)
             default:

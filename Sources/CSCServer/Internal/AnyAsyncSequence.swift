@@ -3,9 +3,9 @@ package struct AnyAsyncSequence<Element: Sendable>: Sendable {
 
     package init<Base: AsyncSequence & Sendable>(
         _ base: Base,
-    ) where Base.Element == Element, Base.AsyncIterator: Sendable {
+    ) where Base.Element == Element {
         makeIterator = {
-            Iterator(base: base)
+            Iterator(box: IteratorBox(base: base.makeAsyncIterator()))
         }
     }
 
@@ -16,12 +16,11 @@ package struct AnyAsyncSequence<Element: Sendable>: Sendable {
     package struct Iterator: AsyncIteratorProtocol {
         private let nextValue: () async throws -> Element?
 
-        fileprivate init<Base: AsyncSequence & Sendable>(
-            base: Base,
-        ) where Base.Element == Element, Base.AsyncIterator: Sendable {
-            let actor = IteratorActor(iterator: base.makeAsyncIterator())
+        fileprivate init<Base: AsyncIteratorProtocol>(
+            box: IteratorBox<Base>,
+        ) where Base.Element == Element {
             nextValue = {
-                try await actor.next()
+                try await box.next()
             }
         }
 
@@ -31,17 +30,19 @@ package struct AnyAsyncSequence<Element: Sendable>: Sendable {
     }
 }
 
-private actor IteratorActor<I: AsyncIteratorProtocol & Sendable> {
-    private var iterator: I
+/// Holds a base iterator that need not be `Sendable`, such as `AsyncStream.Iterator`.
+///
+/// Each `makeAsyncIterator()` creates its own box. `ServerSession` iterates each box from exactly
+/// one task (`startCrankLoopIfNeeded` / `startWheelLoopIfNeeded`), so `next()` calls never overlap.
+/// The iterator must not cross into a second task.
+private final class IteratorBox<Base: AsyncIteratorProtocol>: @unchecked Sendable where Base.Element: Sendable {
+    private var base: Base
 
-    init(iterator: I) {
-        self.iterator = iterator
+    init(base: Base) {
+        self.base = base
     }
 
-    func next() async throws -> I.Element? {
-        var local = iterator
-        let value = try await local.next()
-        iterator = local
-        return value
+    func next() async throws -> Base.Element? {
+        try await base.next()
     }
 }

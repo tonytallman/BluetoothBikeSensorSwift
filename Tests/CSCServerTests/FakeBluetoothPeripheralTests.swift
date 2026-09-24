@@ -146,7 +146,7 @@ struct FakeBluetoothPeripheralTests {
         try await fake.add(service)
         #expect(await fake.recordedCalls == [.add(service)])
 
-        let stream = await fake.readRequests
+        let stream = await fake.events
         var iterator = stream.makeAsyncIterator()
         let requestID = UUID()
         let centralID = UUID()
@@ -159,7 +159,7 @@ struct FakeBluetoothPeripheralTests {
                 offset: 0,
             ),
         )
-        let read = await iterator.next()
+        let read = Self.readRequest(await iterator.next())
         #expect(read?.id == requestID)
         #expect(read?.offset == 0)
     }
@@ -216,7 +216,7 @@ struct FakeBluetoothPeripheralTests {
 
     @Test func readRoundTripAndRespondValidation() async throws {
         let fake = FakeBluetoothPeripheral()
-        let stream = await fake.readRequests
+        let stream = await fake.events
         var iterator = stream.makeAsyncIterator()
 
         let requestID = UUID()
@@ -233,7 +233,7 @@ struct FakeBluetoothPeripheralTests {
             ),
         )
 
-        let read = await iterator.next()
+        let read = Self.readRequest(await iterator.next())
         #expect(read?.id == requestID)
         #expect(read?.offset == 3)
 
@@ -250,7 +250,7 @@ struct FakeBluetoothPeripheralTests {
                 offset: 0,
             ),
         )
-        _ = await iterator.next()
+        #expect(Self.readRequest(await iterator.next())?.id == missingValueID)
 
         await #expect(throws: BluetoothPeripheralError.missingReadValue) {
             try await fake.respond(to: missingValueID, with: .success, value: nil)
@@ -268,7 +268,7 @@ struct FakeBluetoothPeripheralTests {
 
     @Test func emptyReadSuccessIsAccepted() async throws {
         let fake = FakeBluetoothPeripheral()
-        let stream = await fake.readRequests
+        let stream = await fake.events
         var iterator = stream.makeAsyncIterator()
 
         let requestID = UUID()
@@ -285,7 +285,7 @@ struct FakeBluetoothPeripheralTests {
                 offset: 0,
             ),
         )
-        _ = await iterator.next()
+        #expect(Self.readRequest(await iterator.next())?.id == requestID)
 
         let nilRequestID = UUID()
         await fake.emitRead(
@@ -297,7 +297,7 @@ struct FakeBluetoothPeripheralTests {
                 offset: 0,
             ),
         )
-        _ = await iterator.next()
+        #expect(Self.readRequest(await iterator.next())?.id == nilRequestID)
 
         await #expect(throws: BluetoothPeripheralError.missingReadValue) {
             try await fake.respond(to: nilRequestID, with: .success, value: nil)
@@ -316,7 +316,7 @@ struct FakeBluetoothPeripheralTests {
 
     @Test func writeRoundTripUsesSingleRespond() async throws {
         let fake = FakeBluetoothPeripheral()
-        let stream = await fake.writeTransactions
+        let stream = await fake.events
         var iterator = stream.makeAsyncIterator()
 
         let centralID = UUID()
@@ -344,7 +344,7 @@ struct FakeBluetoothPeripheralTests {
         )
 
         await fake.emitWriteTransaction(transaction)
-        let received = await iterator.next()
+        let received = Self.writeTransaction(await iterator.next())
         #expect(received?.id == transactionID)
         #expect(received?.requests.count == 2)
 
@@ -368,7 +368,7 @@ struct FakeBluetoothPeripheralTests {
                 ],
             ),
         )
-        _ = await iterator.next()
+        #expect(Self.writeTransaction(await iterator.next())?.id == outstandingID)
 
         await #expect(throws: BluetoothPeripheralError.unexpectedResponseValue) {
             try await fake.respond(to: outstandingID, with: .success, value: Data([0x01]))
@@ -378,9 +378,9 @@ struct FakeBluetoothPeripheralTests {
         ])
     }
 
-    @Test func subscriptionChangesYieldSubscribedThenUnsubscribed() async {
+    @Test func eventsYieldSubscribedThenUnsubscribed() async {
         let fake = FakeBluetoothPeripheral()
-        let stream = await fake.subscriptionChanges
+        let stream = await fake.events
         var iterator = stream.makeAsyncIterator()
 
         let centralID = UUID()
@@ -404,16 +404,199 @@ struct FakeBluetoothPeripheralTests {
 
         let subscribed = await iterator.next()
         let unsubscribed = await iterator.next()
-        #expect(subscribed == .subscribed(
+        #expect(subscribed == .subscription(.subscribed(
             centralID: centralID,
             serviceUUID: serviceUUID,
             characteristicUUID: characteristicUUID,
-        ))
-        #expect(unsubscribed == .unsubscribed(
+        )))
+        #expect(unsubscribed == .subscription(.unsubscribed(
             centralID: centralID,
             serviceUUID: serviceUUID,
             characteristicUUID: characteristicUUID,
-        ))
+        )))
+    }
+
+    @Test func eventsPreserveEmitOrderAcrossKinds() async {
+        let fake = FakeBluetoothPeripheral()
+        let stream = await fake.events
+        var iterator = stream.makeAsyncIterator()
+
+        let read = PeripheralReadRequest(
+            id: UUID(),
+            centralID: UUID(),
+            serviceUUID: UUID(),
+            characteristicUUID: UUID(),
+            offset: 0,
+        )
+        let subscription = SubscriptionChange.subscribed(
+            centralID: UUID(),
+            serviceUUID: UUID(),
+            characteristicUUID: UUID(),
+        )
+        let write = PeripheralWriteTransaction(id: UUID(), requests: [])
+
+        await fake.emitRead(read)
+        await fake.emitSubscription(subscription)
+        await fake.emitWriteTransaction(write)
+        await fake.emitReadyToUpdateSubscribers()
+        await fake.setState(.poweredOff)
+
+        var received: [PeripheralEvent] = []
+        for _ in 0..<5 {
+            if let event = await iterator.next() {
+                received.append(event)
+            }
+        }
+        #expect(received == [
+            .read(read),
+            .subscription(subscription),
+            .writeTransaction(write),
+            .readyToUpdateSubscribers,
+            .stateUpdated(.poweredOff),
+        ])
+    }
+
+    @Test func poweredOnGuardsThrowWithoutRecording() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let service = Self.sampleService(notifyCharacteristic: true)
+        try await fake.add(service)
+        let readID = UUID()
+        await fake.emitRead(
+            PeripheralReadRequest(
+                id: readID,
+                centralID: UUID(),
+                serviceUUID: service.uuid,
+                characteristicUUID: service.characteristics[0].uuid,
+                offset: 0,
+            ),
+        )
+        await fake.setState(.poweredOff)
+        let callsBefore = await fake.recordedCalls
+
+        await #expect(throws: BluetoothPeripheralError.notPoweredOn) {
+            try await fake.add(Self.sampleService())
+        }
+        await #expect(throws: BluetoothPeripheralError.notPoweredOn) {
+            try await fake.startAdvertising(Advertisement(localName: nil, serviceUUIDs: []))
+        }
+        await #expect(throws: BluetoothPeripheralError.notPoweredOn) {
+            try await fake.updateValue(
+                Data([0x01]),
+                serviceUUID: service.uuid,
+                characteristicUUID: service.characteristics[0].uuid,
+                onSubscribedCentrals: nil,
+            )
+        }
+        await #expect(throws: BluetoothPeripheralError.notPoweredOn) {
+            try await fake.respond(to: readID, with: .success, value: Data([0x01]))
+        }
+        #expect(await fake.recordedCalls == callsBefore)
+        #expect(await fake.isAdvertising == false)
+
+        await fake.stopAdvertising()
+        try await fake.removeService(uuid: service.uuid)
+        await fake.removeAllServices()
+        #expect(await fake.recordedCalls == callsBefore + [
+            .stopAdvertising,
+            .removeService(uuid: service.uuid),
+            .removeAllServices,
+        ])
+    }
+
+    @Test func leavingPoweredOnStopsAdvertisingAndCountsLoss() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let service = Self.sampleService()
+        try await fake.add(service)
+        try await fake.startAdvertising(Advertisement(localName: nil, serviceUUIDs: [service.uuid]))
+        #expect(await fake.powerLossCount == 0)
+
+        await fake.setState(.poweredOn)
+        #expect(await fake.powerLossCount == 0)
+        #expect(await fake.isAdvertising)
+
+        await fake.setState(.resetting)
+        #expect(await fake.powerLossCount == 1)
+        #expect(await fake.isAdvertising == false)
+
+        await fake.setState(.poweredOff)
+        #expect(await fake.powerLossCount == 2)
+
+        await fake.setState(.poweredOn)
+        #expect(await fake.powerLossCount == 2)
+        try await fake.removeService(uuid: service.uuid)
+    }
+
+    @Test func heldCallsRecheckPowerOnRelease() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let service = Self.sampleService()
+        let advertisement = Advertisement(localName: nil, serviceUUIDs: [service.uuid])
+
+        await fake.holdNextAdd()
+        let offAdd = Task { try await fake.add(service) }
+        await fake.waitUntilAddHeld()
+        await fake.setState(.poweredOff)
+        await fake.releaseAdd()
+        await #expect(throws: BluetoothPeripheralError.notPoweredOn) {
+            try await offAdd.value
+        }
+
+        await fake.setState(.poweredOn)
+        await fake.holdNextAdvertise()
+        let offAdvertise = Task { try await fake.startAdvertising(advertisement) }
+        await fake.waitUntilAdvertiseHeld()
+        await fake.setState(.poweredOff)
+        await fake.releaseAdvertise()
+        await #expect(throws: BluetoothPeripheralError.notPoweredOn) {
+            try await offAdvertise.value
+        }
+        #expect(await fake.recordedCalls.isEmpty)
+
+        await fake.setState(.poweredOn)
+        await fake.holdNextAdd()
+        let onAdd = Task { try await fake.add(service) }
+        await fake.waitUntilAddHeld()
+        #expect(await fake.recordedCalls.isEmpty)
+        await fake.releaseAdd()
+        try await onAdd.value
+
+        await fake.holdNextAdvertise()
+        let onAdvertise = Task { try await fake.startAdvertising(advertisement) }
+        await fake.waitUntilAdvertiseHeld()
+        await fake.releaseAdvertise()
+        try await onAdvertise.value
+
+        #expect(await fake.recordedCalls == [.add(service), .startAdvertising(advertisement)])
+        #expect(await fake.isAdvertising)
+    }
+
+    @Test func heldUpdateValueRecordsBeforeParkAndReturnsAcceptedAtRelease() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let service = Self.sampleService(notifyCharacteristic: true)
+        try await fake.add(service)
+        let characteristicUUID = service.characteristics[0].uuid
+        let value = Data([0x10])
+
+        await fake.holdNextUpdateValue()
+        let update = Task {
+            try await fake.updateValue(
+                value,
+                serviceUUID: service.uuid,
+                characteristicUUID: characteristicUUID,
+                onSubscribedCentrals: nil,
+            )
+        }
+        await fake.waitUntilUpdateValueHeld()
+        let expectedCall = FakeBluetoothPeripheral.RecordedCall.updateValue(
+            value: value,
+            serviceUUID: service.uuid,
+            characteristicUUID: characteristicUUID,
+            centralIDs: .all,
+        )
+        #expect(await fake.recordedCalls == [.add(service), expectedCall])
+
+        await fake.setNextUpdateValueAccepted(false)
+        await fake.releaseUpdateValue()
+        #expect(try await update.value == false)
     }
 
     @Test func notifyBackpressureAndCentralFilters() async throws {
@@ -441,10 +624,10 @@ struct FakeBluetoothPeripheralTests {
         )
         #expect(rejected == false)
 
-        let readyStream = await fake.subscriberUpdatesReady
-        var readyIterator = readyStream.makeAsyncIterator()
+        let eventStream = await fake.events
+        var eventIterator = eventStream.makeAsyncIterator()
         await fake.emitReadyToUpdateSubscribers()
-        #expect(await readyIterator.next() != nil)
+        #expect(await eventIterator.next() == .readyToUpdateSubscribers)
 
         let centralIDs = [UUID(), UUID()]
         _ = try await fake.updateValue(
@@ -510,6 +693,20 @@ struct FakeBluetoothPeripheralTests {
 
         _ = await fake.stateUpdates
         await waiter.value
+    }
+
+    private static func readRequest(_ event: PeripheralEvent?) -> PeripheralReadRequest? {
+        if case let .read(request) = event {
+            return request
+        }
+        return nil
+    }
+
+    private static func writeTransaction(_ event: PeripheralEvent?) -> PeripheralWriteTransaction? {
+        if case let .writeTransaction(transaction) = event {
+            return transaction
+        }
+        return nil
     }
 
     private static func sampleService(notifyCharacteristic: Bool = false) -> PeripheralService {

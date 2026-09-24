@@ -24,6 +24,11 @@ final class ControlledWheelSequence: AsyncSequence, Sendable {
         await gate.release()
     }
 
+    /// Returns once an iterator has returned `nil`.
+    func waitUntilEnded() async {
+        await counter.waitUntilEnded()
+    }
+
     struct Iterator: AsyncIteratorProtocol {
         let counter: RequestCounter
         let gate: SampleGate
@@ -32,6 +37,7 @@ final class ControlledWheelSequence: AsyncSequence, Sendable {
 
         mutating func next() async throws -> WheelRevolution? {
             guard index < samples.count else {
+                await counter.recordEnd()
                 return nil
             }
             await gate.waitUntilReleased()

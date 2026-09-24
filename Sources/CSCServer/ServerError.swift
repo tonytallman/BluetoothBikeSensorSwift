@@ -4,9 +4,10 @@ import Foundation
 public enum ServerError: Error, Sendable, Equatable {
     /// Reserved for unsupported builder configurations. No current configuration throws this case.
     case unsupportedConfiguration
-    /// ``Server/start()`` was called while a session is already active.
+    /// ``Server/start()`` was called while a server is starting, running, or stopping on this or another `Server`.
     case alreadyStarted
-    /// Bluetooth is unavailable or not powered on during startup.
+    /// Bluetooth was unavailable, powered off, unauthorized, or unsupported during startup, or was lost before
+    /// ``Server/start()`` finished.
     case notPoweredOn
     /// Publishing a GATT service or measurement notification failed.
     case publishFailed(reason: String)

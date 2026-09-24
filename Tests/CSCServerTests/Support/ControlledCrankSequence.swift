@@ -39,6 +39,26 @@ final class ControlledCrankSequence: AsyncSequence, Sendable {
 actor RequestCounter {
     private var requestCount = 0
     private var waiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var ended = false
+    private var endWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func waitUntilEnded() async {
+        if ended {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            endWaiters.append(continuation)
+        }
+    }
+
+    func recordEnd() {
+        ended = true
+        let pending = endWaiters
+        endWaiters.removeAll()
+        for waiter in pending {
+            waiter.resume()
+        }
+    }
 
     func waitForRequest(count: Int) async {
         if requestCount >= count {

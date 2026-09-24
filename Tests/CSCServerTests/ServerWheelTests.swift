@@ -534,6 +534,7 @@ struct ServerWheelTests {
                 ],
             ),
         )
+        await delegate.waitUntilRecordedCount(1)
 
         await yield(WheelRevolution(cumulativeRevolutions: 5, lastEventTime: 6))
         await fake.waitForRecordedCall { call in
@@ -724,6 +725,7 @@ struct ServerWheelTests {
             }
             return false
         }
+        await sequence.waitUntilEnded()
 
         #expect(await fake.isAdvertising)
 
@@ -743,6 +745,7 @@ struct ServerWheelTests {
             }
             return false
         }
+        #expect(await fake.read(characteristicUUID: CSCS.featureUUID) == server.feature.encode())
     }
 
     @Test func stopDuringAcceptedUpdateValueReturns() async throws {

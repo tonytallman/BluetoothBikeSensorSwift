@@ -25,6 +25,11 @@ final class YieldingCrankSequence: AsyncSequence, Sendable {
     func iterationWasCancelled() async -> Bool {
         await channel.iterationWasCancelled
     }
+
+    /// Returns once `next()` has been entered at least `count` times.
+    func waitUntilNextEntered(count: Int) async {
+        await channel.waitUntilNextEntered(count: count)
+    }
 }
 
 actor YieldChannel {
@@ -32,6 +37,8 @@ actor YieldChannel {
     private var waiters: [CheckedContinuation<CrankRevolution?, Error>] = []
     private var finished = false
     private(set) var iterationWasCancelled = false
+    private var entryCount = 0
+    private var entryWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
     func send(_ revolution: CrankRevolution) {
         if let waiter = waiters.first {
@@ -42,7 +49,23 @@ actor YieldChannel {
         queue.append(revolution)
     }
 
+    func waitUntilNextEntered(count: Int) async {
+        if entryCount >= count {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if entryCount >= count {
+                continuation.resume()
+                return
+            }
+            entryWaiters.append((count, continuation))
+        }
+    }
+
     func next() async throws -> CrankRevolution? {
+        entryCount += 1
+        resumeEntryWaiters(for: entryCount)
+
         if let next = queue.first {
             queue.removeFirst()
             return next
@@ -60,6 +83,18 @@ actor YieldChannel {
                 await self.cancelCurrentWait()
             }
         }
+    }
+
+    private func resumeEntryWaiters(for count: Int) {
+        var remaining: [(Int, CheckedContinuation<Void, Never>)] = []
+        for (target, continuation) in entryWaiters {
+            if count >= target {
+                continuation.resume()
+            } else {
+                remaining.append((target, continuation))
+            }
+        }
+        entryWaiters = remaining
     }
 
     private func cancelCurrentWait() {

@@ -56,8 +56,7 @@ extension Server {
         ServerLocation.Unselected
     >
     where Revolutions: AsyncSequence & Sendable,
-          Revolutions.Element == WheelRevolution,
-          Revolutions.AsyncIterator: Sendable
+          Revolutions.Element == WheelRevolution
     {
         ServerBuilder(
             wheel: WheelConfiguration(
@@ -76,8 +75,7 @@ extension Server {
         ServerLocation.Unselected
     >
     where Revolutions: AsyncSequence & Sendable,
-          Revolutions.Element == CrankRevolution,
-          Revolutions.AsyncIterator: Sendable
+          Revolutions.Element == CrankRevolution
     {
         ServerBuilder(crankRevolutions: AnyAsyncSequence(revolutions))
     }
@@ -94,8 +92,7 @@ extension ServerBuilder where Wheel == ServerWheel.Unselected {
         Location
     >
     where Revolutions: AsyncSequence & Sendable,
-          Revolutions.Element == WheelRevolution,
-          Revolutions.AsyncIterator: Sendable
+          Revolutions.Element == WheelRevolution
     {
         ServerBuilder<ServerWheel.Selected, Crank, Location>(
             wheel: WheelConfiguration(
@@ -118,8 +115,7 @@ extension ServerBuilder where Crank == ServerCrank.Unselected {
         Location
     >
     where Revolutions: AsyncSequence & Sendable,
-          Revolutions.Element == CrankRevolution,
-          Revolutions.AsyncIterator: Sendable
+          Revolutions.Element == CrankRevolution
     {
         ServerBuilder<Wheel, ServerCrank.Selected, Location>(
             wheel: wheel,
