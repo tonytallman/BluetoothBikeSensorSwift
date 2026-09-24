@@ -229,7 +229,7 @@ actor ServerSession {
         resumeAllMeasurementSubscriberWaiters()
         resumeAllControlPointSubscriberWaiters()
         resumeMeasurementSubscriberWaiterParkedWaiters()
-        resumeAcceptedMeasurementCountWaiters()
+        resumeAllAcceptedMeasurementCountWaiters()
     }
 
     private func startup() async throws {
@@ -637,6 +637,14 @@ actor ServerSession {
         }
     }
 
+    private func resumeAllAcceptedMeasurementCountWaiters() {
+        let waiters = acceptedMeasurementCountWaiters
+        acceptedMeasurementCountWaiters.removeAll()
+        for (_, continuation) in waiters {
+            continuation.resume()
+        }
+    }
+
     private func resumeAcceptedMeasurementCountWaiters(for count: Int) {
         var remaining: [(Int, CheckedContinuation<Void, Never>)] = []
         for (target, continuation) in acceptedMeasurementCountWaiters {
@@ -647,11 +655,6 @@ actor ServerSession {
             }
         }
         acceptedMeasurementCountWaiters = remaining
-    }
-
-    private func resumeAcceptedMeasurementCountWaiters() {
-        let count = acceptedMeasurementCount
-        resumeAcceptedMeasurementCountWaiters(for: count)
     }
 
     private func enqueueMeasurement(_ item: MeasurementItem) {
@@ -901,10 +904,6 @@ actor ServerSession {
     }
 
     private func handleWrite(_ transaction: PeripheralWriteTransaction) async {
-        if closed {
-            return
-        }
-
         guard transaction.requests.count == 1,
               transaction.requests[0].serviceUUID == service.uuid
         else {

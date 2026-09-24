@@ -351,9 +351,12 @@ struct ServerControlPointTests {
         await fake.emitReadyToUpdateSubscribers()
         await server.waitUntilControlPointProcedureIdle()
 
-        await fake.emitWriteTransaction(controlPointWrite(centralID: writer))
+        let write3ID = UUID()
+        await fake.emitWriteTransaction(controlPointWrite(centralID: writer, transactionID: write3ID))
         await fake.waitForRecordedCall { call in
-            if case let .respond(_, .success, nil) = call { return true }
+            if case let .respond(id, .success, nil) = call {
+                return id == write3ID
+            }
             return false
         }
     }
