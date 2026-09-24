@@ -21,6 +21,22 @@ actor ServerRuntime {
     private var lease: (registry: LiveServerRegistry, token: UUID)?
     private var finishStoppingEntryCount = 0
     private var finishStoppingEntryCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private let measurementSubscriberCountBroadcaster = StreamBroadcaster<Int>()
+    private var measurementSubscriberCountLatest = 0
+    private var measurementSubscriberCountSeeded = false
+
+    func measurementSubscriberCount() async -> AsyncStream<Int> {
+        if !measurementSubscriberCountSeeded {
+            measurementSubscriberCountSeeded = true
+            await publishMeasurementSubscriberCount(0)
+        }
+        return await measurementSubscriberCountBroadcaster.makeStream()
+    }
+
+    private func publishMeasurementSubscriberCount(_ count: Int) async {
+        measurementSubscriberCountLatest = count
+        await measurementSubscriberCountBroadcaster.yield(count)
+    }
 
     init(
         service: PeripheralService,
@@ -99,6 +115,7 @@ actor ServerRuntime {
             return
         }
         phase = .idle
+        await publishMeasurementSubscriberCount(0)
         releaseLease()
     }
 
@@ -208,6 +225,9 @@ actor ServerRuntime {
                 servedSensorLocation: servedSensorLocation,
                 peripheral: resolvedPeripheral,
                 clock: clock,
+                onMeasurementSubscriberCountChange: { count in
+                    await self.publishMeasurementSubscriberCount(count)
+                },
             )
         }
         phase = .starting(startupTask)

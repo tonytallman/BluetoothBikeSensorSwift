@@ -8,6 +8,7 @@ actor StreamBroadcaster<Element: Sendable> {
     private var continuations: [UUID: AsyncStream<Element>.Continuation] = [:]
     private var subscriberCount = 0
     private var subscriberCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var latest: Element?
 
     func makeStream() -> AsyncStream<Element> {
         let (stream, continuation) = AsyncStream.makeStream(of: Element.self)
@@ -15,6 +16,10 @@ actor StreamBroadcaster<Element: Sendable> {
         continuations[id] = continuation
         subscriberCount += 1
         resumeSubscriberCountWaiters()
+
+        if let latest {
+            continuation.yield(latest)
+        }
 
         continuation.onTermination = { [weak self] _ in
             guard let self else { return }
@@ -37,6 +42,7 @@ actor StreamBroadcaster<Element: Sendable> {
     }
 
     func yield(_ value: Element) {
+        latest = value
         let active = Array(continuations.values)
         for continuation in active {
             continuation.yield(value)
@@ -44,6 +50,7 @@ actor StreamBroadcaster<Element: Sendable> {
     }
 
     func finish() {
+        latest = nil
         let active = Array(continuations.values)
         continuations.removeAll()
         subscriberCount = 0

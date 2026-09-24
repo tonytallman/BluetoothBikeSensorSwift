@@ -5,7 +5,10 @@ A Swift package for Bluetooth CSCS (Cycling Speed and Cadence Service) with two 
 - **`CSCClient`** scans for, connects to, and reads CSCS sensors.
 - **`CSCServer`** advertises and serves CSCS as a peripheral, so your app can act as a speed and cadence sensor.
 
-The iOS SwiftUI sample app uses `CSCClient` only.
+The repo includes two iOS SwiftUI sample apps:
+
+- **`SampleApp`** (`SampleApp.xcodeproj`) uses **`CSCClient`** only — scan and connect to real sensors.
+- **`SampleServerApp`** (`SampleServerApp/SampleServerApp.xcodeproj`) uses **`CSCServer`** only — advertise as a simulated speed/cadence sensor.
 
 ## Requirements
 
@@ -75,7 +78,7 @@ Background constraints (see Apple's "Core Bluetooth Background Processing for iO
 
 If the user denies Bluetooth access, `Server.start()` throws `ServerError.notPoweredOn` and `Scanner.scan()` finishes empty. Check `CBManager.authorization` to decide whether to send the user to Settings.
 
-See [`SampleApp/SampleApp/Info.plist`](SampleApp/SampleApp/Info.plist) for an example.
+See [`SampleApp/SampleApp/Info.plist`](SampleApp/SampleApp/Info.plist) for a central (client) example and [`SampleServerApp/SampleServerApp/Info.plist`](SampleServerApp/SampleServerApp/Info.plist) for a peripheral (server) example with `bluetooth-peripheral`.
 
 ## CSCClient
 
@@ -306,12 +309,13 @@ let wheelCrankMultiple = Server.wheelRevolutions(wheelStream, setCumulativeWheel
 - Only one `Server` per process can be starting, running, or stopping at a time. Another `Server`'s `start()` throws `ServerError.alreadyStarted`.
 - Keep a strong reference to a started server. Releasing it stops it in the background, and the slot is freed only after that teardown finishes, so `await server.stop()` before starting another server right away.
 - `start()` after `stop()` is allowed. A single-pass `AsyncStream` source is terminated once `stop()` cancels its iteration; use a multi-pass sequence or build a new `Server` to publish again with the same stream. On multiple-location servers, the location served after restart is the last one `update(_:)` returned successfully.
+- `measurementSubscriberCount` is an `AsyncStream<Int>` of centrals currently subscribed to CSC Measurement notifications. New subscribers receive the current count immediately, then each change. The stream yields `0` while the server is stopped or starting, and when Bluetooth loss suspends the server and clears subscriptions.
 
 ### Bluetooth changes
 
 `start()` throws `ServerError.notPoweredOn` if Bluetooth is powered off, unauthorized, or unsupported, or if it is lost before `start()` finishes. It waits while the state is unknown or resetting, for example during the permission prompt.
 
-If Bluetooth leaves the powered-on state after `start()` returns, the server suspends: it drops all subscriptions and queued notifications, keeps pulling samples (which are dropped because nobody is subscribed), and stops advertising. When Bluetooth is powered on again, it republishes the same service and advertises again automatically. Centrals must reconnect and resubscribe. If republishing fails, the server stays suspended, without throwing, until Bluetooth turns off and on again. There is no public status for these transitions. An unauthorized state is reported as `ServerError.notPoweredOn`; check `CBManager.authorization` to tell the cases apart.
+If Bluetooth leaves the powered-on state after `start()` returns, the server suspends: it drops all subscriptions and queued notifications, keeps pulling samples (which are dropped because nobody is subscribed), and stops advertising. `measurementSubscriberCount` yields `0` when subscriptions are cleared. When Bluetooth is powered on again, it republishes the same service and advertises again automatically. Centrals must reconnect and resubscribe. If republishing fails, the server stays suspended, without throwing, until Bluetooth turns off and on again. There is no public API for advertising or Bluetooth power state; use `measurementSubscriberCount` for subscription state. An unauthorized state is reported as `ServerError.notPoweredOn`; check `CBManager.authorization` to tell the cases apart.
 
 ### Control point
 
@@ -334,6 +338,7 @@ CSC Feature and the characteristic inventory are fixed at `build()` for the life
 - `wheelRevolutions(_:setCumulativeWheelRevolutions:)`, `crankRevolutions(_:)`, `staticSensorLocation(_:)`, `multipleSensorLocations(_:)` — chain methods
 - `build()` — returns a configured `Server` (no public `Server` initializer)
 - `Server.start()` / `Server.stop()` — publish and advertise the CSC service, and tear it down
+- `Server.measurementSubscriberCount` — `AsyncStream<Int>` of centrals subscribed to measurement notifications
 - `ServerError` — `unsupportedConfiguration` (reserved), `alreadyStarted` (this or another `Server` is live), `notPoweredOn` (unavailable, powered off, unauthorized, or unsupported during startup, or lost before `start()` finished), `publishFailed`, `advertisingFailed`
 - `WheelRevolution`, `CrankRevolution` — CSC Measurement wire units for server sequences
 - `SensorLocationKind` — GATT assigned numbers 0...16 for the builder
@@ -361,9 +366,13 @@ BluetoothBikeSensorSwift/          # Swift package (library products: CSCClient,
   Tests/CSCClientTests/
   Tests/CSCServerTests/
   Tests/CSCWireTests/
-SampleApp/                         # iOS SwiftUI sample app
+SampleApp/                         # iOS SwiftUI client sample (CSCClient)
   SampleApp.xcodeproj
   SampleApp/
+SampleServerApp/                   # iOS SwiftUI server sample (CSCServer)
+  SampleServerApp.xcodeproj
+  SampleServerApp/
+  SampleServerAppTests/            # app-level unit tests (Swift Testing)
 ```
 
 ## Building
@@ -397,7 +406,9 @@ In Xcode:
 
 Do not use `SampleApp.xcodeproj` for unit tests — that project only builds the sample app. Package tests live in the Swift package scheme.
 
-### Sample app
+### Sample apps
+
+#### Client (`SampleApp`)
 
 Open `SampleApp/SampleApp.xcodeproj` in Xcode and run the **SampleApp** scheme on an iOS simulator or device.
 
@@ -411,12 +422,44 @@ xcodebuild \
   build
 ```
 
-The sample app provides a single scan list:
+The client sample provides a single scan list:
 
 1. Tap **Scan** to discover nearby CSC sensors (requires a device with Bluetooth; the simulator cannot scan).
 2. Tap **Connect** on a row to connect and subscribe to live measurements.
 3. Speed is shown in km/h; cadence in rpm. Fixed sensor locations show a label; sensors with multiple locations offer an update control. Unsupported metrics are hidden after connect.
 4. Tap the gear icon to set wheel circumference (meters); changes apply to all connected sensors.
 5. Tap **Disconnect** to release a sensor. Connect/disconnect failures show an alert.
+
+#### Server (`SampleServerApp`)
+
+Open `SampleServerApp/SampleServerApp.xcodeproj` and run the **SampleServerApp** scheme. Package unit tests still run with `swift test` from the repo root; the server project adds **app-level** tests in `SampleServerAppTests`.
+
+Build and test from the repo root (signing disabled for CI-like Mac builds):
+
+```bash
+NOSIGN=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
+xcodebuild -project SampleServerApp/SampleServerApp.xcodeproj -scheme SampleServerApp \
+  -destination 'generic/platform=iOS Simulator' "${NOSIGN[@]}" build
+xcodebuild -project SampleServerApp/SampleServerApp.xcodeproj -scheme SampleServerApp \
+  -destination 'generic/platform=iOS' "${NOSIGN[@]}" build
+SIM_ID=$(xcrun simctl list devices available -j | /usr/bin/python3 -c '
+import json, re, sys
+devices = json.load(sys.stdin)["devices"]
+best = None
+for runtime, entries in devices.items():
+    m = re.search(r"iOS-(\d+)-(\d+)", runtime)
+    if not m or (int(m[1]), int(m[2])) < (17, 0):
+        continue
+    for d in entries:
+        if d["name"].startswith("iPhone") and (best is None or (int(m[1]), int(m[2])) > best[0]):
+            best = ((int(m[1]), int(m[2])), d["udid"])
+print(best[1] if best else "")')
+xcodebuild -project SampleServerApp/SampleServerApp.xcodeproj -scheme SampleServerApp \
+  -destination "platform=iOS Simulator,id=$SIM_ID" "${NOSIGN[@]}" test
+```
+
+For two-device manual verification, install **Bike Sensor Sim** on one phone and **Bike Scanner** on another, then connect from the client while the server is advertising. Override `DEVELOPMENT_TEAM` in Xcode or on the command line when signing with a team other than the project default.
+
+Do not open both sample `.xcodeproj` files in one Xcode window — each references the same local package at `..`.
 
 See [project.md](project.md) for the full design.
