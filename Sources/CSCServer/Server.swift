@@ -7,6 +7,7 @@ public final class Server: Sendable {
     package let service: PeripheralService
     package let wheel: WheelConfiguration?
     package let crankRevolutions: AnyAsyncSequence<CrankRevolution>?
+    /// Build-time location configuration. For `.multiple`, the byte on `0x2A5D` while serving is not this snapshot after a successful Update.
     package let location: ServerLocationConfiguration
 
     private let runtime: ServerRuntime
@@ -71,5 +72,10 @@ public final class Server: Sendable {
     /// Blocks until the accepted measurement count reaches `count`.
     package func waitUntilAcceptedMeasurementCount(_ count: Int) async {
         await runtime.waitUntilAcceptedMeasurementCount(count)
+    }
+
+    /// Blocks until the outbound queue holds at least `count` items.
+    package func waitUntilOutboundCount(atLeast count: Int) async {
+        await runtime.waitUntilOutboundCount(atLeast: count)
     }
 }

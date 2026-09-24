@@ -96,7 +96,7 @@ Cancel the scan stream to stop scanning. Multiple sensors may be connected at on
 
 ### CSC server builder
 
-Phase 2 adds a configuration builder on `CSCServer`. Phase 3 added `start()` and `stop()` for crank configurations. Phase 4 also serves wheel and wheel+crank, including static location, and Set Cumulative Value. Multiple-location configurations still throw `unsupportedConfiguration` from `start()`. `build()` records CSCS feature bits, the GATT characteristic inventory, revolution sequences, and delegates. `start()` publishes the CSC service and advertises `0x1816`; `stop()` tears that down.
+Phase 2 adds a configuration builder on `CSCServer`. Phase 3 added `start()` and `stop()` for crank configurations. Phase 4 also serves wheel and wheel+crank, including static location, and Set Cumulative Value. Phase 5 serves multiple sensor locations on crank, wheel, and wheel+crank builds. `build()` records CSCS feature bits, the GATT characteristic inventory, revolution sequences, and delegates. `start()` publishes the CSC service and advertises `0x1816`; `stop()` tears that down.
 
 ```swift
 import CSCServer
@@ -146,7 +146,7 @@ let wheelCrankMultiple = Server.wheelRevolutions(wheelStream, setCumulativeWheel
     .build()
 ```
 
-`Server` has no public initializer. Call `start()` after `build()` on crank and wheel configurations. Multiple-location configurations throw `unsupportedConfiguration`. Call `stop()` to tear down advertising and the published service.
+`Server` has no public initializer. Call `start()` after `build()` on any supported configuration. Call `stop()` to tear down advertising and the published service.
 
 ```swift
 let server = Server.crankRevolutions(crankStream)
@@ -158,7 +158,7 @@ try await server.start()
 await server.stop()
 ```
 
-Multiple-location configurations throw `ServerError.unsupportedConfiguration` from `start()`. Wheel and wheel+crank, with or without a static location, start and serve Set Cumulative Value. A single-pass `AsyncStream` source is finished after the first `stop()`, for both the crank sequence and the wheel sequence; use a multi-pass sequence or build a new `Server` to publish again with the same stream. `project.md` states the same caveat for any single-pass source.
+Multiple-location servers serve Sensor Location (`0x2A5D`) and SC Control Point Update / Request procedures. Crank-only multiple servers reject Set Cumulative Value with Op Code Not Supported. Wheel and wheel+crank multiples still accept Set Cumulative Value. A single-pass `AsyncStream` source is finished after the first `stop()`, for both the crank sequence and the wheel sequence; use a multi-pass sequence or build a new `Server` to publish again with the same stream. `project.md` states the same caveat for any single-pass source.
 
 ## Wheel size
 
@@ -267,7 +267,7 @@ Public types include DocC-style `///` comments in source. Test-only dependency i
 
 `CSCWire` holds shared CSCS wire codecs as an internal package target. It is not a library product.
 
-`CSCServer` is a library product. Phase 2 exports the configuration builder and `Server`. Phase 4 `start()` / `stop()` serve those crank builds and the wheel builds that are not `.multiple`. `build()` records the CSCS feature bits, characteristic inventory, sequences, and delegates. The peripheral seam stays package-visible inside the package.
+`CSCServer` is a library product. Phase 2 exports the configuration builder and `Server`. Phase 4–5 `start()` / `stop()` serve crank, wheel, and multiple-location builds. `build()` records the CSCS feature bits, characteristic inventory, sequences, and delegates. The peripheral seam stays package-visible inside the package.
 
 **CSCServer surface (Phase 2–4):**
 
@@ -275,11 +275,11 @@ Public types include DocC-style `///` comments in source. Test-only dependency i
 - `Server.crankRevolutions(_:)` — crank entry point
 - `wheelRevolutions(_:setCumulativeWheelRevolutions:)`, `crankRevolutions(_:)`, `staticSensorLocation(_:)`, `multipleSensorLocations(_:)` — chain methods
 - `build()` — returns a configured `Server` (no public `Server` initializer)
-- `start()` / `stop()` — publish and tear down the CSC service for crank and wheel configurations. `.multiple` still throws.
+- `start()` / `stop()` — publish and tear down the CSC service for crank, wheel, and multiple-location configurations.
 - `ServerError` — `unsupportedConfiguration`, `alreadyStarted`, `notPoweredOn`, `publishFailed`, `advertisingFailed`
 - `WheelRevolution`, `CrankRevolution` — CSC Measurement wire units for server sequences
 - `SensorLocationKind` — GATT assigned numbers 0...16 for the builder
-- `SetCumulativeWheelRevolutions` — called for Set Cumulative Value. `MultipleSensorLocationsDelegate` — stored and not called until Phase 5.
+- `SetCumulativeWheelRevolutions` — called for Set Cumulative Value. `MultipleSensorLocationsDelegate` — `update(_:)` for Update Sensor Location on multiple-location servers.
 
 ## Limitations
 
