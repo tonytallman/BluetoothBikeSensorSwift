@@ -67,6 +67,11 @@ actor ServerSession {
     private var acceptedMeasurementCount = 0
     private var acceptedMeasurementCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
+    private var outboundCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+
+    private let location: ServerLocationConfiguration
+    private let servedSensorLocation: ServedSensorLocationBox?
+
     private var readTask: Task<Void, Never>?
     private var writeTask: Task<Void, Never>?
     private var subscriptionTask: Task<Void, Never>?
@@ -80,11 +85,15 @@ actor ServerSession {
         service: PeripheralService,
         wheel: WheelConfiguration?,
         crankRevolutions: AnyAsyncSequence<CrankRevolution>?,
+        location: ServerLocationConfiguration,
+        servedSensorLocation: ServedSensorLocationBox?,
         peripheral: any BluetoothPeripheral,
     ) {
         self.service = service
         self.wheel = wheel
         self.crankRevolutions = crankRevolutions
+        self.location = location
+        self.servedSensorLocation = servedSensorLocation
         self.peripheral = peripheral
     }
 
@@ -92,12 +101,16 @@ actor ServerSession {
         service: PeripheralService,
         wheel: WheelConfiguration?,
         crankRevolutions: AnyAsyncSequence<CrankRevolution>?,
+        location: ServerLocationConfiguration,
+        servedSensorLocation: ServedSensorLocationBox?,
         peripheral: any BluetoothPeripheral,
     ) async throws -> ServerSession {
         let session = ServerSession(
             service: service,
             wheel: wheel,
             crankRevolutions: crankRevolutions,
+            location: location,
+            servedSensorLocation: servedSensorLocation,
             peripheral: peripheral,
         )
         do {
@@ -175,6 +188,19 @@ actor ServerSession {
         }
     }
 
+    func waitUntilOutboundCount(atLeast count: Int) async {
+        if closed || outboundQueue.count >= count {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if closed || outboundQueue.count >= count {
+                continuation.resume()
+                return
+            }
+            outboundCountWaiters.append((count, continuation))
+        }
+    }
+
     func close() async {
         beginShutdown()
 
@@ -225,6 +251,7 @@ actor ServerSession {
         resumeAllControlPointSubscriberWaiters()
         resumeMeasurementSubscriberWaiterParkedWaiters()
         resumeAllAcceptedMeasurementCountWaiters()
+        resumeAllOutboundCountWaiters()
     }
 
     private func startup() async throws {
@@ -654,6 +681,7 @@ actor ServerSession {
     private func enqueueMeasurement(_ item: MeasurementItem) {
         outboundQueue.append(.measurement(item))
         resumeOutboundQueueWaiter()
+        resumeOutboundCountWaiters()
     }
 
     private func enqueueIndication(_ response: CSCControlPointResponse, centralID: UUID) {
@@ -669,6 +697,28 @@ actor ServerSession {
         )
         outboundQueue.append(.indication(item))
         resumeOutboundQueueWaiter()
+        resumeOutboundCountWaiters()
+    }
+
+    private func resumeOutboundCountWaiters() {
+        let count = outboundQueue.count
+        var remaining: [(Int, CheckedContinuation<Void, Never>)] = []
+        for (target, continuation) in outboundCountWaiters {
+            if count >= target {
+                continuation.resume()
+            } else {
+                remaining.append((target, continuation))
+            }
+        }
+        outboundCountWaiters = remaining
+    }
+
+    private func resumeAllOutboundCountWaiters() {
+        let waiters = outboundCountWaiters
+        outboundCountWaiters.removeAll()
+        for (_, continuation) in waiters {
+            continuation.resume()
+        }
     }
 
     private func indicate(
@@ -897,6 +947,24 @@ actor ServerSession {
         guard let characteristic = service.characteristics.first(where: { $0.uuid == request.characteristicUUID }) else {
             return ReadResponse(result: .error(code: 0x0A), value: nil)
         }
+
+        if request.characteristicUUID == CSCS.sensorLocationUUID,
+           case .multiple = location,
+           let servedSensorLocation
+        {
+            let value = CSCSensorLocation(
+                assignedNumber: servedSensorLocation.read().assignedNumber,
+            ).encode()
+            let offset = request.offset
+            if offset < 0 || offset > value.count {
+                return ReadResponse(result: .error(code: 0x07), value: nil)
+            }
+            if offset == value.count {
+                return ReadResponse(result: .success, value: Data())
+            }
+            return ReadResponse(result: .success, value: Data(value.dropFirst(offset)))
+        }
+
         guard let value = characteristic.value else {
             return ReadResponse(result: .error(code: 0x02), value: nil)
         }
@@ -1015,18 +1083,59 @@ actor ServerSession {
                 value: .opCodeNotSupported,
                 to: centralID,
             )
-        case .updateSensorLocation:
-            indicate(
-                opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
-                value: .opCodeNotSupported,
-                to: centralID,
-            )
+        case let .invalidParameter(opcode, _)
+            where opcode == CSCControlPointOpCode.updateSensorLocation.rawValue:
+            if isMultipleSensorLocations {
+                indicate(
+                    opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
+                    value: .invalidParameter,
+                    to: centralID,
+                )
+            } else {
+                indicate(
+                    opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
+                    value: .opCodeNotSupported,
+                    to: centralID,
+                )
+            }
+        case let .invalidParameter(opcode, _)
+            where opcode == CSCControlPointOpCode.requestSupportedSensorLocations.rawValue:
+            if isMultipleSensorLocations {
+                indicate(
+                    opcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
+                    value: .invalidParameter,
+                    to: centralID,
+                )
+            } else {
+                indicate(
+                    opcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
+                    value: .opCodeNotSupported,
+                    to: centralID,
+                )
+            }
+        case let .updateSensorLocation(assignedNumber):
+            if isMultipleSensorLocations {
+                await runUpdateSensorLocationProcedure(
+                    assignedNumber: assignedNumber,
+                    centralID: centralID,
+                )
+            } else {
+                indicate(
+                    opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
+                    value: .opCodeNotSupported,
+                    to: centralID,
+                )
+            }
         case .requestSupportedSensorLocations:
-            indicate(
-                opcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
-                value: .opCodeNotSupported,
-                to: centralID,
-            )
+            if isMultipleSensorLocations {
+                await runRequestSupportedSensorLocationsProcedure(centralID: centralID)
+            } else {
+                indicate(
+                    opcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
+                    value: .opCodeNotSupported,
+                    to: centralID,
+                )
+            }
         case let .invalidParameter(opcode, _):
             indicate(opcode: opcode, value: .opCodeNotSupported, to: centralID)
         case let .unknown(opcode, _):
@@ -1074,6 +1183,84 @@ actor ServerSession {
             to: centralID,
         )
         wakeReadyWaiterWithoutLatch()
+    }
+
+    private var isMultipleSensorLocations: Bool {
+        if case .multiple = location {
+            return true
+        }
+        return false
+    }
+
+    private var multipleSensorLocationsConfiguration: MultipleSensorLocationsConfiguration? {
+        if case .multiple(let configuration) = location {
+            return configuration
+        }
+        return nil
+    }
+
+    private func runUpdateSensorLocationProcedure(assignedNumber: UInt8, centralID: UUID) async {
+        guard let configuration = multipleSensorLocationsConfiguration else {
+            return
+        }
+
+        guard let kind = configuration.supported.first(where: { $0.assignedNumber == assignedNumber }) else {
+            indicate(
+                opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
+                value: .invalidParameter,
+                to: centralID,
+            )
+            return
+        }
+
+        let delegate = configuration.delegate
+        do {
+            try await delegate.update(kind)
+        } catch {
+            if closed {
+                endProcedure()
+                return
+            }
+            indicate(
+                opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
+                value: .operationFailed,
+                to: centralID,
+            )
+            return
+        }
+
+        servedSensorLocation?.store(kind)
+
+        if closed {
+            endProcedure()
+            return
+        }
+
+        indicate(
+            opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
+            value: .success,
+            to: centralID,
+        )
+    }
+
+    private func runRequestSupportedSensorLocationsProcedure(centralID: UUID) async {
+        guard let configuration = multipleSensorLocationsConfiguration else {
+            return
+        }
+
+        if closed {
+            endProcedure()
+            return
+        }
+
+        enqueueIndication(
+            CSCControlPointResponse(
+                requestOpcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
+                value: CSCControlPointResponseValue.success.rawValue,
+                parameter: Data(configuration.supported.map(\.assignedNumber)),
+            ),
+            centralID: centralID,
+        )
     }
 
     private func handleSubscription(_ change: SubscriptionChange) async {

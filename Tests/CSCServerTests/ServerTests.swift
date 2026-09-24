@@ -99,7 +99,22 @@ struct ServerTests {
         #expect(await fake.isAdvertising)
     }
 
-    @Test func wheelPlusMultipleThrowsUnsupportedConfiguration() async throws {
+    @Test func crankPlusMultipleStartAddsAndAdvertises() async throws {
+        let locations = LocationsSpy(supported: [.leftCrank], current: .leftCrank)
+        let server = Server.crankRevolutions(EmptyCrankSequence())
+            .multipleSensorLocations(locations)
+            .build()
+        let fake = FakeBluetoothPeripheral()
+
+        try await server.start(peripheral: fake)
+
+        let calls = await fake.recordedCalls
+        #expect(calls.first == .add(server.service))
+        #expect(calls.contains(.startAdvertising(Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID]))))
+        #expect(await fake.isAdvertising)
+    }
+
+    @Test func wheelPlusMultipleStartAddsAndAdvertises() async throws {
         let cumulative = CumulativeSpy()
         let locations = LocationsSpy(supported: [.leftCrank], current: .leftCrank)
         let server = Server.wheelRevolutions(EmptyWheelSequence(), setCumulativeWheelRevolutions: cumulative)
@@ -107,13 +122,15 @@ struct ServerTests {
             .build()
         let fake = FakeBluetoothPeripheral()
 
-        await #expect(throws: ServerError.unsupportedConfiguration) {
-            try await server.start(peripheral: fake)
-        }
-        #expect(await fake.recordedCalls.isEmpty)
+        try await server.start(peripheral: fake)
+
+        let calls = await fake.recordedCalls
+        #expect(calls.first == .add(server.service))
+        #expect(calls.contains(.startAdvertising(Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID]))))
+        #expect(await fake.isAdvertising)
     }
 
-    @Test func wheelCrankMultipleThrowsUnsupportedConfiguration() async throws {
+    @Test func wheelCrankMultipleStartAddsAndAdvertises() async throws {
         let cumulative = CumulativeSpy()
         let locations = LocationsSpy(supported: [.leftCrank], current: .leftCrank)
         let server = Server.wheelRevolutions(EmptyWheelSequence(), setCumulativeWheelRevolutions: cumulative)
@@ -122,10 +139,12 @@ struct ServerTests {
             .build()
         let fake = FakeBluetoothPeripheral()
 
-        await #expect(throws: ServerError.unsupportedConfiguration) {
-            try await server.start(peripheral: fake)
-        }
-        #expect(await fake.recordedCalls.isEmpty)
+        try await server.start(peripheral: fake)
+
+        let calls = await fake.recordedCalls
+        #expect(calls.first == .add(server.service))
+        #expect(calls.contains(.startAdvertising(Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID]))))
+        #expect(await fake.isAdvertising)
     }
 
     @Test func crankOnlyWriteToControlPointUUIDIsWriteNotPermitted() async throws {
@@ -224,19 +243,6 @@ struct ServerTests {
             return false
         }
         #expect(updateCalls.isEmpty)
-    }
-
-    @Test func multipleLocationsBuildThrowsUnsupportedConfiguration() async throws {
-        let locations = LocationsSpy(supported: [.leftCrank], current: .leftCrank)
-        let server = Server.crankRevolutions(EmptyCrankSequence())
-            .multipleSensorLocations(locations)
-            .build()
-        let fake = FakeBluetoothPeripheral()
-
-        await #expect(throws: ServerError.unsupportedConfiguration) {
-            try await server.start(peripheral: fake)
-        }
-        #expect(await fake.recordedCalls.isEmpty)
     }
 
     @Test func secondStartThrowsAlreadyStarted() async throws {

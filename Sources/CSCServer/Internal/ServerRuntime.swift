@@ -14,6 +14,7 @@ actor ServerRuntime {
     private let wheel: WheelConfiguration?
     private let crankRevolutions: AnyAsyncSequence<CrankRevolution>?
     private let location: ServerLocationConfiguration
+    private let servedSensorLocation: ServedSensorLocationBox?
 
     private var phase: Phase = .idle
 
@@ -27,13 +28,15 @@ actor ServerRuntime {
         self.wheel = wheel
         self.crankRevolutions = crankRevolutions
         self.location = location
+        switch location {
+        case .multiple(let configuration):
+            servedSensorLocation = ServedSensorLocationBox(initial: configuration.current)
+        case .none, .staticLocation:
+            servedSensorLocation = nil
+        }
     }
 
     func start(peripheral: (any BluetoothPeripheral)?) async throws {
-        if isUnsupportedConfiguration {
-            throw ServerError.unsupportedConfiguration
-        }
-
         guard case .idle = phase else {
             throw ServerError.alreadyStarted
         }
@@ -95,11 +98,10 @@ actor ServerRuntime {
         }
     }
 
-    private var isUnsupportedConfiguration: Bool {
-        if case .multiple = location {
-            return true
+    func waitUntilOutboundCount(atLeast count: Int) async {
+        if case .running(let session) = phase {
+            await session.waitUntilOutboundCount(atLeast: count)
         }
-        return false
     }
 
     private func resolvePeripheral(_ peripheral: (any BluetoothPeripheral)?) throws -> any BluetoothPeripheral {
@@ -120,6 +122,8 @@ actor ServerRuntime {
                 service: service,
                 wheel: wheel,
                 crankRevolutions: crankRevolutions,
+                location: location,
+                servedSensorLocation: servedSensorLocation,
                 peripheral: resolvedPeripheral,
             )
         }
