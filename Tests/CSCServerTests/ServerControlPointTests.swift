@@ -361,6 +361,59 @@ struct ServerControlPointTests {
         }
     }
 
+    @Test func backpressuredIndicationDroppedWhenWriterUnsubscribes() async throws {
+        let delegate = ScriptedCumulativeDelegate()
+        let fake = FakeBluetoothPeripheral()
+        await fake.setNextUpdateValueAccepted(false)
+        let server = Server.wheelRevolutions(EmptyWheelSequence(), setCumulativeWheelRevolutions: delegate).build()
+        try await server.start(peripheral: fake)
+
+        let writer = UUID()
+        let secondCentral = UUID()
+        await subscribeControlPoint(fake: fake, server: server, centralID: writer)
+        await fake.emitSubscription(
+            .subscribed(
+                centralID: secondCentral,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.controlPointUUID,
+            ),
+        )
+        await server.waitForControlPointSubscribers([writer, secondCentral])
+
+        await fake.emitWriteTransaction(controlPointWrite(centralID: writer))
+        await fake.waitForRecordedCall { call in
+            if case let .updateValue(value, _, CSCS.controlPointUUID, _) = call {
+                return value == CSCControlPointResponse(
+                    requestOpcode: 0x01,
+                    value: 0x01,
+                    parameter: Data(),
+                ).encode()
+            }
+            return false
+        }
+
+        await fake.emitSubscription(
+            .unsubscribed(
+                centralID: writer,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.controlPointUUID,
+            ),
+        )
+        await server.waitUntilControlPointProcedureIdle()
+
+        await fake.setNextUpdateValueAccepted(true)
+
+        let secondWriteID = UUID()
+        await fake.emitWriteTransaction(controlPointWrite(centralID: secondCentral, transactionID: secondWriteID))
+        await fake.waitForRecordedCall { call in
+            if case let .respond(id, .success, nil) = call {
+                return id == secondWriteID
+            }
+            return false
+        }
+        await server.waitUntilControlPointProcedureIdle()
+    }
+
     @Test func locationProceduresIndicateOpCodeNotSupported() async throws {
         let delegate = ScriptedCumulativeDelegate()
         let fake = FakeBluetoothPeripheral()

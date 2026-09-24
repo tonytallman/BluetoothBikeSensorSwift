@@ -8,11 +8,6 @@ actor ServerSession {
         case advertising
     }
 
-    private enum OutboundSource: Sendable {
-        case wheel
-        case crank
-    }
-
     private struct ReadResponse: Sendable {
         let result: ATTResult
         let value: Data?
@@ -25,7 +20,6 @@ actor ServerSession {
 
     private struct MeasurementItem {
         var payload: Data
-        let source: OutboundSource
         var encodedWheelGeneration: UInt64?
         let producedWheel: WheelRevolution?
         let producedCrank: CrankRevolution?
@@ -33,6 +27,7 @@ actor ServerSession {
     }
 
     private struct IndicationItem {
+        let id: UUID
         let payload: Data
         let centralID: UUID
         var completionContinuation: CheckedContinuation<Void, Never>?
@@ -384,9 +379,6 @@ actor ServerSession {
             }
             outboundQueueWaiter = continuation
         }
-        if closed {
-            drainOutboundQueueOnShutdown()
-        }
     }
 
     private func resumeOutboundQueueWaiter() {
@@ -403,12 +395,56 @@ actor ServerSession {
         }
     }
 
+    /// Returns `true` when the head was removed and the pump should return.
+    private func resolveStaleWheelHead(_ item: inout MeasurementItem) -> Bool {
+        guard isStaleWheelPayload(item) else {
+            return false
+        }
+        if item.producedWheel != nil {
+            outboundQueue.removeFirst()
+            completeEmit(&item)
+            return true
+        }
+        guard let crank = item.producedCrank,
+              let payload = CSCMeasurement(
+                  cumulativeCrankRevolutions: crank.cumulativeRevolutions,
+                  lastCrankEventTime: crank.lastEventTime,
+              ).encode()
+        else {
+            outboundQueue.removeFirst()
+            completeEmit(&item)
+            return true
+        }
+        item.payload = payload
+        item.encodedWheelGeneration = nil
+        outboundQueue[0] = .measurement(item)
+        return false
+    }
+
+    private func removeHeadIndicationIfOwned(_ id: UUID, _ indication: inout IndicationItem) -> Bool {
+        guard case .indication(let head) = outboundQueue.first, head.id == id else {
+            return false
+        }
+        outboundQueue.removeFirst()
+        completeIndication(&indication)
+        return true
+    }
+
+    /// Returns `true` when the pump should stop processing this indication item.
+    private func dropIndicationIfCentralDeparted(_ indication: inout IndicationItem) -> Bool {
+        guard !controlPointSubscribers.contains(indication.centralID) else {
+            return false
+        }
+        if removeHeadIndicationIfOwned(indication.id, &indication) {
+            endProcedure()
+        }
+        return true
+    }
+
     private func processMeasurementItem() async {
         guard case var .measurement(item) = outboundQueue.first else {
             return
         }
-
-        var replacedThisTurn = false
 
         while !Task.isCancelled {
             if closed {
@@ -424,29 +460,8 @@ actor ServerSession {
                 return
             }
 
-            if isStaleWheelPayload(item), !replacedThisTurn {
-                switch item.source {
-                case .crank:
-                    guard let crank = item.producedCrank,
-                          let payload = CSCMeasurement(
-                              cumulativeCrankRevolutions: crank.cumulativeRevolutions,
-                              lastCrankEventTime: crank.lastEventTime,
-                          ).encode()
-                    else {
-                        outboundQueue.removeFirst()
-                        completeEmit(&item)
-                        return
-                    }
-                    item.payload = payload
-                    item.encodedWheelGeneration = nil
-                    outboundQueue[0] = .measurement(item)
-                    replacedThisTurn = true
-                    continue
-                case .wheel:
-                    outboundQueue.removeFirst()
-                    completeEmit(&item)
-                    return
-                }
+            if resolveStaleWheelHead(&item) {
+                return
             }
 
             let accepted: Bool
@@ -457,10 +472,6 @@ actor ServerSession {
                     characteristicUUID: CSCS.measurementUUID,
                     onSubscribedCentrals: nil,
                 )
-            } catch is CancellationError {
-                outboundQueue.removeFirst()
-                completeEmit(&item)
-                return
             } catch {
                 outboundQueue.removeFirst()
                 completeEmit(&item)
@@ -469,7 +480,7 @@ actor ServerSession {
 
             if accepted {
                 if isStaleWheelPayload(item) {
-                    if item.source == .crank, let crank = item.producedCrank {
+                    if item.producedWheel == nil, let crank = item.producedCrank {
                         crankCache = crank
                     }
                 } else {
@@ -500,33 +511,7 @@ actor ServerSession {
                 return
             }
 
-            if isStaleWheelPayload(item) {
-                switch item.source {
-                case .crank:
-                    guard let crank = item.producedCrank,
-                          let payload = CSCMeasurement(
-                              cumulativeCrankRevolutions: crank.cumulativeRevolutions,
-                              lastCrankEventTime: crank.lastEventTime,
-                          ).encode()
-                    else {
-                        outboundQueue.removeFirst()
-                        completeEmit(&item)
-                        return
-                    }
-                    item.payload = payload
-                    item.encodedWheelGeneration = nil
-                    outboundQueue[0] = .measurement(item)
-                    replacedThisTurn = true
-                    continue
-                case .wheel:
-                    outboundQueue.removeFirst()
-                    completeEmit(&item)
-                    return
-                }
-            }
-
-            if closed {
-                drainOutboundQueueOnShutdown()
+            if resolveStaleWheelHead(&item) {
                 return
             }
 
@@ -535,7 +520,6 @@ actor ServerSession {
                 drainOutboundQueueOnShutdown()
                 return
             }
-            replacedThisTurn = false
         }
     }
 
@@ -544,12 +528,18 @@ actor ServerSession {
             return
         }
 
+        let indicationID = indication.id
+
         while !Task.isCancelled {
             if closed {
-                outboundQueue.removeFirst()
-                completeIndication(&indication)
-                endProcedure()
+                if removeHeadIndicationIfOwned(indicationID, &indication) {
+                    endProcedure()
+                }
                 drainOutboundQueueOnShutdown()
+                return
+            }
+
+            if dropIndicationIfCentralDeparted(&indication) {
                 return
             }
 
@@ -561,33 +551,37 @@ actor ServerSession {
                     characteristicUUID: CSCS.controlPointUUID,
                     onSubscribedCentrals: [indication.centralID],
                 )
-            } catch is CancellationError {
-                outboundQueue.removeFirst()
-                completeIndication(&indication)
-                endProcedure()
-                return
             } catch {
-                outboundQueue.removeFirst()
-                completeIndication(&indication)
-                endProcedure()
+                if removeHeadIndicationIfOwned(indicationID, &indication) {
+                    endProcedure()
+                }
                 return
             }
 
             if accepted {
-                outboundQueue.removeFirst()
-                completeIndication(&indication)
-                endProcedure()
+                if removeHeadIndicationIfOwned(indicationID, &indication) {
+                    endProcedure()
+                }
                 return
             }
 
             if closed {
                 drainOutboundQueueOnShutdown()
+                return
+            }
+
+            if dropIndicationIfCentralDeparted(&indication) {
                 return
             }
 
             await waitForNotifyReady()
+
             if closed {
                 drainOutboundQueueOnShutdown()
+                return
+            }
+
+            if dropIndicationIfCentralDeparted(&indication) {
                 return
             }
         }
@@ -668,12 +662,28 @@ actor ServerSession {
             return
         }
         let item = IndicationItem(
+            id: UUID(),
             payload: response.encode(),
             centralID: centralID,
             completionContinuation: nil,
         )
         outboundQueue.append(.indication(item))
         resumeOutboundQueueWaiter()
+    }
+
+    private func indicate(
+        opcode: UInt8,
+        value: CSCControlPointResponseValue,
+        to centralID: UUID,
+    ) {
+        enqueueIndication(
+            CSCControlPointResponse(
+                requestOpcode: opcode,
+                value: value.rawValue,
+                parameter: Data(),
+            ),
+            centralID: centralID,
+        )
     }
 
     private func emitWheel(_ sample: WheelRevolution) async {
@@ -689,7 +699,6 @@ actor ServerSession {
 
         let item = MeasurementItem(
             payload: payload,
-            source: .wheel,
             encodedWheelGeneration: stamp,
             producedWheel: sample,
             producedCrank: nil,
@@ -720,7 +729,6 @@ actor ServerSession {
 
         let item = MeasurementItem(
             payload: payload,
-            source: .crank,
             encodedWheelGeneration: stamp,
             producedWheel: nil,
             producedCrank: sample,
@@ -988,100 +996,51 @@ actor ServerSession {
         case let .setCumulativeValue(value):
             await runSetCumulativeProcedure(value: value, centralID: centralID)
         case let .invalidParameter(opcode, _) where opcode == CSCControlPointOpCode.setCumulativeValue.rawValue:
-            if closed {
-                endProcedure()
-                return
+            if wheel == nil {
+                indicate(
+                    opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
+                    value: .opCodeNotSupported,
+                    to: centralID,
+                )
+            } else {
+                indicate(
+                    opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
+                    value: .invalidParameter,
+                    to: centralID,
+                )
             }
-            enqueueIndication(
-                CSCControlPointResponse(
-                    requestOpcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
-                    value: CSCControlPointResponseValue.invalidParameter.rawValue,
-                    parameter: Data(),
-                ),
-                centralID: centralID,
-            )
         case .startSensorCalibration:
-            if closed {
-                endProcedure()
-                return
-            }
-            enqueueIndication(
-                CSCControlPointResponse(
-                    requestOpcode: CSCControlPointOpCode.startSensorCalibration.rawValue,
-                    value: CSCControlPointResponseValue.opCodeNotSupported.rawValue,
-                    parameter: Data(),
-                ),
-                centralID: centralID,
+            indicate(
+                opcode: CSCControlPointOpCode.startSensorCalibration.rawValue,
+                value: .opCodeNotSupported,
+                to: centralID,
             )
         case .updateSensorLocation:
-            if closed {
-                endProcedure()
-                return
-            }
-            enqueueIndication(
-                CSCControlPointResponse(
-                    requestOpcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
-                    value: CSCControlPointResponseValue.opCodeNotSupported.rawValue,
-                    parameter: Data(),
-                ),
-                centralID: centralID,
+            indicate(
+                opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
+                value: .opCodeNotSupported,
+                to: centralID,
             )
         case .requestSupportedSensorLocations:
-            if closed {
-                endProcedure()
-                return
-            }
-            enqueueIndication(
-                CSCControlPointResponse(
-                    requestOpcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
-                    value: CSCControlPointResponseValue.opCodeNotSupported.rawValue,
-                    parameter: Data(),
-                ),
-                centralID: centralID,
+            indicate(
+                opcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
+                value: .opCodeNotSupported,
+                to: centralID,
             )
         case let .invalidParameter(opcode, _):
-            if closed {
-                endProcedure()
-                return
-            }
-            enqueueIndication(
-                CSCControlPointResponse(
-                    requestOpcode: opcode,
-                    value: CSCControlPointResponseValue.opCodeNotSupported.rawValue,
-                    parameter: Data(),
-                ),
-                centralID: centralID,
-            )
+            indicate(opcode: opcode, value: .opCodeNotSupported, to: centralID)
         case let .unknown(opcode, _):
-            if closed {
-                endProcedure()
-                return
-            }
-            enqueueIndication(
-                CSCControlPointResponse(
-                    requestOpcode: opcode,
-                    value: CSCControlPointResponseValue.opCodeNotSupported.rawValue,
-                    parameter: Data(),
-                ),
-                centralID: centralID,
-            )
+            indicate(opcode: opcode, value: .opCodeNotSupported, to: centralID)
         }
     }
 
     private func runSetCumulativeProcedure(value: UInt32, centralID: UUID) async {
         guard let wheel else {
-            if closed {
-                endProcedure()
-            } else {
-                enqueueIndication(
-                    CSCControlPointResponse(
-                        requestOpcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
-                        value: CSCControlPointResponseValue.operationFailed.rawValue,
-                        parameter: Data(),
-                    ),
-                    centralID: centralID,
-                )
-            }
+            indicate(
+                opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
+                value: .opCodeNotSupported,
+                to: centralID,
+            )
             return
         }
 
@@ -1093,13 +1052,10 @@ actor ServerSession {
                 endProcedure()
                 return
             }
-            enqueueIndication(
-                CSCControlPointResponse(
-                    requestOpcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
-                    value: CSCControlPointResponseValue.operationFailed.rawValue,
-                    parameter: Data(),
-                ),
-                centralID: centralID,
+            indicate(
+                opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
+                value: .operationFailed,
+                to: centralID,
             )
             return
         }
@@ -1112,13 +1068,10 @@ actor ServerSession {
         // wheelGeneration wraps after UInt64.max; a stamp of 0 can match again.
         wheelGeneration &+= 1
         wheelCache = nil
-        enqueueIndication(
-            CSCControlPointResponse(
-                requestOpcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
-                value: CSCControlPointResponseValue.success.rawValue,
-                parameter: Data(),
-            ),
-            centralID: centralID,
+        indicate(
+            opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
+            value: .success,
+            to: centralID,
         )
         wakeReadyWaiterWithoutLatch()
     }
@@ -1150,6 +1103,14 @@ actor ServerSession {
             case CSCS.controlPointUUID:
                 controlPointSubscribers.remove(centralID)
                 resumeControlPointSubscriberWaiters()
+                if case var .indication(indication) = outboundQueue.first,
+                   indication.centralID == centralID
+                {
+                    outboundQueue.removeFirst()
+                    completeIndication(&indication)
+                    endProcedure()
+                    wakeReadyWaiterWithoutLatch()
+                }
             default:
                 return
             }
