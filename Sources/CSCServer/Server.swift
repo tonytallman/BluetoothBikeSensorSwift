@@ -83,4 +83,10 @@ public final class Server: Sendable {
     package func waitUntilNotifyReadyWaiterParked() async {
         await runtime.waitUntilNotifyReadyWaiterParked()
     }
+
+    /// Whether the running session lost Bluetooth and has not republished yet. Waits for a
+    /// recovery that is already in progress to finish.
+    package var isRadioSuspended: Bool {
+        get async { await runtime.isRadioSuspended }
+    }
 }

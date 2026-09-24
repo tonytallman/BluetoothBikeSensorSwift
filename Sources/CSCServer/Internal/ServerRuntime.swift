@@ -110,6 +110,15 @@ actor ServerRuntime {
         }
     }
 
+    var isRadioSuspended: Bool {
+        get async {
+            guard case .running(let session) = phase else {
+                return false
+            }
+            return await session.isRadioSuspended()
+        }
+    }
+
     private func resolvePeripheral(_ peripheral: (any BluetoothPeripheral)?) throws -> any BluetoothPeripheral {
         if let peripheral {
             return peripheral

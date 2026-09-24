@@ -4,6 +4,9 @@ package protocol BluetoothPeripheral: Sendable {
     var currentState: BluetoothState { get async }
     /// Used only by the startup power wait. Running sessions read state changes from ``events``.
     var stateUpdates: AsyncStream<BluetoothState> { get async }
+    /// Incremented each time the state becomes something other than `.poweredOn`, in the same
+    /// step that publishes the `.stateUpdated` event.
+    var powerLossCount: Int { get async }
     var isAdvertising: Bool { get async }
 
     func add(_ service: PeripheralService) async throws

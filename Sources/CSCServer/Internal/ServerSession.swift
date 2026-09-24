@@ -51,7 +51,12 @@ actor ServerSession {
     private var controlPointSubscriberWaiters: [SubscriberWaiter] = []
     private var measurementSubscriberWaiterParkedWaiters: [CheckedContinuation<Void, Never>] = []
 
+    private var startLossCount = 0
+    private var radioLost = false
     private var radioLossEpoch: UInt64 = 0
+    private var lastRadioState: BluetoothState = .poweredOn
+    private var recoveryInProgress = false
+    private var recoveryIdleWaiters: [CheckedContinuation<Void, Never>] = []
 
     private var notifyReady = false
     private var notifyReadyWaiter: CheckedContinuation<Void, Never>?
@@ -258,6 +263,7 @@ actor ServerSession {
 
     private func startup() async throws {
         try await waitForPoweredOn()
+        startLossCount = await peripheral.powerLossCount
 
         let eventStream = await peripheral.events
         inboundTask = spawnInboundTask(stream: eventStream)
@@ -274,9 +280,7 @@ actor ServerSession {
         }
 
         do {
-            try await peripheral.startAdvertising(
-                Advertisement(localName: nil, serviceUUIDs: [service.uuid]),
-            )
+            try await peripheral.startAdvertising(advertisement)
         } catch {
             try? await peripheral.removeService(uuid: service.uuid)
             publishStage = .none
@@ -288,6 +292,11 @@ actor ServerSession {
             throw CancellationError()
         }
         publishStage = .advertising
+
+        // A loss during startup fails start() even if power came back before the calls finished.
+        if await peripheral.powerLossCount != startLossCount {
+            throw ServerError.notPoweredOn
+        }
 
         senderTask = spawnSenderTask()
         await drainPendingInboundEvents()
@@ -339,6 +348,106 @@ actor ServerSession {
 
         measurementSubscribers.removeAll()
         controlPointSubscribers.removeAll()
+    }
+
+    private var advertisement: Advertisement {
+        Advertisement(localName: nil, serviceUUIDs: [service.uuid])
+    }
+
+    /// Settles any recovery already in progress before answering.
+    func isRadioSuspended() async -> Bool {
+        if recoveryInProgress {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                if !recoveryInProgress {
+                    continuation.resume()
+                    return
+                }
+                recoveryIdleWaiters.append(continuation)
+            }
+        }
+        return radioLost
+    }
+
+    private func handleRadioState(_ state: BluetoothState) async {
+        let previous = lastRadioState
+        lastRadioState = state
+        guard state == .poweredOn else {
+            if !radioLost {
+                suspendForRadioLoss()
+            }
+            return
+        }
+        // Retrying needs a real transition back into .poweredOn, not a duplicate event.
+        guard previous != .poweredOn, radioLost, !closed else {
+            return
+        }
+        recoveryInProgress = true
+        await recoverFromRadioLoss()
+        recoveryInProgress = false
+        let waiters = recoveryIdleWaiters
+        recoveryIdleWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func suspendForRadioLoss() {
+        radioLost = true
+        radioLossEpoch &+= 1
+        measurementSubscribers.removeAll()
+        resumeMeasurementSubscriberWaiters()
+        controlPointSubscribers.removeAll()
+        resumeControlPointSubscriberWaiters()
+        notifyReady = false
+        wakeReadyWaiterWithoutLatch()
+    }
+
+    /// Republishes the build-time service. `close()` may run during any await here and owns
+    /// teardown; this removes only what it published after `closed` is set.
+    private func recoverFromRadioLoss() async {
+        await peripheral.stopAdvertising()
+        if closed {
+            return
+        }
+        if publishStage != .none {
+            try? await peripheral.removeService(uuid: service.uuid)
+            publishStage = .none
+        }
+        if closed {
+            return
+        }
+
+        do {
+            try await peripheral.add(service)
+        } catch {
+            return
+        }
+        publishStage = .serviceAdded
+        if closed {
+            try? await peripheral.removeService(uuid: service.uuid)
+            publishStage = .none
+            return
+        }
+
+        do {
+            try await peripheral.startAdvertising(advertisement)
+        } catch {
+            try? await peripheral.removeService(uuid: service.uuid)
+            publishStage = .none
+            return
+        }
+        if closed {
+            await peripheral.stopAdvertising()
+            if publishStage != .none {
+                try? await peripheral.removeService(uuid: service.uuid)
+                publishStage = .none
+            }
+            return
+        }
+
+        publishStage = .advertising
+        notifyReady = false
+        radioLost = false
     }
 
     private var hasControlPointCharacteristic: Bool {
@@ -909,8 +1018,8 @@ actor ServerSession {
 
     private func handleInbound(_ event: PeripheralEvent) async {
         switch event {
-        case .stateUpdated:
-            break
+        case let .stateUpdated(state):
+            await handleRadioState(state)
         case let .read(request):
             await handleRead(request)
         case let .writeTransaction(transaction):
@@ -1506,6 +1615,8 @@ actor ServerSession {
         }
         if let peripheralError = error as? BluetoothPeripheralError {
             switch peripheralError {
+            case .notPoweredOn:
+                return .notPoweredOn
             case .advertisingFailed(let reason):
                 return .advertisingFailed(reason: reason)
             default:
