@@ -108,6 +108,8 @@ struct ServerLifecycleTests {
             secondStopReturned.set()
         }
 
+        await serverA.waitUntilStopWaiterCount(2)
+
         let fakeB = FakeBluetoothPeripheral()
         await #expect(throws: ServerError.alreadyStarted) {
             try await serverB.start(peripheral: fakeB, liveServers: registry)

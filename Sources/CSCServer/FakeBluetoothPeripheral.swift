@@ -60,6 +60,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         case add
         case advertise
         case updateValue
+        case respond
     }
 
     private var state: BluetoothState
@@ -75,6 +76,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     private var addHold = Hold()
     private var advertiseHold = Hold()
     private var updateValueHold = Hold()
+    private var respondHold = Hold()
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
     private let eventBroadcaster = StreamBroadcaster<PeripheralEvent>()
@@ -222,6 +224,11 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
             }
         }
 
+        if respondHold.isHeld {
+            await park(.respond)
+            try requirePoweredOn()
+        }
+
         appendRecordedCall(.respond(id: requestID, result: result, value: value))
         outstandingReadRequestIDs.remove(requestID)
         outstandingWriteTransactionIDs.remove(requestID)
@@ -343,6 +350,19 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         await waitUntilParked(.updateValue)
     }
 
+    /// Parks every `respond` after validation until ``releaseRespond()``.
+    package func holdNextRespond() {
+        respondHold.isHeld = true
+    }
+
+    package func releaseRespond() {
+        respondHold.release()
+    }
+
+    package func waitUntilRespondHeld() async {
+        await waitUntilParked(.respond)
+    }
+
     package func waitUntilEventSubscriberCount(_ count: Int) async {
         await eventBroadcaster.waitUntilSubscriberCount(count)
     }
@@ -399,6 +419,8 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
                 advertiseHold.park(continuation)
             case .updateValue:
                 updateValueHold.park(continuation)
+            case .respond:
+                respondHold.park(continuation)
             }
         }
     }
@@ -412,6 +434,8 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
             isParked = !advertiseHold.parked.isEmpty
         case .updateValue:
             isParked = !updateValueHold.parked.isEmpty
+        case .respond:
+            isParked = !respondHold.parked.isEmpty
         }
         if isParked {
             return
@@ -424,6 +448,8 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
                 advertiseHold.parkedWaiters.append(continuation)
             case .updateValue:
                 updateValueHold.parkedWaiters.append(continuation)
+            case .respond:
+                respondHold.parkedWaiters.append(continuation)
             }
         }
     }

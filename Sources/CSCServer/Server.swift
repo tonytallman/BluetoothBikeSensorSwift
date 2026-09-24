@@ -111,4 +111,9 @@ public final class Server: Sendable {
     package var isRadioSuspended: Bool {
         get async { await runtime.isRadioSuspended }
     }
+
+    /// Blocks until `count` callers have entered ``ServerRuntime`` teardown waiting.
+    package func waitUntilStopWaiterCount(_ count: Int) async {
+        await runtime.waitUntilFinishStoppingEntryCount(count)
+    }
 }

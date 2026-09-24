@@ -19,6 +19,8 @@ actor ServerRuntime {
 
     private var phase: Phase = .idle
     private var lease: (registry: LiveServerRegistry, token: UUID)?
+    private var finishStoppingEntryCount = 0
+    private var finishStoppingEntryCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
     init(
         service: PeripheralService,
@@ -90,12 +92,40 @@ actor ServerRuntime {
     /// Waits for `task`, then returns to idle and releases the live-server slot once, whichever
     /// caller resumes first.
     private func finishStopping(_ task: Task<Void, Never>) async {
+        finishStoppingEntryCount += 1
+        resumeFinishStoppingEntryCountWaiters()
         await task.value
         guard case .stopping(let current) = phase, current == task else {
             return
         }
         phase = .idle
         releaseLease()
+    }
+
+    func waitUntilFinishStoppingEntryCount(_ count: Int) async {
+        if finishStoppingEntryCount >= count {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if finishStoppingEntryCount >= count {
+                continuation.resume()
+                return
+            }
+            finishStoppingEntryCountWaiters.append((count, continuation))
+        }
+    }
+
+    private func resumeFinishStoppingEntryCountWaiters() {
+        let count = finishStoppingEntryCount
+        var remaining: [(Int, CheckedContinuation<Void, Never>)] = []
+        for (target, continuation) in finishStoppingEntryCountWaiters {
+            if count >= target {
+                continuation.resume()
+            } else {
+                remaining.append((target, continuation))
+            }
+        }
+        finishStoppingEntryCountWaiters = remaining
     }
 
     private func releaseLease() {

@@ -321,9 +321,7 @@ Servers with wheel data or multiple sensor locations include SC Control Point (`
 - Update Sensor Location (`0x03`) calls your `MultipleSensorLocationsDelegate`.
 - Request Supported Sensor Locations (`0x04`) answers from the list captured at `build()`.
 
-One procedure runs at a time. A procedure has 30 seconds from the accepted write until its indication is handed to the system. After that, the server stops the procedure and sends no indication. An indication already handed to the system cannot be recalled. Delegates must honor task cancellation; `stop()` and the timeout both cancel an in-flight call.
-
-The server cancels a call still running 30 seconds after the write was accepted. A call that returns successfully after that has still been applied, and no indication is sent. The peer may retry, so make your implementation safe to call again.
+One procedure runs at a time. A procedure has 30 seconds from the accepted write until its indication is handed to the system; after that, the server stops the procedure and sends no indication. An indication already handed to the system cannot be recalled. Delegates must honor task cancellation; `stop()` and the timeout both cancel an in-flight call. A delegate call that returns successfully after the timeout has still been applied, and no indication is sent—the peer may retry, so make your implementation safe to call again.
 
 ### Feature bits
 

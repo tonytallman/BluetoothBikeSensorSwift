@@ -38,6 +38,55 @@ struct ServerNotifyQueueTests {
         #expect(await delegate.recordedValues == [7])
     }
 
+    @Test func bufferedStartupDrainPreservesSubscribeBeforeWrite() async throws {
+        let delegate = ScriptedCumulativeDelegate()
+        let fake = FakeBluetoothPeripheral()
+        let server = Server.wheelRevolutions(NeverYieldingWheelSequence(), setCumulativeWheelRevolutions: delegate)
+            .build()
+
+        await fake.holdNextAdvertise()
+        let startTask = Task {
+            try await server.start(peripheral: fake)
+        }
+        await fake.waitUntilAdvertiseHeld()
+
+        let writer = UUID()
+        let readID = UUID()
+        await fake.emitRead(
+            PeripheralReadRequest(
+                id: readID,
+                centralID: UUID(),
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.featureUUID,
+                offset: 0,
+            ),
+        )
+        await fake.emitSubscription(
+            .subscribed(
+                centralID: writer,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.controlPointUUID,
+            ),
+        )
+
+        await fake.holdNextRespond()
+        await fake.releaseAdvertise()
+        await fake.waitUntilRespondHeld()
+
+        let write = controlPointWrite(centralID: writer, value: setCumulativeValue(9))
+        await fake.emitWriteTransaction(write)
+
+        await fake.releaseRespond()
+        try await startTask.value
+        await fake.waitForRecordedCall { call in
+            if case let .respond(id, _, _) = call {
+                return id == write.id
+            }
+            return false
+        }
+        #expect(await fake.recordedCalls.contains(.respond(id: write.id, result: .success, value: nil)))
+    }
+
     @Test func idleReadySignalDoesNotSkipNextPark() async throws {
         let sequence = YieldingCrankSequence()
         let fake = FakeBluetoothPeripheral()

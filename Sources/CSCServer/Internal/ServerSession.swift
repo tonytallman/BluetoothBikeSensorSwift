@@ -316,17 +316,18 @@ actor ServerSession {
         }
 
         senderTask = spawnSenderTask()
-        startCrankLoopIfNeeded()
-        startWheelLoopIfNeeded()
-        startupGateOpen = true
         await drainPendingInboundEvents()
         if closed || Task.isCancelled {
             throw CancellationError()
         }
+        startCrankLoopIfNeeded()
+        startWheelLoopIfNeeded()
+        startupGateOpen = true
     }
 
-    /// Handles events buffered during startup, in arrival order, before the revolution loops
-    /// start. Returns with the buffer empty and no suspension before the caller opens the gate.
+    /// Handles events buffered during startup, in arrival order, before the startup gate
+    /// opens. Returns with the buffer empty; the caller opens the gate synchronously after
+    /// this returns, with no `await` in between.
     private func drainPendingInboundEvents() async {
         while !closed, !pendingInboundEvents.isEmpty {
             let event = pendingInboundEvents.removeFirst()
@@ -807,6 +808,7 @@ actor ServerSession {
         procedureIndicationID = nil
         procedureTimeoutTask?.cancel()
         procedureTimeoutTask = nil
+        procedureGeneration &+= 1
         resumeProcedureIdleWaiters()
     }
 
