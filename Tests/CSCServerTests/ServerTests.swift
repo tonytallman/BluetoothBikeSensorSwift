@@ -81,7 +81,7 @@ struct ServerTests {
         #expect(await fake.isAdvertising == false)
     }
 
-    @Test func wheelBuildThrowsUnsupportedConfiguration() async throws {
+    @Test func wheelStartupRecordsAddAndAdvertise() async throws {
         let cumulative = CumulativeSpy()
         let server = Server.wheelRevolutions(
             EmptyWheelSequence(),
@@ -89,10 +89,141 @@ struct ServerTests {
         ).build()
         let fake = FakeBluetoothPeripheral()
 
+        try await server.start(peripheral: fake)
+
+        let calls = await fake.recordedCalls
+        #expect(calls == [
+            .add(server.service),
+            .startAdvertising(Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID])),
+        ])
+        #expect(await fake.isAdvertising)
+    }
+
+    @Test func wheelPlusMultipleThrowsUnsupportedConfiguration() async throws {
+        let cumulative = CumulativeSpy()
+        let locations = LocationsSpy(supported: [.leftCrank], current: .leftCrank)
+        let server = Server.wheelRevolutions(EmptyWheelSequence(), setCumulativeWheelRevolutions: cumulative)
+            .multipleSensorLocations(locations)
+            .build()
+        let fake = FakeBluetoothPeripheral()
+
         await #expect(throws: ServerError.unsupportedConfiguration) {
             try await server.start(peripheral: fake)
         }
         #expect(await fake.recordedCalls.isEmpty)
+    }
+
+    @Test func wheelCrankMultipleThrowsUnsupportedConfiguration() async throws {
+        let cumulative = CumulativeSpy()
+        let locations = LocationsSpy(supported: [.leftCrank], current: .leftCrank)
+        let server = Server.wheelRevolutions(EmptyWheelSequence(), setCumulativeWheelRevolutions: cumulative)
+            .crankRevolutions(EmptyCrankSequence())
+            .multipleSensorLocations(locations)
+            .build()
+        let fake = FakeBluetoothPeripheral()
+
+        await #expect(throws: ServerError.unsupportedConfiguration) {
+            try await server.start(peripheral: fake)
+        }
+        #expect(await fake.recordedCalls.isEmpty)
+    }
+
+    @Test func crankOnlyWriteToControlPointUUIDIsWriteNotPermitted() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let server = Server.crankRevolutions(EmptyCrankSequence()).build()
+        try await server.start(peripheral: fake)
+
+        let validSetCumulative = PeripheralWriteTransaction(
+            id: UUID(),
+            requests: [
+                PeripheralWriteRequest(
+                    centralID: UUID(),
+                    serviceUUID: CSCS.serviceUUID,
+                    characteristicUUID: CSCS.controlPointUUID,
+                    offset: 0,
+                    value: Data([0x01, 0x78, 0x56, 0x34, 0x12]),
+                ),
+            ],
+        )
+        let offsetWrite = PeripheralWriteTransaction(
+            id: UUID(),
+            requests: [
+                PeripheralWriteRequest(
+                    centralID: UUID(),
+                    serviceUUID: CSCS.serviceUUID,
+                    characteristicUUID: CSCS.controlPointUUID,
+                    offset: 1,
+                    value: Data([0x01, 0x78, 0x56, 0x34, 0x12]),
+                ),
+            ],
+        )
+        let emptyWrite = PeripheralWriteTransaction(
+            id: UUID(),
+            requests: [
+                PeripheralWriteRequest(
+                    centralID: UUID(),
+                    serviceUUID: CSCS.serviceUUID,
+                    characteristicUUID: CSCS.controlPointUUID,
+                    offset: 0,
+                    value: Data(),
+                ),
+            ],
+        )
+
+        for transaction in [validSetCumulative, offsetWrite, emptyWrite] {
+            await fake.emitWriteTransaction(transaction)
+            await fake.waitForRecordedCall { call in
+                if case let .respond(id, .error(0x03), nil) = call {
+                    return id == transaction.id
+                }
+                return false
+            }
+        }
+
+        let updateCalls = await fake.recordedCalls.filter { call in
+            if case .updateValue = call { return true }
+            return false
+        }
+        #expect(updateCalls.isEmpty)
+    }
+
+    @Test func wheelServerFeatureWriteReturnsWriteNotPermitted() async throws {
+        let cumulative = CumulativeSpy()
+        let fake = FakeBluetoothPeripheral()
+        let server = Server.wheelRevolutions(
+            EmptyWheelSequence(),
+            setCumulativeWheelRevolutions: cumulative,
+        ).build()
+        try await server.start(peripheral: fake)
+
+        let transactionID = UUID()
+        await fake.emitWriteTransaction(
+            PeripheralWriteTransaction(
+                id: transactionID,
+                requests: [
+                    PeripheralWriteRequest(
+                        centralID: UUID(),
+                        serviceUUID: CSCS.serviceUUID,
+                        characteristicUUID: CSCS.featureUUID,
+                        offset: 0,
+                        value: Data([0x01]),
+                    ),
+                ],
+            ),
+        )
+
+        await fake.waitForRecordedCall { call in
+            if case let .respond(id, .error(0x03), nil) = call {
+                return id == transactionID
+            }
+            return false
+        }
+
+        let updateCalls = await fake.recordedCalls.filter { call in
+            if case .updateValue = call { return true }
+            return false
+        }
+        #expect(updateCalls.isEmpty)
     }
 
     @Test func multipleLocationsBuildThrowsUnsupportedConfiguration() async throws {

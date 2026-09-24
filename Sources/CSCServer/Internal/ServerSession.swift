@@ -8,6 +8,11 @@ actor ServerSession {
         case advertising
     }
 
+    private enum OutboundSource: Sendable {
+        case wheel
+        case crank
+    }
+
     private struct ReadResponse: Sendable {
         let result: ATTResult
         let value: Data?
@@ -18,42 +23,85 @@ actor ServerSession {
         let continuation: CheckedContinuation<Void, Never>
     }
 
+    private struct MeasurementItem {
+        var payload: Data
+        let source: OutboundSource
+        var encodedWheelGeneration: UInt64?
+        let producedWheel: WheelRevolution?
+        let producedCrank: CrankRevolution?
+        var emitContinuation: CheckedContinuation<Void, Never>?
+    }
+
+    private struct IndicationItem {
+        let payload: Data
+        let centralID: UUID
+        var completionContinuation: CheckedContinuation<Void, Never>?
+    }
+
+    private enum OutboundItem {
+        case measurement(MeasurementItem)
+        case indication(IndicationItem)
+    }
+
     private let service: PeripheralService
+    private let wheel: WheelConfiguration?
     private let crankRevolutions: AnyAsyncSequence<CrankRevolution>?
     private let peripheral: any BluetoothPeripheral
 
     private var publishStage: PublishStage = .none
     private var closed = false
     private var measurementSubscribers: Set<UUID> = []
-    private var subscriberWaiters: [SubscriberWaiter] = []
-    private var subscriberWaiterParkedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var controlPointSubscribers: Set<UUID> = []
+    private var measurementSubscriberWaiters: [SubscriberWaiter] = []
+    private var controlPointSubscriberWaiters: [SubscriberWaiter] = []
+    private var measurementSubscriberWaiterParkedWaiters: [CheckedContinuation<Void, Never>] = []
 
     private var notifyReady = false
     private var notifyReadyWaiter: CheckedContinuation<Void, Never>?
+
+    private var wheelCache: WheelRevolution?
+    private var crankCache: CrankRevolution?
+    private var wheelGeneration: UInt64 = 0
+
+    private var outboundQueue: [OutboundItem] = []
+    private var outboundQueueWaiter: CheckedContinuation<Void, Never>?
+
+    private var procedureInProgress = false
+    private var procedureIdleWaiters: [CheckedContinuation<Void, Never>] = []
+
+    private var acceptedMeasurementCount = 0
+    private var acceptedMeasurementCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
     private var readTask: Task<Void, Never>?
     private var writeTask: Task<Void, Never>?
     private var subscriptionTask: Task<Void, Never>?
     private var readyTask: Task<Void, Never>?
+    private var senderTask: Task<Void, Never>?
+    private var wheelTask: Task<Void, Never>?
     private var crankTask: Task<Void, Never>?
+    private var procedureTask: Task<Void, Never>?
 
     private init(
         service: PeripheralService,
+        wheel: WheelConfiguration?,
         crankRevolutions: AnyAsyncSequence<CrankRevolution>?,
         peripheral: any BluetoothPeripheral,
     ) {
         self.service = service
+        self.wheel = wheel
         self.crankRevolutions = crankRevolutions
         self.peripheral = peripheral
     }
 
     static func open(
         service: PeripheralService,
+        wheel: WheelConfiguration?,
         crankRevolutions: AnyAsyncSequence<CrankRevolution>?,
         peripheral: any BluetoothPeripheral,
     ) async throws -> ServerSession {
         let session = ServerSession(
             service: service,
+            wheel: wheel,
             crankRevolutions: crankRevolutions,
             peripheral: peripheral,
         )
@@ -78,28 +126,76 @@ actor ServerSession {
             return
         }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            subscriberWaiters.append(
+            measurementSubscriberWaiters.append(
                 SubscriberWaiter(expected: ids, continuation: continuation),
             )
-            resumeSubscriberWaiterParkedWaiters()
+            resumeMeasurementSubscriberWaiterParkedWaiters()
         }
     }
 
     func waitUntilMeasurementSubscriberWaiterParked() async {
-        if !subscriberWaiters.isEmpty {
+        if !measurementSubscriberWaiters.isEmpty {
             return
         }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            subscriberWaiterParkedWaiters.append(continuation)
-            resumeSubscriberWaiterParkedWaiters()
+            measurementSubscriberWaiterParkedWaiters.append(continuation)
+            resumeMeasurementSubscriberWaiterParkedWaiters()
+        }
+    }
+
+    func waitForControlPointSubscribers(_ ids: Set<UUID>) async {
+        if closed || controlPointSubscribers == ids {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            controlPointSubscriberWaiters.append(
+                SubscriberWaiter(expected: ids, continuation: continuation),
+            )
+        }
+    }
+
+    func waitUntilControlPointProcedureIdle() async {
+        if closed || !procedureInProgress {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if closed || !procedureInProgress {
+                continuation.resume()
+                return
+            }
+            procedureIdleWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilAcceptedMeasurementCount(_ count: Int) async {
+        if closed || acceptedMeasurementCount >= count {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if closed || acceptedMeasurementCount >= count {
+                continuation.resume()
+                return
+            }
+            acceptedMeasurementCountWaiters.append((count, continuation))
         }
     }
 
     func close() async {
         beginShutdown()
 
+        senderTask?.cancel()
+        procedureTask?.cancel()
+        wheelTask?.cancel()
         crankTask?.cancel()
+
+        _ = await senderTask?.value
+        _ = await procedureTask?.value
+        _ = await wheelTask?.value
         _ = await crankTask?.value
+
+        senderTask = nil
+        procedureTask = nil
+        wheelTask = nil
         crankTask = nil
 
         await peripheral.stopAdvertising()
@@ -123,12 +219,17 @@ actor ServerSession {
         readyTask = nil
 
         measurementSubscribers.removeAll()
+        controlPointSubscribers.removeAll()
     }
 
     private func beginShutdown() {
         closed = true
         resumeNotifyReadyWaiter()
-        resumeAllSubscriberWaiters()
+        resumeOutboundQueueWaiter()
+        resumeAllMeasurementSubscriberWaiters()
+        resumeAllControlPointSubscriberWaiters()
+        resumeMeasurementSubscriberWaiterParkedWaiters()
+        resumeAcceptedMeasurementCountWaiters()
     }
 
     private func startup() async throws {
@@ -171,14 +272,27 @@ actor ServerSession {
         }
         publishStage = .advertising
 
+        senderTask = spawnSenderTask()
         startCrankLoopIfNeeded()
+        startWheelLoopIfNeeded()
     }
 
     private func rollbackStartup() async {
         beginShutdown()
 
+        senderTask?.cancel()
+        procedureTask?.cancel()
+        wheelTask?.cancel()
         crankTask?.cancel()
+
+        _ = await senderTask?.value
+        _ = await procedureTask?.value
+        _ = await wheelTask?.value
         _ = await crankTask?.value
+
+        senderTask = nil
+        procedureTask = nil
+        wheelTask = nil
         crankTask = nil
 
         if publishStage == .advertising {
@@ -204,6 +318,449 @@ actor ServerSession {
         readyTask = nil
 
         measurementSubscribers.removeAll()
+        controlPointSubscribers.removeAll()
+    }
+
+    private var hasControlPointCharacteristic: Bool {
+        service.characteristics.contains { $0.uuid == CSCS.controlPointUUID }
+    }
+
+    private func isStaleWheelPayload(_ item: MeasurementItem) -> Bool {
+        guard let stamp = item.encodedWheelGeneration else {
+            return false
+        }
+        return stamp != wheelGeneration
+    }
+
+    private func spawnSenderTask() -> Task<Void, Never> {
+        Task {
+            await self.runOutboundPump()
+        }
+    }
+
+    private func runOutboundPump() async {
+        while !Task.isCancelled {
+            if closed {
+                drainOutboundQueueOnShutdown()
+                return
+            }
+
+            if outboundQueue.isEmpty {
+                await waitForOutboundQueueItem()
+                if closed {
+                    drainOutboundQueueOnShutdown()
+                    return
+                }
+                continue
+            }
+
+            switch outboundQueue[0] {
+            case .measurement:
+                await processMeasurementItem()
+            case .indication:
+                await processIndicationItem()
+            }
+        }
+        if closed {
+            drainOutboundQueueOnShutdown()
+        }
+    }
+
+    private func waitForOutboundQueueItem() async {
+        if closed {
+            return
+        }
+        if !outboundQueue.isEmpty {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if closed {
+                continuation.resume()
+                return
+            }
+            if !outboundQueue.isEmpty {
+                continuation.resume()
+                return
+            }
+            outboundQueueWaiter = continuation
+        }
+        if closed {
+            drainOutboundQueueOnShutdown()
+        }
+    }
+
+    private func resumeOutboundQueueWaiter() {
+        if let waiter = outboundQueueWaiter {
+            outboundQueueWaiter = nil
+            waiter.resume()
+        }
+    }
+
+    private func wakeReadyWaiterWithoutLatch() {
+        if let waiter = notifyReadyWaiter {
+            notifyReadyWaiter = nil
+            waiter.resume()
+        }
+    }
+
+    private func processMeasurementItem() async {
+        guard case var .measurement(item) = outboundQueue.first else {
+            return
+        }
+
+        var replacedThisTurn = false
+
+        while !Task.isCancelled {
+            if closed {
+                outboundQueue.removeFirst()
+                completeEmit(&item)
+                drainOutboundQueueOnShutdown()
+                return
+            }
+
+            if measurementSubscribers.isEmpty {
+                outboundQueue.removeFirst()
+                completeEmit(&item)
+                return
+            }
+
+            if isStaleWheelPayload(item), !replacedThisTurn {
+                switch item.source {
+                case .crank:
+                    guard let crank = item.producedCrank,
+                          let payload = CSCMeasurement(
+                              cumulativeCrankRevolutions: crank.cumulativeRevolutions,
+                              lastCrankEventTime: crank.lastEventTime,
+                          ).encode()
+                    else {
+                        outboundQueue.removeFirst()
+                        completeEmit(&item)
+                        return
+                    }
+                    item.payload = payload
+                    item.encodedWheelGeneration = nil
+                    outboundQueue[0] = .measurement(item)
+                    replacedThisTurn = true
+                    continue
+                case .wheel:
+                    outboundQueue.removeFirst()
+                    completeEmit(&item)
+                    return
+                }
+            }
+
+            let accepted: Bool
+            do {
+                accepted = try await peripheral.updateValue(
+                    item.payload,
+                    serviceUUID: service.uuid,
+                    characteristicUUID: CSCS.measurementUUID,
+                    onSubscribedCentrals: nil,
+                )
+            } catch is CancellationError {
+                outboundQueue.removeFirst()
+                completeEmit(&item)
+                return
+            } catch {
+                outboundQueue.removeFirst()
+                completeEmit(&item)
+                return
+            }
+
+            if accepted {
+                if isStaleWheelPayload(item) {
+                    if item.source == .crank, let crank = item.producedCrank {
+                        crankCache = crank
+                    }
+                } else {
+                    if let wheel = item.producedWheel {
+                        wheelCache = wheel
+                    }
+                    if let crank = item.producedCrank {
+                        crankCache = crank
+                    }
+                    acceptedMeasurementCount += 1
+                    resumeAcceptedMeasurementCountWaiters(for: acceptedMeasurementCount)
+                }
+                outboundQueue.removeFirst()
+                completeEmit(&item)
+                return
+            }
+
+            if closed {
+                outboundQueue.removeFirst()
+                completeEmit(&item)
+                drainOutboundQueueOnShutdown()
+                return
+            }
+
+            if measurementSubscribers.isEmpty {
+                outboundQueue.removeFirst()
+                completeEmit(&item)
+                return
+            }
+
+            if isStaleWheelPayload(item) {
+                switch item.source {
+                case .crank:
+                    guard let crank = item.producedCrank,
+                          let payload = CSCMeasurement(
+                              cumulativeCrankRevolutions: crank.cumulativeRevolutions,
+                              lastCrankEventTime: crank.lastEventTime,
+                          ).encode()
+                    else {
+                        outboundQueue.removeFirst()
+                        completeEmit(&item)
+                        return
+                    }
+                    item.payload = payload
+                    item.encodedWheelGeneration = nil
+                    outboundQueue[0] = .measurement(item)
+                    replacedThisTurn = true
+                    continue
+                case .wheel:
+                    outboundQueue.removeFirst()
+                    completeEmit(&item)
+                    return
+                }
+            }
+
+            if closed {
+                drainOutboundQueueOnShutdown()
+                return
+            }
+
+            await waitForNotifyReady()
+            if closed {
+                drainOutboundQueueOnShutdown()
+                return
+            }
+            replacedThisTurn = false
+        }
+    }
+
+    private func processIndicationItem() async {
+        guard case var .indication(indication) = outboundQueue.first else {
+            return
+        }
+
+        while !Task.isCancelled {
+            if closed {
+                outboundQueue.removeFirst()
+                completeIndication(&indication)
+                endProcedure()
+                drainOutboundQueueOnShutdown()
+                return
+            }
+
+            let accepted: Bool
+            do {
+                accepted = try await peripheral.updateValue(
+                    indication.payload,
+                    serviceUUID: service.uuid,
+                    characteristicUUID: CSCS.controlPointUUID,
+                    onSubscribedCentrals: [indication.centralID],
+                )
+            } catch is CancellationError {
+                outboundQueue.removeFirst()
+                completeIndication(&indication)
+                endProcedure()
+                return
+            } catch {
+                outboundQueue.removeFirst()
+                completeIndication(&indication)
+                endProcedure()
+                return
+            }
+
+            if accepted {
+                outboundQueue.removeFirst()
+                completeIndication(&indication)
+                endProcedure()
+                return
+            }
+
+            if closed {
+                drainOutboundQueueOnShutdown()
+                return
+            }
+
+            await waitForNotifyReady()
+            if closed {
+                drainOutboundQueueOnShutdown()
+                return
+            }
+        }
+    }
+
+    private func drainOutboundQueueOnShutdown() {
+        while !outboundQueue.isEmpty {
+            switch outboundQueue.removeFirst() {
+            case var .measurement(item):
+                completeEmit(&item)
+            case var .indication(item):
+                completeIndication(&item)
+            }
+        }
+        if procedureInProgress {
+            endProcedure()
+        }
+    }
+
+    private func completeEmit(_ item: inout MeasurementItem) {
+        if let continuation = item.emitContinuation {
+            item.emitContinuation = nil
+            continuation.resume()
+        }
+    }
+
+    private func completeIndication(_ item: inout IndicationItem) {
+        if let continuation = item.completionContinuation {
+            item.completionContinuation = nil
+            continuation.resume()
+        }
+    }
+
+    private func endProcedure() {
+        guard procedureInProgress else {
+            return
+        }
+        procedureInProgress = false
+        resumeProcedureIdleWaiters()
+    }
+
+    private func resumeProcedureIdleWaiters() {
+        let waiters = procedureIdleWaiters
+        procedureIdleWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func resumeAcceptedMeasurementCountWaiters(for count: Int) {
+        var remaining: [(Int, CheckedContinuation<Void, Never>)] = []
+        for (target, continuation) in acceptedMeasurementCountWaiters {
+            if count >= target {
+                continuation.resume()
+            } else {
+                remaining.append((target, continuation))
+            }
+        }
+        acceptedMeasurementCountWaiters = remaining
+    }
+
+    private func resumeAcceptedMeasurementCountWaiters() {
+        let count = acceptedMeasurementCount
+        resumeAcceptedMeasurementCountWaiters(for: count)
+    }
+
+    private func enqueueMeasurement(_ item: MeasurementItem) {
+        outboundQueue.append(.measurement(item))
+        resumeOutboundQueueWaiter()
+    }
+
+    private func enqueueIndication(_ response: CSCControlPointResponse, centralID: UUID) {
+        guard !closed else {
+            endProcedure()
+            return
+        }
+        let item = IndicationItem(
+            payload: response.encode(),
+            centralID: centralID,
+            completionContinuation: nil,
+        )
+        outboundQueue.append(.indication(item))
+        resumeOutboundQueueWaiter()
+    }
+
+    private func emitWheel(_ sample: WheelRevolution) async {
+        if closed {
+            return
+        }
+        if measurementSubscribers.isEmpty {
+            return
+        }
+        guard let (payload, stamp) = encodeWheelSample(sample) else {
+            return
+        }
+
+        let item = MeasurementItem(
+            payload: payload,
+            source: .wheel,
+            encodedWheelGeneration: stamp,
+            producedWheel: sample,
+            producedCrank: nil,
+            emitContinuation: nil,
+        )
+
+        if closed {
+            return
+        }
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            var queuedItem = item
+            queuedItem.emitContinuation = continuation
+            enqueueMeasurement(queuedItem)
+        }
+    }
+
+    private func emitCrank(_ sample: CrankRevolution) async {
+        if closed {
+            return
+        }
+        if measurementSubscribers.isEmpty {
+            return
+        }
+        guard let (payload, stamp) = encodeCrankSample(sample) else {
+            return
+        }
+
+        let item = MeasurementItem(
+            payload: payload,
+            source: .crank,
+            encodedWheelGeneration: stamp,
+            producedWheel: nil,
+            producedCrank: sample,
+            emitContinuation: nil,
+        )
+
+        if closed {
+            return
+        }
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            var queuedItem = item
+            queuedItem.emitContinuation = continuation
+            enqueueMeasurement(queuedItem)
+        }
+    }
+
+    private func encodeWheelSample(_ sample: WheelRevolution) -> (Data, UInt64?)? {
+        let measurement = CSCMeasurement(
+            cumulativeWheelRevolutions: sample.cumulativeRevolutions,
+            lastWheelEventTime: sample.lastEventTime,
+            cumulativeCrankRevolutions: crankCache?.cumulativeRevolutions,
+            lastCrankEventTime: crankCache?.lastEventTime,
+        )
+        guard let payload = measurement.encode() else {
+            return nil
+        }
+        let stamp: UInt64? = measurement.cumulativeWheelRevolutions != nil ? wheelGeneration : nil
+        return (payload, stamp)
+    }
+
+    private func encodeCrankSample(_ sample: CrankRevolution) -> (Data, UInt64?)? {
+        let measurement = CSCMeasurement(
+            cumulativeWheelRevolutions: wheelCache?.cumulativeRevolutions,
+            lastWheelEventTime: wheelCache?.lastEventTime,
+            cumulativeCrankRevolutions: sample.cumulativeRevolutions,
+            lastCrankEventTime: sample.lastEventTime,
+        )
+        guard let payload = measurement.encode() else {
+            return nil
+        }
+        let stamp: UInt64? = measurement.cumulativeWheelRevolutions != nil ? wheelGeneration : nil
+        return (payload, stamp)
     }
 
     private func waitForPoweredOn() async throws {
@@ -344,10 +901,82 @@ actor ServerSession {
     }
 
     private func handleWrite(_ transaction: PeripheralWriteTransaction) async {
+        if closed {
+            return
+        }
+
+        guard transaction.requests.count == 1,
+              transaction.requests[0].serviceUUID == service.uuid
+        else {
+            await respondWriteError(transaction.id, code: 0x03)
+            return
+        }
+
+        let request = transaction.requests[0]
+
+        guard hasControlPointCharacteristic else {
+            await respondWriteError(transaction.id, code: 0x03)
+            return
+        }
+
+        guard request.characteristicUUID == CSCS.controlPointUUID else {
+            await respondWriteError(transaction.id, code: 0x03)
+            return
+        }
+
+        guard request.offset == 0 else {
+            await respondWriteError(transaction.id, code: 0x07)
+            return
+        }
+
+        guard !request.value.isEmpty,
+              let decoded = CSCControlPointRequest.decode(request.value)
+        else {
+            await respondWriteError(transaction.id, code: 0x0D)
+            return
+        }
+
+        guard controlPointSubscribers.contains(request.centralID) else {
+            await respondWriteError(
+                transaction.id,
+                code: CSCATTApplicationError.cccdImproperlyConfigured.rawValue,
+            )
+            return
+        }
+
+        guard !procedureInProgress else {
+            await respondWriteError(
+                transaction.id,
+                code: CSCATTApplicationError.procedureAlreadyInProgress.rawValue,
+            )
+            return
+        }
+
+        procedureInProgress = true
+        do {
+            try await peripheral.respond(to: transaction.id, with: .success, value: nil)
+        } catch {
+            endProcedure()
+            return
+        }
+
+        if closed {
+            endProcedure()
+            return
+        }
+
+        let centralID = request.centralID
+        let decodedRequest = decoded
+        procedureTask = Task {
+            await self.runProcedure(decodedRequest, centralID: centralID)
+        }
+    }
+
+    private func respondWriteError(_ transactionID: UUID, code: UInt8) async {
         do {
             try await peripheral.respond(
-                to: transaction.id,
-                with: .error(code: 0x03),
+                to: transactionID,
+                with: .error(code: code),
                 value: nil,
             )
         } catch is CancellationError {
@@ -355,48 +984,226 @@ actor ServerSession {
         }
     }
 
+    private func runProcedure(_ request: CSCControlPointRequest, centralID: UUID) async {
+        switch request {
+        case let .setCumulativeValue(value):
+            await runSetCumulativeProcedure(value: value, centralID: centralID)
+        case let .invalidParameter(opcode, _) where opcode == CSCControlPointOpCode.setCumulativeValue.rawValue:
+            if closed {
+                endProcedure()
+                return
+            }
+            enqueueIndication(
+                CSCControlPointResponse(
+                    requestOpcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
+                    value: CSCControlPointResponseValue.invalidParameter.rawValue,
+                    parameter: Data(),
+                ),
+                centralID: centralID,
+            )
+        case .startSensorCalibration:
+            if closed {
+                endProcedure()
+                return
+            }
+            enqueueIndication(
+                CSCControlPointResponse(
+                    requestOpcode: CSCControlPointOpCode.startSensorCalibration.rawValue,
+                    value: CSCControlPointResponseValue.opCodeNotSupported.rawValue,
+                    parameter: Data(),
+                ),
+                centralID: centralID,
+            )
+        case .updateSensorLocation:
+            if closed {
+                endProcedure()
+                return
+            }
+            enqueueIndication(
+                CSCControlPointResponse(
+                    requestOpcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
+                    value: CSCControlPointResponseValue.opCodeNotSupported.rawValue,
+                    parameter: Data(),
+                ),
+                centralID: centralID,
+            )
+        case .requestSupportedSensorLocations:
+            if closed {
+                endProcedure()
+                return
+            }
+            enqueueIndication(
+                CSCControlPointResponse(
+                    requestOpcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
+                    value: CSCControlPointResponseValue.opCodeNotSupported.rawValue,
+                    parameter: Data(),
+                ),
+                centralID: centralID,
+            )
+        case let .invalidParameter(opcode, _):
+            if closed {
+                endProcedure()
+                return
+            }
+            enqueueIndication(
+                CSCControlPointResponse(
+                    requestOpcode: opcode,
+                    value: CSCControlPointResponseValue.opCodeNotSupported.rawValue,
+                    parameter: Data(),
+                ),
+                centralID: centralID,
+            )
+        case let .unknown(opcode, _):
+            if closed {
+                endProcedure()
+                return
+            }
+            enqueueIndication(
+                CSCControlPointResponse(
+                    requestOpcode: opcode,
+                    value: CSCControlPointResponseValue.opCodeNotSupported.rawValue,
+                    parameter: Data(),
+                ),
+                centralID: centralID,
+            )
+        }
+    }
+
+    private func runSetCumulativeProcedure(value: UInt32, centralID: UUID) async {
+        guard let wheel else {
+            if closed {
+                endProcedure()
+            } else {
+                enqueueIndication(
+                    CSCControlPointResponse(
+                        requestOpcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
+                        value: CSCControlPointResponseValue.operationFailed.rawValue,
+                        parameter: Data(),
+                    ),
+                    centralID: centralID,
+                )
+            }
+            return
+        }
+
+        let delegate = wheel.setCumulativeWheelRevolutions
+        do {
+            try await delegate.setCumulativeWheelRevolutions(value)
+        } catch {
+            if closed {
+                endProcedure()
+                return
+            }
+            enqueueIndication(
+                CSCControlPointResponse(
+                    requestOpcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
+                    value: CSCControlPointResponseValue.operationFailed.rawValue,
+                    parameter: Data(),
+                ),
+                centralID: centralID,
+            )
+            return
+        }
+
+        if closed {
+            endProcedure()
+            return
+        }
+
+        // wheelGeneration wraps after UInt64.max; a stamp of 0 can match again.
+        wheelGeneration &+= 1
+        wheelCache = nil
+        enqueueIndication(
+            CSCControlPointResponse(
+                requestOpcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
+                value: CSCControlPointResponseValue.success.rawValue,
+                parameter: Data(),
+            ),
+            centralID: centralID,
+        )
+        wakeReadyWaiterWithoutLatch()
+    }
+
     private func handleSubscription(_ change: SubscriptionChange) async {
         switch change {
         case let .subscribed(centralID, serviceUUID, characteristicUUID):
-            guard serviceUUID == service.uuid, characteristicUUID == CSCS.measurementUUID else {
+            guard serviceUUID == service.uuid else {
                 return
             }
-            measurementSubscribers.insert(centralID)
+            switch characteristicUUID {
+            case CSCS.measurementUUID:
+                measurementSubscribers.insert(centralID)
+                resumeMeasurementSubscriberWaiters()
+            case CSCS.controlPointUUID:
+                controlPointSubscribers.insert(centralID)
+                resumeControlPointSubscriberWaiters()
+            default:
+                return
+            }
         case let .unsubscribed(centralID, serviceUUID, characteristicUUID):
-            guard serviceUUID == service.uuid, characteristicUUID == CSCS.measurementUUID else {
+            guard serviceUUID == service.uuid else {
                 return
             }
-            measurementSubscribers.remove(centralID)
+            switch characteristicUUID {
+            case CSCS.measurementUUID:
+                measurementSubscribers.remove(centralID)
+                resumeMeasurementSubscriberWaiters()
+            case CSCS.controlPointUUID:
+                controlPointSubscribers.remove(centralID)
+                resumeControlPointSubscriberWaiters()
+            default:
+                return
+            }
         }
-        resumeSubscriberWaiters()
     }
 
-    private func resumeSubscriberWaiters() {
-        let pending = subscriberWaiters
-        subscriberWaiters.removeAll()
+    private func resumeMeasurementSubscriberWaiters() {
+        let pending = measurementSubscriberWaiters
+        measurementSubscriberWaiters.removeAll()
         for waiter in pending {
             if measurementSubscribers == waiter.expected {
                 waiter.continuation.resume()
             } else {
-                subscriberWaiters.append(waiter)
+                measurementSubscriberWaiters.append(waiter)
+            }
+        }
+        resumeMeasurementSubscriberWaiterParkedWaiters()
+    }
+
+    private func resumeControlPointSubscriberWaiters() {
+        let pending = controlPointSubscriberWaiters
+        controlPointSubscriberWaiters.removeAll()
+        for waiter in pending {
+            if controlPointSubscribers == waiter.expected {
+                waiter.continuation.resume()
+            } else {
+                controlPointSubscriberWaiters.append(waiter)
             }
         }
     }
 
-    private func resumeAllSubscriberWaiters() {
-        let pending = subscriberWaiters
-        subscriberWaiters.removeAll()
+    private func resumeAllMeasurementSubscriberWaiters() {
+        let pending = measurementSubscriberWaiters
+        measurementSubscriberWaiters.removeAll()
         for waiter in pending {
             waiter.continuation.resume()
         }
     }
 
-    private func resumeSubscriberWaiterParkedWaiters() {
-        guard !subscriberWaiters.isEmpty else {
+    private func resumeAllControlPointSubscriberWaiters() {
+        let pending = controlPointSubscriberWaiters
+        controlPointSubscriberWaiters.removeAll()
+        for waiter in pending {
+            waiter.continuation.resume()
+        }
+    }
+
+    private func resumeMeasurementSubscriberWaiterParkedWaiters() {
+        guard !measurementSubscriberWaiters.isEmpty else {
             return
         }
-        let waiters = subscriberWaiterParkedWaiters
-        subscriberWaiterParkedWaiters.removeAll()
+        let waiters = measurementSubscriberWaiterParkedWaiters
+        measurementSubscriberWaiterParkedWaiters.removeAll()
         for waiter in waiters {
             waiter.resume()
         }
@@ -424,46 +1231,35 @@ actor ServerSession {
                     return
                 }
 
-                await self.send(revolution)
+                await self.emitCrank(revolution)
             }
         }
     }
 
-    private func send(_ revolution: CrankRevolution) async {
-        guard !measurementSubscribers.isEmpty else {
+    private func startWheelLoopIfNeeded() {
+        guard let wheel else {
             return
         }
 
-        let measurement = CSCMeasurement(
-            cumulativeCrankRevolutions: revolution.cumulativeRevolutions,
-            lastCrankEventTime: revolution.lastEventTime,
-        )
-        guard let payload = measurement.encode() else {
-            return
-        }
-
-        while !Task.isCancelled, !closed {
-            guard !measurementSubscribers.isEmpty else {
-                return
-            }
-
-            do {
-                let accepted = try await peripheral.updateValue(
-                    payload,
-                    serviceUUID: service.uuid,
-                    characteristicUUID: CSCS.measurementUUID,
-                    onSubscribedCentrals: nil,
-                )
-                if accepted {
+        let sequence = wheel.revolutions
+        wheelTask = Task {
+            let iterator = sequence.makeAsyncIterator()
+            while !Task.isCancelled {
+                let revolution: WheelRevolution?
+                do {
+                    revolution = try await iterator.next()
+                } catch is CancellationError {
+                    return
+                } catch {
                     return
                 }
-            } catch is CancellationError {
-                return
-            } catch {
-                return
-            }
 
-            await waitForNotifyReady()
+                guard let revolution else {
+                    return
+                }
+
+                await self.emitWheel(revolution)
+            }
         }
     }
 

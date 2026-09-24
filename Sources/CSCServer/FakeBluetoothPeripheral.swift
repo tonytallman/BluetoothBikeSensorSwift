@@ -280,6 +280,10 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         await readBroadcaster.waitUntilSubscriberCount(count)
     }
 
+    package func waitUntilWriteTransactionSubscriberCount(_ count: Int) async {
+        await writeBroadcaster.waitUntilSubscriberCount(count)
+    }
+
     package func waitForRecordedCall(
         where predicate: @escaping @Sendable (RecordedCall) -> Bool,
     ) async {

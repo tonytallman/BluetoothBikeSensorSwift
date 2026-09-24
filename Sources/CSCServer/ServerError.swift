@@ -2,7 +2,7 @@ import Foundation
 
 /// Errors surfaced by ``Server/start()`` and ``Server/stop()``.
 public enum ServerError: Error, Sendable, Equatable {
-    /// The built configuration includes wheel data, multiple locations, or omits crank data.
+    /// Multiple sensor locations are not served yet.
     case unsupportedConfiguration
     /// ``Server/start()`` was called while a session is already active.
     case alreadyStarted
