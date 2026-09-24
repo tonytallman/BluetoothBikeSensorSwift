@@ -72,40 +72,43 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
     }
 
     func update(_ location: SensorLocationKind) async throws {
-        let preparation = state.withLock { locked -> (shouldThrow: Bool, park: Bool) in
-            locked.recordedKinds.append(location)
-            locked.updateCount += 1
-            let throwNow = locked.shouldThrow
-            var park = false
-            if !throwNow, locked.parkArmed {
+        let willPark = state.withLock { locked -> Bool in
+            if locked.shouldThrow {
+                return false
+            }
+            if locked.parkArmed {
                 locked.parkArmed = false
-                park = true
+                return true
             }
-            if throwNow {
-                resumeUpdateCountWaiters(locked: &locked, for: locked.updateCount)
-            } else if !park {
-                resumeUpdateCountWaiters(locked: &locked, for: locked.updateCount)
-            }
-            return (throwNow, park)
+            return false
         }
 
-        if preparation.shouldThrow {
-            throw TestDelegateError.failure
-        }
-
-        guard preparation.park else {
+        if willPark {
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    state.withLock { locked in
+                        locked.recordedKinds.append(location)
+                        locked.updateCount += 1
+                        locked.parkedContinuation = continuation
+                        resumeUpdateCountWaiters(locked: &locked, for: locked.updateCount)
+                    }
+                }
+            } onCancel: {
+                self.cancelPark()
+            }
             return
         }
 
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                state.withLock { locked in
-                    locked.parkedContinuation = continuation
-                    resumeUpdateCountWaiters(locked: &locked, for: locked.updateCount)
-                }
-            }
-        } onCancel: {
-            self.cancelPark()
+        let shouldThrow = state.withLock { locked -> Bool in
+            locked.recordedKinds.append(location)
+            locked.updateCount += 1
+            let throwNow = locked.shouldThrow
+            resumeUpdateCountWaiters(locked: &locked, for: locked.updateCount)
+            return throwNow
+        }
+
+        if shouldThrow {
+            throw TestDelegateError.failure
         }
     }
 

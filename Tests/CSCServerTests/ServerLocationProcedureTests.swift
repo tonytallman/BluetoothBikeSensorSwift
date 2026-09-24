@@ -206,11 +206,13 @@ struct ServerLocationProcedureTests {
         await server.stop()
         try await server.start(peripheral: fake)
         await emitSensorLocationRead(fake: fake, offset: 0)
-        await fake.waitForRecordedCall { call in
-            if case let .respond(_, .success, value) = call {
-                return value == Data([0x05])
-            }
-            return false
+        await fake.waitUntilRecordedCallsSatisfy { calls in
+            calls.filter { call in
+                if case let .respond(_, .success, value) = call {
+                    return value == Data([0x05])
+                }
+                return false
+            }.count >= 2
         }
     }
 
