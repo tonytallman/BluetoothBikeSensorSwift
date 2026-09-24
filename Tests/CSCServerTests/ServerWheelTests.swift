@@ -725,6 +725,7 @@ struct ServerWheelTests {
             }
             return false
         }
+        await sequence.waitUntilEnded()
 
         #expect(await fake.isAdvertising)
 
@@ -744,6 +745,7 @@ struct ServerWheelTests {
             }
             return false
         }
+        #expect(await fake.read(characteristicUUID: CSCS.featureUUID) == server.feature.encode())
     }
 
     @Test func stopDuringAcceptedUpdateValueReturns() async throws {
