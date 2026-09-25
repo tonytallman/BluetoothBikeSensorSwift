@@ -16,6 +16,7 @@ struct RuntimeSimulationViewModelTests {
         )
         outputs.wheelContinuation = streamPair.continuation
         simulation.begin(outputs, showsWheel: true, showsCrank: false)
+        await Task.yield()
         var iterator = streamPair.stream.makeAsyncIterator()
         time.elapsed = .seconds(1)
         ticker.tick()
@@ -51,6 +52,7 @@ struct RuntimeSimulationViewModelTests {
         outputs.wheelContinuation = pair.continuation
         simulation.begin(outputs, showsWheel: true, showsCrank: false)
         simulation.setCumulativeWheelRevolutions(1000)
+        await Task.yield()
         var iterator = pair.stream.makeAsyncIterator()
         time.elapsed = .seconds(1)
         ticker.tick()
@@ -69,14 +71,16 @@ struct RuntimeSimulationViewModelTests {
         outputs.wheelContinuation = pair.continuation
         simulation.begin(outputs, showsWheel: true, showsCrank: false)
         simulation.pause()
+        await Task.yield()
         time.elapsed = .seconds(1)
         ticker.tick()
         let pausedSample = await nextWheelSample(from: pair.stream, within: .milliseconds(200))
         #expect(pausedSample == nil)
         simulation.resume()
+        var iterator = pair.stream.makeAsyncIterator()
         time.elapsed = .seconds(2)
         ticker.tick()
-        var iterator = pair.stream.makeAsyncIterator()
+        await Task.yield()
         let sample = await iterator.next()
         #expect(sample != nil)
         simulation.end()
