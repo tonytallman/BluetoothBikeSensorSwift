@@ -13,61 +13,52 @@ final class RuntimeServerViewModel: ServerViewModel, ControlPointEventSink {
         }
     }
 
-    var revolutions: RevolutionConfiguration = .wheelAndCrank {
-        didSet {
-            guard isConfigurationEditable else {
-                revolutions = oldValue
-                return
-            }
+    var revolutions: RevolutionConfiguration {
+        get { storedRevolutions }
+        set {
+            guard isConfigurationEditable else { return }
+            storedRevolutions = newValue
         }
     }
 
-    var locationMode: LocationMode = .none {
-        didSet {
-            guard isConfigurationEditable else {
-                locationMode = oldValue
-                return
-            }
+    var locationMode: LocationMode {
+        get { storedLocationMode }
+        set {
+            guard isConfigurationEditable else { return }
+            storedLocationMode = newValue
         }
     }
 
-    var fixedLocation: SensorLocationKind = .rearDropout {
-        didSet {
-            guard isConfigurationEditable else {
-                fixedLocation = oldValue
-                return
-            }
+    var fixedLocation: SensorLocationKind {
+        get { storedFixedLocation }
+        set {
+            guard isConfigurationEditable else { return }
+            storedFixedLocation = newValue
         }
     }
 
-    private var supportedSelection: Set<SensorLocationKind> = [
+    var multipleCurrentLocation: SensorLocationKind {
+        get { storedMultipleCurrentLocation }
+        set {
+            guard isConfigurationEditable else { return }
+            storedMultipleCurrentLocation = newValue
+        }
+    }
+
+    private var storedRevolutions: RevolutionConfiguration = .wheelAndCrank
+    private var storedLocationMode: LocationMode = .none
+    private var storedFixedLocation: SensorLocationKind = .rearDropout
+    private var storedMultipleCurrentLocation: SensorLocationKind = .rearDropout
+    private var storedSupportedSelection: Set<SensorLocationKind> = [
         .frontWheel,
         .rearDropout,
         .leftCrank,
         .rightCrank,
-    ] {
-        didSet {
-            guard isConfigurationEditable else {
-                supportedSelection = oldValue
-                return
-            }
-            if !supportedSelection.contains(multipleCurrentLocation),
-               let first = SensorLocationCatalog.supportedKinds(from: supportedSelection).first {
-                multipleCurrentLocation = first
-            }
-        }
-    }
+    ]
 
-    var multipleCurrentLocation: SensorLocationKind = .rearDropout {
-        didSet {
-            if phase == .running, locationMode == .multiple {
-                return
-            }
-            guard isConfigurationEditable else {
-                multipleCurrentLocation = oldValue
-                return
-            }
-        }
+    private var supportedSelection: Set<SensorLocationKind> {
+        get { storedSupportedSelection }
+        set { applySupportedSelection(newValue) }
     }
 
     var alert: ServerAlert?
@@ -99,6 +90,8 @@ final class RuntimeServerViewModel: ServerViewModel, ControlPointEventSink {
         self.factory = factory
         self.bluetooth = bluetooth
     }
+
+    typealias Simulation = RuntimeSimulationViewModel
 
     var simulation: RuntimeSimulationViewModel {
         runtimeSimulation
@@ -231,10 +224,20 @@ final class RuntimeServerViewModel: ServerViewModel, ControlPointEventSink {
 
     func setSupported(_ kind: SensorLocationKind, _ isSupported: Bool) {
         guard isConfigurationEditable else { return }
+        var next = storedSupportedSelection
         if isSupported {
-            supportedSelection.insert(kind)
+            next.insert(kind)
         } else {
-            supportedSelection.remove(kind)
+            next.remove(kind)
+        }
+        applySupportedSelection(next)
+    }
+
+    private func applySupportedSelection(_ selection: Set<SensorLocationKind>) {
+        storedSupportedSelection = selection
+        if !selection.contains(storedMultipleCurrentLocation),
+           let first = SensorLocationCatalog.supportedKinds(from: selection).first {
+            storedMultipleCurrentLocation = first
         }
     }
 
@@ -253,7 +256,7 @@ final class RuntimeServerViewModel: ServerViewModel, ControlPointEventSink {
 
     func sensorLocationDidChange(to location: SensorLocationKind) {
         servedLocation = location
-        multipleCurrentLocation = location
+        storedMultipleCurrentLocation = location
         appendLog("Sensor location updated → \(displayName(for: location))")
     }
 
@@ -274,6 +277,12 @@ final class RuntimeServerViewModel: ServerViewModel, ControlPointEventSink {
     private func run(_ session: Session) async {
         let server = session.server
         var outputs = session.outputs
+        subscriberCountTask = Task { @MainActor [server] in
+            let stream = await server.measurementSubscriberCount
+            for await count in stream {
+                subscribedCentralCount = count
+            }
+        }
         let startTask = Task { try await server.start() }
         let result = await withTaskCancellationHandler {
             await startTask.result
@@ -285,13 +294,6 @@ final class RuntimeServerViewModel: ServerViewModel, ControlPointEventSink {
             phase = .running
             if locationMode == .multiple {
                 servedLocation = multipleCurrentLocation
-            }
-            subscribedCentralCount = 0
-            subscriberCountTask = Task { @MainActor [server] in
-                let stream = await server.measurementSubscriberCount
-                for await count in stream {
-                    subscribedCentralCount = count
-                }
             }
             runtimeSimulation.begin(
                 outputs,

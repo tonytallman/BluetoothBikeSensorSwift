@@ -2,7 +2,7 @@ import CSCServer
 import Testing
 @testable import SampleServerApp
 
-@Suite(.serialized) struct ServerConfigurationTests {
+@Suite struct ServerConfigurationTests {
     @Test(arguments: [
         (RevolutionConfiguration.wheel, LocationConfiguration.none, UInt16(0x0001)),
         (RevolutionConfiguration.wheel, LocationConfiguration.fixed(.rearDropout), UInt16(0x0001)),
@@ -50,6 +50,20 @@ import Testing
             location: .multiple(supported: [.frontWheel], current: .rearDropout),
         )
         #expect(config.validationIssue != nil)
+    }
+
+    @Test func wheelAndCrankSummaryAndCharacteristics() {
+        let config = ServerConfiguration(
+            revolutions: .wheelAndCrank,
+            location: .fixed(.rearDropout),
+        )
+        #expect(config.expectedClientSummary == "Speed, Cadence, \"Location: X\"")
+        #expect(config.expectedCharacteristics == [
+            "Measurement",
+            "Feature",
+            "Sensor Location",
+            "Control Point",
+        ])
     }
 
     @Test func supportedLocationsInCatalogOrder() {

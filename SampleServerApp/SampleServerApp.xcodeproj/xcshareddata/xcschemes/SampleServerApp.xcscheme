@@ -28,7 +28,7 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "B10000000000000000000051"
+               BlueprintIdentifier = "B10000000000000000000401"
                BuildableName = "SampleServerAppTests.xctest"
                BlueprintName = "SampleServerAppTests"
                ReferencedContainer = "container:SampleServerApp.xcodeproj">
@@ -49,7 +49,7 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "B10000000000000000000051"
+               BlueprintIdentifier = "B10000000000000000000401"
                BuildableName = "SampleServerAppTests.xctest"
                BlueprintName = "SampleServerAppTests"
                ReferencedContainer = "container:SampleServerApp.xcodeproj">

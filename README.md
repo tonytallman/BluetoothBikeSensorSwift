@@ -309,7 +309,7 @@ let wheelCrankMultiple = Server.wheelRevolutions(wheelStream, setCumulativeWheel
 - Only one `Server` per process can be starting, running, or stopping at a time. Another `Server`'s `start()` throws `ServerError.alreadyStarted`.
 - Keep a strong reference to a started server. Releasing it stops it in the background, and the slot is freed only after that teardown finishes, so `await server.stop()` before starting another server right away.
 - `start()` after `stop()` is allowed. A single-pass `AsyncStream` source is terminated once `stop()` cancels its iteration; use a multi-pass sequence or build a new `Server` to publish again with the same stream. On multiple-location servers, the location served after restart is the last one `update(_:)` returned successfully.
-- `measurementSubscriberCount` is an `AsyncStream<Int>` of centrals currently subscribed to CSC Measurement notifications. New subscribers receive the current count immediately, then each change. The stream yields `0` while the server is stopped or starting, and when Bluetooth loss suspends the server and clears subscriptions.
+- `measurementSubscriberCount` is an `AsyncStream<Int>` of centrals currently subscribed to CSC Measurement notifications. New subscribers receive the current count immediately, then each change. The stream yields `0` while the server is stopped or starting, and when Bluetooth loss suspends the server and clears subscriptions. The stream does not finish when the server stops; cancel the task that consumes it.
 
 ### Bluetooth changes
 

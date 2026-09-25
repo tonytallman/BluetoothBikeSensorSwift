@@ -1,7 +1,7 @@
 import Testing
 @testable import SampleServerApp
 
-@Suite(.serialized) struct EventTimeTests {
+@Suite struct EventTimeTests {
     @Test func zero() {
         #expect(EventTime.wireValue(for: .zero) == 0)
     }

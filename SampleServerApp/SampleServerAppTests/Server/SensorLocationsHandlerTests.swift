@@ -3,7 +3,7 @@ import Testing
 @testable import SampleServerApp
 
 @MainActor
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(1)))
 struct SensorLocationsHandlerTests {
     @Test func supportedAndCurrentMatchConstruction() {
         let handler = SensorLocationsHandler(
@@ -24,6 +24,15 @@ struct SensorLocationsHandlerTests {
         )
         try await handler.update(.rightCrank)
         #expect(sink.locations == [.rightCrank])
+    }
+
+    @Test func updateWithNilSinkDoesNotCrash() async throws {
+        let handler = SensorLocationsHandler(
+            supported: [.rightCrank],
+            current: .rightCrank,
+            sink: nil,
+        )
+        try await handler.update(.leftCrank)
     }
 
     @Test func cancellationThrowsAndRecordsNothing() async {

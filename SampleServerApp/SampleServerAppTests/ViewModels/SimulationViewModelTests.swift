@@ -3,7 +3,7 @@ import Testing
 @testable import SampleServerApp
 
 @MainActor
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.timeLimit(.minutes(1)))
 struct RuntimeSimulationViewModelTests {
     @Test func automaticWheelTickYield() async {
         let time = ManualTimeSource()
@@ -28,17 +28,19 @@ struct RuntimeSimulationViewModelTests {
     }
 
     @Test func nothingBeforeBeginOrAfterEnd() async {
+        let time = ManualTimeSource()
         let ticker = ManualTicker()
-        let simulation = RuntimeSimulationViewModel(ticker: ticker)
+        let simulation = RuntimeSimulationViewModel(timeSource: time, ticker: ticker)
         let pair = AsyncStream.makeStream(of: WheelRevolution.self, bufferingPolicy: .bufferingNewest(1))
-        ticker.tick()
         var outputs = SimulationOutputs()
         outputs.wheelContinuation = pair.continuation
         simulation.begin(outputs, showsWheel: true, showsCrank: false)
-        simulation.end()
-        ticker.tick()
-        pair.continuation.finish()
+        await Task.yield()
         var iterator = pair.stream.makeAsyncIterator()
+        simulation.end()
+        time.elapsed = .seconds(1)
+        simulation.tick()
+        pair.continuation.finish()
         #expect(await iterator.next() == nil)
         ticker.finish()
     }
@@ -64,11 +66,14 @@ struct RuntimeSimulationViewModelTests {
 
     @Test func pauseSkipsTickSample() async {
         let time = ManualTimeSource()
-        let ticker = ManualTicker()
-        let simulation = RuntimeSimulationViewModel(timeSource: time, ticker: ticker)
+        let simulation = RuntimeSimulationViewModel(timeSource: time)
         var outputs = SimulationOutputs()
         let pair = AsyncStream.makeStream(of: WheelRevolution.self, bufferingPolicy: .bufferingNewest(1))
         outputs.wheelContinuation = pair.continuation
+        let period = RevolutionPeriod.wheelPeriod(
+            speedKilometersPerHour: 25,
+            circumferenceMeters: 2.105,
+        )
         simulation.begin(outputs, showsWheel: true, showsCrank: false)
         simulation.pause()
         time.elapsed = .seconds(5)
@@ -80,8 +85,11 @@ struct RuntimeSimulationViewModelTests {
         var iterator = pair.stream.makeAsyncIterator()
         simulation.tick()
         let sample = await iterator.next()
-        #expect(sample != nil)
+        var schedule = RevolutionSchedule()
+        schedule.beginAutomatic(at: .zero, period: period)
+        let expected = schedule.advance(to: .seconds(5))
+        #expect(sample?.cumulativeRevolutions == UInt32(truncatingIfNeeded: expected!.cumulative))
+        #expect(sample?.lastEventTime == expected?.wheelRevolution.lastEventTime)
         simulation.end()
-        ticker.finish()
     }
 }

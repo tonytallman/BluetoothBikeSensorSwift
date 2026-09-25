@@ -2,7 +2,7 @@ import CSCServer
 import Testing
 @testable import SampleServerApp
 
-@Suite(.serialized) struct RevolutionScheduleTests {
+@Suite struct RevolutionScheduleTests {
     @Test func automaticDoesNotFireAtStartInstant() {
         var schedule = RevolutionSchedule()
         schedule.beginAutomatic(at: .zero, period: .seconds(0.30312))
@@ -25,8 +25,14 @@ import Testing
     }
 
     @Test func clientDisplayAfterBaselineSample() {
-        let baseline = WheelRevolution(cumulativeRevolutions: 0, lastEventTime: 931)
-        let current = WheelRevolution(cumulativeRevolutions: 3, lastEventTime: 1862)
+        var schedule = RevolutionSchedule()
+        let period = RevolutionPeriod.wheelPeriod(
+            speedKilometersPerHour: 25,
+            circumferenceMeters: 2.105,
+        )
+        schedule.beginAutomatic(at: .zero, period: period)
+        let baseline = schedule.advance(to: .seconds(1))!.wheelRevolution
+        let current = schedule.advance(to: .seconds(2))!.wheelRevolution
         let speed = ClientFormula.speedKilometersPerHour(
             previousCumulative: baseline.cumulativeRevolutions,
             previousEventTime: baseline.lastEventTime,

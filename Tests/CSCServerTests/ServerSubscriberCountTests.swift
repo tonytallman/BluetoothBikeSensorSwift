@@ -47,30 +47,46 @@ struct ServerSubscriberCountTests {
         #expect(await iterator.next() == 0)
     }
 
+    @Test func firstAccessAfterSubscribeReplaysCurrentCount() async throws {
+        let fake = FakeBluetoothPeripheral()
+        let server = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
+        try await server.start(peripheral: fake)
+        let central = UUID()
+        await fake.subscribeMeasurement(server: server, centralID: central)
+        await server.waitForMeasurementSubscribers([central])
+
+        let stream = await server.measurementSubscriberCount
+        var iterator = stream.makeAsyncIterator()
+        #expect(await iterator.next() == 1)
+
+        await server.stop()
+    }
+
     @Test func restartAndLateSubscriberReceiveCurrentValue() async throws {
         let fake = FakeBluetoothPeripheral()
         let server = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
-        let stream = await server.measurementSubscriberCount
-        var iterator = stream.makeAsyncIterator()
-        #expect(await iterator.next() == 0)
 
         try await server.start(peripheral: fake)
-        #expect(await iterator.next() == 0)
         let central = UUID()
         await fake.subscribeMeasurement(server: server, centralID: central)
+
+        let stream = await server.measurementSubscriberCount
+        var iterator = stream.makeAsyncIterator()
         #expect(await iterator.next() == 1)
+
+        await server.stop()
+
+        try await server.start(peripheral: fake)
+        let afterRestart = await server.measurementSubscriberCount
+        var restartIterator = afterRestart.makeAsyncIterator()
+        #expect(await restartIterator.next() == 0)
+
+        await fake.subscribeMeasurement(server: server, centralID: central)
+        #expect(await restartIterator.next() == 1)
 
         let lateStream = await server.measurementSubscriberCount
         var lateIterator = lateStream.makeAsyncIterator()
         #expect(await lateIterator.next() == 1)
-
-        await server.stop()
-        #expect(await iterator.next() == 0)
-
-        try await server.start(peripheral: fake)
-        #expect(await iterator.next() == 0)
-        await fake.subscribeMeasurement(server: server, centralID: central)
-        #expect(await iterator.next() == 1)
     }
 
     @Test func duplicateSubscribeDoesNotDoubleCount() async throws {

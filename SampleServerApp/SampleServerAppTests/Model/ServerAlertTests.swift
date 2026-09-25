@@ -2,7 +2,7 @@ import CSCServer
 import Testing
 @testable import SampleServerApp
 
-@Suite(.serialized) struct ServerAlertTests {
+@Suite struct ServerAlertTests {
     @Test func cancellationReturnsNil() {
         #expect(
             ServerAlert.startFailure(
@@ -20,6 +20,27 @@ import Testing
             authorization: .denied,
         )
         #expect(alert?.offersSettings == true)
+    }
+
+    @Test func genericNotPoweredOnMessage() {
+        let alert = ServerAlert.startFailure(
+            ServerError.notPoweredOn,
+            status: .poweredOff,
+            authorization: .allowed,
+        )
+        #expect(alert?.message.contains("Bluetooth is off") == true)
+    }
+
+    @Test func nonServerErrorUsesDescription() {
+        struct SampleError: Error, CustomStringConvertible {
+            var description: String { "sample failure" }
+        }
+        let alert = ServerAlert.startFailure(
+            SampleError(),
+            status: .poweredOn,
+            authorization: .allowed,
+        )
+        #expect(alert?.message == "sample failure")
     }
 
     @Test func unsupportedDeviceMessage() {

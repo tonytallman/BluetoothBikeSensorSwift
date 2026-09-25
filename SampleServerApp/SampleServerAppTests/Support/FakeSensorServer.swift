@@ -4,27 +4,36 @@ import Foundation
 
 final class FakeMeasurementSubscriberCount: @unchecked Sendable {
     private let lock = NSLock()
-    private var continuation: AsyncStream<Int>.Continuation?
     private var latest = 0
-    private let sharedStream: AsyncStream<Int>
-
-    init() {
-        var capturedContinuation: AsyncStream<Int>.Continuation?
-        sharedStream = AsyncStream { continuation in
-            capturedContinuation = continuation
-        }
-        continuation = capturedContinuation
-        continuation?.yield(0)
-    }
+    private var active: [UUID: AsyncStream<Int>.Continuation] = [:]
 
     func stream() -> AsyncStream<Int> {
-        sharedStream
+        AsyncStream { continuation in
+            let id = UUID()
+            lock.lock()
+            active[id] = continuation
+            let replay = latest
+            lock.unlock()
+            continuation.yield(replay)
+            continuation.onTermination = { [weak self, id] _ in
+                self?.remove(id)
+            }
+        }
     }
 
     func send(_ value: Int) {
         lock.lock()
         latest = value
-        continuation?.yield(value)
+        let continuations = Array(active.values)
+        lock.unlock()
+        for continuation in continuations {
+            continuation.yield(value)
+        }
+    }
+
+    private func remove(_ id: UUID) {
+        lock.lock()
+        active.removeValue(forKey: id)
         lock.unlock()
     }
 }

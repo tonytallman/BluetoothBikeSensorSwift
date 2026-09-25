@@ -61,7 +61,6 @@
 		B1000000000000000000046B /* ManualTimeSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000046A /* ManualTimeSource.swift */; };
 		B1000000000000000000046D /* ServerViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000046C /* ServerViewModelTests.swift */; };
 		B1000000000000000000046F /* SimulationViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000046E /* SimulationViewModelTests.swift */; };
-		B10000000000000000000472 /* CSCServer in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000031 /* CSCServer */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -127,14 +126,6 @@
 		B10000000000000000000407 = {isa = PBXContainerItemProxy; containerPortal = B10000000000000000000060; proxyType = 1; remoteGlobalIDString = B10000000000000000000050; remoteInfo = SampleServerApp; };
 /* End PBXContainerItemProxy section */
 /* Begin PBXFrameworksBuildPhase section */
-		B10000000000000000000473 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				B10000000000000000000472 /* CSCServer in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		B10000000000000000000020 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -258,16 +249,12 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = B10000000000000000000404;
 			buildPhases = (
-				B10000000000000000000473 /* Frameworks */,
 				B10000000000000000000403 /* Sources */,
 			);
 			dependencies = (
 				B10000000000000000000408 /* PBXTargetDependency */,
 			);
 			name = SampleServerAppTests;
-			packageProductDependencies = (
-				B10000000000000000000031 /* CSCServer */,
-			);
 			productName = SampleServerAppTests;
 			productReference = B10000000000000000000402;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -278,11 +265,15 @@
 		B10000000000000000000060 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
-				BuildIndependentTargetsInParallel = 0;
+				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1600;
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					B10000000000000000000050 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = B10000000000000000000401;
+					};
+					B10000000000000000000401 = {
 						CreatedOnToolsVersion = 16.0;
 					};
 				};
