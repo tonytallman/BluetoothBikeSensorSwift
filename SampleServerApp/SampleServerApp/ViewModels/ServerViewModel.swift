@@ -60,6 +60,9 @@ final class RuntimeServerViewModel: ServerViewModel, ControlPointEventSink {
 
     var multipleCurrentLocation: SensorLocationKind = .rearDropout {
         didSet {
+            if phase == .running, locationMode == .multiple {
+                return
+            }
             guard isConfigurationEditable else {
                 multipleCurrentLocation = oldValue
                 return
