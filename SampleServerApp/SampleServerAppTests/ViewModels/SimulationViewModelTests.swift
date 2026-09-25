@@ -31,16 +31,14 @@ struct RuntimeSimulationViewModelTests {
         let simulation = RuntimeSimulationViewModel(ticker: ticker)
         let pair = AsyncStream.makeStream(of: WheelRevolution.self, bufferingPolicy: .bufferingNewest(1))
         ticker.tick()
-        var iterator = pair.stream.makeAsyncIterator()
-        let before = await iterator.next()
-        #expect(before == nil)
         var outputs = SimulationOutputs()
         outputs.wheelContinuation = pair.continuation
         simulation.begin(outputs, showsWheel: true, showsCrank: false)
         simulation.end()
         ticker.tick()
-        let after = await iterator.next()
-        #expect(after == nil)
+        pair.continuation.finish()
+        var iterator = pair.stream.makeAsyncIterator()
+        #expect(await iterator.next() == nil)
         ticker.finish()
     }
 
