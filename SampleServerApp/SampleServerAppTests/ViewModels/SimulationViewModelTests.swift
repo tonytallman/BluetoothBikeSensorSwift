@@ -16,9 +16,9 @@ struct RuntimeSimulationViewModelTests {
         )
         outputs.wheelContinuation = streamPair.continuation
         simulation.begin(outputs, showsWheel: true, showsCrank: false)
+        var iterator = streamPair.stream.makeAsyncIterator()
         time.elapsed = .seconds(1)
         ticker.tick()
-        var iterator = streamPair.stream.makeAsyncIterator()
         let sample = await iterator.next()
         #expect(sample?.cumulativeRevolutions == 3)
         #expect(sample?.lastEventTime == 931)
@@ -51,9 +51,9 @@ struct RuntimeSimulationViewModelTests {
         outputs.wheelContinuation = pair.continuation
         simulation.begin(outputs, showsWheel: true, showsCrank: false)
         simulation.setCumulativeWheelRevolutions(1000)
+        var iterator = pair.stream.makeAsyncIterator()
         time.elapsed = .seconds(1)
         ticker.tick()
-        var iterator = pair.stream.makeAsyncIterator()
         let sample = await iterator.next()
         #expect((sample?.cumulativeRevolutions ?? 0) >= 1000)
         simulation.end()
@@ -71,15 +71,34 @@ struct RuntimeSimulationViewModelTests {
         simulation.pause()
         time.elapsed = .seconds(1)
         ticker.tick()
-        var iterator = pair.stream.makeAsyncIterator()
-        let pausedSample = await iterator.next()
+        let pausedSample = await nextWheelSample(from: pair.stream, within: .milliseconds(200))
         #expect(pausedSample == nil)
         simulation.resume()
         time.elapsed = .seconds(2)
         ticker.tick()
+        var iterator = pair.stream.makeAsyncIterator()
         let sample = await iterator.next()
         #expect(sample != nil)
         simulation.end()
         ticker.finish()
+    }
+}
+
+@MainActor
+private func nextWheelSample(
+    from stream: AsyncStream<WheelRevolution>,
+    within timeout: Duration,
+) async -> WheelRevolution? {
+    await withTaskGroup(of: WheelRevolution?.self) { group in
+        group.addTask {
+            var iterator = stream.makeAsyncIterator()
+            return await iterator.next()
+        }
+        group.addTask {
+            try? await Task.sleep(for: timeout)
+            return nil
+        }
+        defer { group.cancelAll() }
+        return await group.next() ?? nil
     }
 }
