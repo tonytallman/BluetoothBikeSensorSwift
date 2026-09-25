@@ -71,36 +71,17 @@ struct RuntimeSimulationViewModelTests {
         outputs.wheelContinuation = pair.continuation
         simulation.begin(outputs, showsWheel: true, showsCrank: false)
         simulation.pause()
-        await Task.yield()
-        time.elapsed = .seconds(1)
-        ticker.tick()
-        let pausedSample = await nextWheelSample(from: pair.stream, within: .milliseconds(200))
-        #expect(pausedSample == nil)
-        simulation.resume()
-        time.elapsed = .seconds(2)
+        time.elapsed = .seconds(5)
+        let readoutBeforePauseTick = simulation.wheelReadout
         simulation.tick()
-        let sample = await nextWheelSample(from: pair.stream, within: .seconds(1))
+        #expect(simulation.wheelReadout == readoutBeforePauseTick)
+        simulation.resume()
+        time.elapsed = .seconds(10)
+        var iterator = pair.stream.makeAsyncIterator()
+        simulation.tick()
+        let sample = await iterator.next()
         #expect(sample != nil)
         simulation.end()
         ticker.finish()
-    }
-}
-
-@MainActor
-private func nextWheelSample(
-    from stream: AsyncStream<WheelRevolution>,
-    within timeout: Duration,
-) async -> WheelRevolution? {
-    await withTaskGroup(of: WheelRevolution?.self) { group in
-        group.addTask {
-            var iterator = stream.makeAsyncIterator()
-            return await iterator.next()
-        }
-        group.addTask {
-            try? await Task.sleep(for: timeout)
-            return nil
-        }
-        defer { group.cancelAll() }
-        return await group.next() ?? nil
     }
 }
