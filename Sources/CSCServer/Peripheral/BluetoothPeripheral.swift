@@ -1,5 +1,26 @@
 import Foundation
 
+package enum BluetoothPeripheralError: Error, Sendable, Equatable {
+    case notPoweredOn
+    case serviceNotFound
+    case characteristicNotFound
+    case unknownRequest
+    case addServiceFailed(serviceUUID: UUID, reason: String)
+    case advertisingFailed(reason: String)
+    case conflictingProperties
+    case cachedValueNotReadOnly
+    case addInProgress
+    case advertisingInProgress
+    case missingReadValue
+    case unexpectedResponseValue
+    case peripheralInvalidated
+}
+
+package enum ATTResult: Sendable, Equatable {
+    case success
+    case error(code: UInt8)
+}
+
 package protocol BluetoothPeripheral: Sendable {
     var currentState: BluetoothState { get async }
     /// Used only by the startup power wait. Running sessions read state changes from ``events``.
