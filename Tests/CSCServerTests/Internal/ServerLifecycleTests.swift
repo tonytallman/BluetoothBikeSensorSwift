@@ -14,22 +14,19 @@ struct ServerLifecycleTests {
             await fakeA.failNextAdvertise()
         }
         let serverA = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
-        let serverB = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
 
         await #expect(throws: ServerError.self) {
             try await serverA.start(peripheral: fakeA)
         }
 
-        let fakeB = FakeBluetoothPeripheral()
-        try await serverB.start(peripheral: fakeB)
-        #expect(await fakeB.isAdvertising)
-        await serverB.stop()
+        try await serverA.start(peripheral: fakeA)
+        #expect(await fakeA.isAdvertising)
+        await serverA.stop()
     }
 
     @Test func cancelledStartAllowsRestart() async throws {
         let fakeA = FakeBluetoothPeripheral(initialState: .unknown)
         let serverA = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
-        let serverB = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
 
         let startTask = Task {
             try await serverA.start(peripheral: fakeA)
@@ -40,10 +37,10 @@ struct ServerLifecycleTests {
             try await startTask.value
         }
 
-        let fakeB = FakeBluetoothPeripheral()
-        try await serverB.start(peripheral: fakeB)
-        #expect(await fakeB.isAdvertising)
-        await serverB.stop()
+        let fakeAfterCancel = FakeBluetoothPeripheral()
+        try await serverA.start(peripheral: fakeAfterCancel)
+        #expect(await fakeAfterCancel.isAdvertising)
+        await serverA.stop()
     }
 
     @Test func secondStopWaitsForInFlightTeardown() async throws {
@@ -70,6 +67,10 @@ struct ServerLifecycleTests {
         }
 
         await serverA.waitUntilStopWaiterCount(2)
+
+        await #expect(throws: ServerError.alreadyStarted) {
+            try await serverA.start(peripheral: FakeBluetoothPeripheral())
+        }
 
         #expect(!secondStopReturned.isSet)
 
@@ -106,12 +107,6 @@ struct ServerLifecycleTests {
 
         #expect(await !fakeA.isAdvertising)
         #expect(await fakeA.recordedCalls.contains(where: isRemoveService))
-
-        let fakeB = FakeBluetoothPeripheral()
-        let serverB = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
-        try await serverB.start(peripheral: fakeB)
-        #expect(await fakeB.isAdvertising)
-        await serverB.stop()
     }
 }
 
