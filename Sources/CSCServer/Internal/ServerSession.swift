@@ -8,9 +8,9 @@ actor ServerSession {
         case advertising
     }
 
-    private struct ReadResponse: Sendable {
-        let result: ATTResult
-        let value: Data?
+    private enum StaleHeadResolution {
+        case removed
+        case send(QueuedMeasurement)
     }
 
     private enum RevolutionSample: Sendable {
@@ -458,23 +458,10 @@ actor ServerSession {
     }
 
     private func waitForOutboundQueueItem() async {
-        if closed {
-            return
-        }
-        if !outboundQueue.isEmpty {
-            return
-        }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            if closed {
-                continuation.resume()
-                return
-            }
-            if !outboundQueue.isEmpty {
-                continuation.resume()
-                return
-            }
-            outboundQueueWaiter = continuation
-        }
+        await parkUntilReady(
+            latched: { !self.outboundQueue.isEmpty },
+            assignWaiter: { self.outboundQueueWaiter = $0 },
+        )
     }
 
     private func resumeOutboundQueueWaiter() {
@@ -491,15 +478,12 @@ actor ServerSession {
         }
     }
 
-    /// Returns `true` when the head was removed and the pump should return.
-    private func resolveStaleWheelHead(_ item: inout QueuedMeasurement) -> Bool {
+    private func prepareHeadForSend(_ item: QueuedMeasurement) -> StaleHeadResolution {
         guard isStaleWheelPayload(item) else {
-            return false
+            return .send(item)
         }
         if case .wheel = item.sample {
-            outboundQueue.removeFirst()
-            resumeProducer(&item)
-            return true
+            return .removed
         }
         guard case let .crank(crank) = item.sample,
               let payload = CSCMeasurement(
@@ -507,14 +491,21 @@ actor ServerSession {
                   lastCrankEventTime: crank.lastEventTime,
               ).encode()
         else {
-            outboundQueue.removeFirst()
-            resumeProducer(&item)
-            return true
+            return .removed
         }
-        item.payload = payload
-        item.encodedWheelGeneration = nil
-        outboundQueue[0] = .measurement(item)
-        return false
+        var updated = item
+        updated.payload = payload
+        updated.encodedWheelGeneration = nil
+        outboundQueue[0] = .measurement(updated)
+        return .send(updated)
+    }
+
+    private func finishHeadMeasurement(_ item: inout QueuedMeasurement, recordAcceptance: Bool) {
+        if recordAcceptance {
+            recordAcceptedMeasurement(item)
+        }
+        outboundQueue.removeFirst()
+        resumeProducer(&item)
     }
 
     private func isHeadIndication(_ id: UUID) -> Bool {
@@ -565,20 +556,22 @@ actor ServerSession {
 
         while !Task.isCancelled {
             if closed {
-                outboundQueue.removeFirst()
-                resumeProducer(&item)
+                finishHeadMeasurement(&item, recordAcceptance: false)
                 drainOutboundQueueOnShutdown()
                 return
             }
 
             if measurementSubscribers.isEmpty {
-                outboundQueue.removeFirst()
-                resumeProducer(&item)
+                finishHeadMeasurement(&item, recordAcceptance: false)
                 return
             }
 
-            if resolveStaleWheelHead(&item) {
+            switch prepareHeadForSend(item) {
+            case .removed:
+                finishHeadMeasurement(&item, recordAcceptance: false)
                 return
+            case .send(let current):
+                item = current
             }
 
             notifyReady = false
@@ -592,36 +585,34 @@ actor ServerSession {
                     onSubscribedCentrals: nil,
                 )
             } catch {
-                outboundQueue.removeFirst()
-                resumeProducer(&item)
+                finishHeadMeasurement(&item, recordAcceptance: false)
                 return
             }
 
             if accepted {
                 // A send that overlapped a radio loss reached no current subscriber.
-                if radioLossEpoch == lossEpoch {
-                    recordAcceptedMeasurement(item)
-                }
-                outboundQueue.removeFirst()
-                resumeProducer(&item)
+                let record = radioLossEpoch == lossEpoch
+                finishHeadMeasurement(&item, recordAcceptance: record)
                 return
             }
 
             if closed {
-                outboundQueue.removeFirst()
-                resumeProducer(&item)
+                finishHeadMeasurement(&item, recordAcceptance: false)
                 drainOutboundQueueOnShutdown()
                 return
             }
 
             if measurementSubscribers.isEmpty {
-                outboundQueue.removeFirst()
-                resumeProducer(&item)
+                finishHeadMeasurement(&item, recordAcceptance: false)
                 return
             }
 
-            if resolveStaleWheelHead(&item) {
+            switch prepareHeadForSend(item) {
+            case .removed:
+                finishHeadMeasurement(&item, recordAcceptance: false)
                 return
+            case .send(let current):
+                item = current
             }
 
             await waitForNotifyReady()
@@ -664,9 +655,7 @@ actor ServerSession {
             }
 
             if closed {
-                if removeHeadIndicationIfOwned(indicationID) {
-                    endProcedure()
-                }
+                finishHeadIndication(indicationID)
                 drainOutboundQueueOnShutdown()
                 return
             }
@@ -685,9 +674,7 @@ actor ServerSession {
                     onSubscribedCentrals: [indication.centralID],
                 )
             } catch {
-                if removeHeadIndicationIfOwned(indicationID) {
-                    endProcedure()
-                }
+                finishHeadIndication(indicationID)
                 return
             }
 
@@ -696,9 +683,7 @@ actor ServerSession {
             }
 
             if accepted {
-                if removeHeadIndicationIfOwned(indicationID) {
-                    endProcedure()
-                }
+                finishHeadIndication(indicationID)
                 return
             }
 
@@ -725,6 +710,12 @@ actor ServerSession {
             if dropIndicationIfCentralDeparted(indication) {
                 return
             }
+        }
+    }
+
+    private func finishHeadIndication(_ id: UUID) {
+        if removeHeadIndicationIfOwned(id) {
+            endProcedure()
         }
     }
 
@@ -950,11 +941,25 @@ actor ServerSession {
     }
 
     private func waitForNotifyReady() async {
+        await parkUntilReady(
+            latched: { self.notifyReady },
+            onLatched: { self.notifyReady = false },
+            assignWaiter: { self.notifyReadyWaiter = $0 },
+            onPark: { self.resumeSatisfiedTestWaiters() },
+        )
+    }
+
+    private func parkUntilReady(
+        latched: () -> Bool,
+        onLatched: (() -> Void)? = nil,
+        assignWaiter: (CheckedContinuation<Void, Never>?) -> Void,
+        onPark: (() -> Void)? = nil,
+    ) async {
         if closed {
             return
         }
-        if notifyReady {
-            notifyReady = false
+        if latched() {
+            onLatched?()
             return
         }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -962,35 +967,34 @@ actor ServerSession {
                 continuation.resume()
                 return
             }
-            if notifyReady {
-                notifyReady = false
+            if latched() {
+                onLatched?()
                 continuation.resume()
                 return
             }
-            notifyReadyWaiter = continuation
-            resumeSatisfiedTestWaiters()
+            assignWaiter(continuation)
+            onPark?()
         }
     }
 
     private func handleRead(_ request: PeripheralReadRequest) async {
-        let response = readResponse(for: request)
+        let (result, value) = readResponse(for: request)
         do {
             try await peripheral.respond(
                 to: request.id,
-                with: response.result,
-                value: response.value,
+                with: result,
+                value: value,
             )
         } catch is CancellationError {
         } catch {
         }
     }
 
-    private func readResponse(for request: PeripheralReadRequest) -> ReadResponse {
-        guard request.serviceUUID == configuration.service.uuid else {
-            return ReadResponse(result: .error(code: 0x0A), value: nil)
-        }
-        guard let characteristic = configuration.service.characteristics.first(where: { $0.uuid == request.characteristicUUID }) else {
-            return ReadResponse(result: .error(code: 0x0A), value: nil)
+    private func readResponse(for request: PeripheralReadRequest) -> (ATTResult, Data?) {
+        guard request.serviceUUID == configuration.service.uuid,
+              configuration.service.characteristics.contains(where: { $0.uuid == request.characteristicUUID })
+        else {
+            return (.error(code: 0x0A), nil)
         }
 
         if request.characteristicUUID == CSCS.sensorLocationUUID,
@@ -1000,46 +1004,35 @@ actor ServerSession {
             let value = CSCSensorLocation(
                 assignedNumber: servedSensorLocation.read().assignedNumber,
             ).encode()
-            let offset = request.offset
-            if offset < 0 || offset > value.count {
-                return ReadResponse(result: .error(code: 0x07), value: nil)
-            }
-            if offset == value.count {
-                return ReadResponse(result: .success, value: Data())
-            }
-            return ReadResponse(result: .success, value: Data(value.dropFirst(offset)))
+            return offsetSlice(of: value, offset: request.offset)
         }
 
-        guard let value = characteristic.value else {
-            return ReadResponse(result: .error(code: 0x02), value: nil)
+        guard let characteristic = configuration.service.characteristics.first(where: { $0.uuid == request.characteristicUUID }),
+              let value = characteristic.value
+        else {
+            return (.error(code: 0x02), nil)
         }
 
-        let offset = request.offset
+        return offsetSlice(of: value, offset: request.offset)
+    }
+
+    private func offsetSlice(of value: Data, offset: Int) -> (ATTResult, Data?) {
         if offset < 0 || offset > value.count {
-            return ReadResponse(result: .error(code: 0x07), value: nil)
+            return (.error(code: 0x07), nil)
         }
         if offset == value.count {
-            return ReadResponse(result: .success, value: Data())
+            return (.success, Data())
         }
-        return ReadResponse(result: .success, value: Data(value.dropFirst(offset)))
+        return (.success, Data(value.dropFirst(offset)))
     }
 
     private func handleWrite(_ transaction: PeripheralWriteTransaction) async {
         guard transaction.requests.count == 1,
-              transaction.requests[0].serviceUUID == configuration.service.uuid
+              let request = transaction.requests.first,
+              request.serviceUUID == configuration.service.uuid,
+              configuration.includesControlPoint,
+              request.characteristicUUID == CSCS.controlPointUUID
         else {
-            await respondWriteError(transaction.id, code: 0x03)
-            return
-        }
-
-        let request = transaction.requests[0]
-
-        guard configuration.includesControlPoint else {
-            await respondWriteError(transaction.id, code: 0x03)
-            return
-        }
-
-        guard request.characteristicUUID == CSCS.controlPointUUID else {
             await respondWriteError(transaction.id, code: 0x03)
             return
         }
