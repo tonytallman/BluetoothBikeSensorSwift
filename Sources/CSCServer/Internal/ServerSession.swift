@@ -1105,101 +1105,55 @@ actor ServerSession {
         }
     }
 
+    private func opcode(of request: CSCControlPointRequest) -> UInt8 {
+        switch request {
+        case .setCumulativeValue:
+            return CSCControlPointOpCode.setCumulativeValue.rawValue
+        case .startSensorCalibration:
+            return CSCControlPointOpCode.startSensorCalibration.rawValue
+        case .updateSensorLocation:
+            return CSCControlPointOpCode.updateSensorLocation.rawValue
+        case .requestSupportedSensorLocations:
+            return CSCControlPointOpCode.requestSupportedSensorLocations.rawValue
+        case let .invalidParameter(opcode, _):
+            return opcode
+        case let .unknown(opcode, _):
+            return opcode
+        }
+    }
+
+    private func supportsProcedure(_ opcode: UInt8) -> Bool {
+        switch opcode {
+        case CSCControlPointOpCode.setCumulativeValue.rawValue:
+            return configuration.wheel != nil
+        case CSCControlPointOpCode.updateSensorLocation.rawValue,
+             CSCControlPointOpCode.requestSupportedSensorLocations.rawValue:
+            return configuration.multipleLocations != nil
+        default:
+            return false
+        }
+    }
+
     private func runProcedure(_ request: CSCControlPointRequest, centralID: UUID) async {
         switch request {
-        case let .setCumulativeValue(value):
+        case let .setCumulativeValue(value) where configuration.wheel != nil:
             await runSetCumulativeProcedure(value: value, centralID: centralID)
-        case let .invalidParameter(opcode, _) where opcode == CSCControlPointOpCode.setCumulativeValue.rawValue:
-            if configuration.wheel == nil {
-                indicate(
-                    opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
-                    value: .opCodeNotSupported,
-                    to: centralID,
-                )
-            } else {
-                indicate(
-                    opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
-                    value: .invalidParameter,
-                    to: centralID,
-                )
-            }
-        case .startSensorCalibration:
-            indicate(
-                opcode: CSCControlPointOpCode.startSensorCalibration.rawValue,
-                value: .opCodeNotSupported,
-                to: centralID,
+        case let .updateSensorLocation(assignedNumber) where configuration.multipleLocations != nil:
+            await runUpdateSensorLocationProcedure(
+                assignedNumber: assignedNumber,
+                centralID: centralID,
             )
-        case let .invalidParameter(opcode, _)
-            where opcode == CSCControlPointOpCode.updateSensorLocation.rawValue:
-            if configuration.multipleLocations != nil {
-                indicate(
-                    opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
-                    value: .invalidParameter,
-                    to: centralID,
-                )
-            } else {
-                indicate(
-                    opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
-                    value: .opCodeNotSupported,
-                    to: centralID,
-                )
-            }
-        case let .invalidParameter(opcode, _)
-            where opcode == CSCControlPointOpCode.requestSupportedSensorLocations.rawValue:
-            if configuration.multipleLocations != nil {
-                indicate(
-                    opcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
-                    value: .invalidParameter,
-                    to: centralID,
-                )
-            } else {
-                indicate(
-                    opcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
-                    value: .opCodeNotSupported,
-                    to: centralID,
-                )
-            }
-        case let .updateSensorLocation(assignedNumber):
-            if configuration.multipleLocations != nil {
-                await runUpdateSensorLocationProcedure(
-                    assignedNumber: assignedNumber,
-                    centralID: centralID,
-                )
-            } else {
-                indicate(
-                    opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
-                    value: .opCodeNotSupported,
-                    to: centralID,
-                )
-            }
-        case .requestSupportedSensorLocations:
-            if configuration.multipleLocations != nil {
-                await runRequestSupportedSensorLocationsProcedure(centralID: centralID)
-            } else {
-                indicate(
-                    opcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
-                    value: .opCodeNotSupported,
-                    to: centralID,
-                )
-            }
-        case let .invalidParameter(opcode, _):
-            indicate(opcode: opcode, value: .opCodeNotSupported, to: centralID)
-        case let .unknown(opcode, _):
-            indicate(opcode: opcode, value: .opCodeNotSupported, to: centralID)
+        case .requestSupportedSensorLocations where configuration.multipleLocations != nil:
+            await runRequestSupportedSensorLocationsProcedure(centralID: centralID)
+        case let .invalidParameter(opcode, _) where supportsProcedure(opcode):
+            indicate(opcode: opcode, value: .invalidParameter, to: centralID)
+        default:
+            indicate(opcode: opcode(of: request), value: .opCodeNotSupported, to: centralID)
         }
     }
 
     private func runSetCumulativeProcedure(value: UInt32, centralID: UUID) async {
-        guard let wheel = configuration.wheel else {
-            indicate(
-                opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
-                value: .opCodeNotSupported,
-                to: centralID,
-            )
-            return
-        }
-
-        let delegate = wheel.delegate
+        let delegate = configuration.wheel!.delegate
         do {
             try await delegate.setCumulativeWheelRevolutions(value)
         } catch {
