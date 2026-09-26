@@ -99,8 +99,6 @@ actor ServerSession {
         self.onMeasurementSubscriberCountChange = onMeasurementSubscriberCountChange
     }
 
-    // MARK: - Opening and closing
-
     static func open(
         configuration: ServerConfiguration,
         servedSensorLocation: ServedSensorLocationBox?,
@@ -237,8 +235,6 @@ actor ServerSession {
         pendingInboundEvents.removeAll()
     }
 
-    // MARK: - Startup and teardown
-
     private func startup() async throws {
         try await waitForPoweredOn()
         startLossCount = await peripheral.powerLossCount
@@ -329,8 +325,6 @@ actor ServerSession {
         Advertisement(localName: nil, serviceUUIDs: [configuration.service.uuid])
     }
 
-    // MARK: - Radio recovery
-
     /// Settles any recovery already in progress before answering.
     func isRadioSuspended() async -> Bool {
         await waitUntil(.bluetoothRecoveryIdle)
@@ -411,6 +405,7 @@ actor ServerSession {
         }
 
         publishStage = .advertising
+        advertisingActive = true
         isReadyToUpdate = false
         isSuspended = false
     }
@@ -421,8 +416,6 @@ actor ServerSession {
         }
         return stamp != wheelGeneration
     }
-
-    // MARK: - Outbound pump
 
     private func spawnOutboundPumpTask() -> Task<Void, Never> {
         Task {
@@ -873,8 +866,6 @@ actor ServerSession {
         return (payload, stamp)
     }
 
-    // MARK: - Inbound events
-
     private func waitForPoweredOn() async throws {
         let stateStream = await peripheral.stateUpdates
         var iterator = stateStream.makeAsyncIterator()
@@ -1028,8 +1019,6 @@ actor ServerSession {
         }
         return (.success, Data(value.dropFirst(offset)))
     }
-
-    // MARK: - Control point
 
     private func handleWrite(_ transaction: PeripheralWriteTransaction) async {
         guard transaction.requests.count == 1,
@@ -1309,8 +1298,6 @@ actor ServerSession {
             }
         }
     }
-
-    // MARK: - Revolution loops
 
     private func startCrankLoopIfNeeded() {
         guard let crankRevolutions = configuration.crankRevolutions else {

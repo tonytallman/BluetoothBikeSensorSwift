@@ -79,6 +79,21 @@ struct ServerLifecycleTests {
         #expect(secondStopReturned.isSet)
     }
 
+    @Test func twoServersCanStartConcurrently() async throws {
+        let fakeA = FakeBluetoothPeripheral()
+        let fakeB = FakeBluetoothPeripheral()
+        let serverA = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
+        let serverB = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
+
+        try await serverA.start(peripheral: fakeA)
+        try await serverB.start(peripheral: fakeB)
+        #expect(await fakeA.isAdvertising)
+        #expect(await fakeB.isAdvertising)
+
+        await serverA.stop()
+        await serverB.stop()
+    }
+
     @Test func releasingStartedServerStopsIt() async throws {
         let fakeA = FakeBluetoothPeripheral()
         do {

@@ -23,7 +23,7 @@ public final class Server: Sendable {
     ///
     /// Throws ``ServerError/alreadyStarted`` if this server is already starting, running, or stopping.
     /// Keep a strong reference while serving. Releasing a started server stops it in the background;
-    /// `await` ``stop()`` before starting another server.
+    /// `await` ``stop()`` before calling ``start()`` again on the same instance.
     ///
     /// If Bluetooth leaves the powered-on state while serving, the server stops advertising, drops all
     /// subscriptions and samples, and republishes the same service when Bluetooth is powered on again.
