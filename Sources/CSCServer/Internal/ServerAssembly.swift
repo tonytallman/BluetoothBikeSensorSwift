@@ -1,32 +1,12 @@
 internal import CSCWire
 
 enum ServerAssembly {
-    private static let maximumMultipleSensorLocations = 17 // 3 + 17 = 20 default-MTU payload bytes
-
     static func assemble(
         wheel: WheelConfiguration?,
         crankRevolutions: AnyAsyncSequence<CrankRevolution>?,
         location: ServerLocationConfiguration,
     ) -> Server {
         precondition(wheel != nil || crankRevolutions != nil, "At least one revolution source is required")
-
-        if case let .multiple(configuration) = location {
-            let supported = configuration.supported
-            let current = configuration.current
-            precondition(!supported.isEmpty, "Multiple sensor locations require a non-empty supported list")
-            precondition(
-                Set(supported).count == supported.count,
-                "Multiple sensor locations require unique supported entries",
-            )
-            precondition(
-                supported.count <= maximumMultipleSensorLocations,
-                "Multiple sensor locations support at most \(maximumMultipleSensorLocations) entries",
-            )
-            precondition(
-                supported.contains(current),
-                "Multiple sensor locations require current to be in supported",
-            )
-        }
 
         var feature: CSCFeature = []
         if wheel != nil {

@@ -30,7 +30,6 @@ actor ServerSession {
         let id: UUID
         let payload: Data
         let centralID: UUID
-        var completionContinuation: CheckedContinuation<Void, Never>?
     }
 
     private enum OutboundItem {
@@ -246,7 +245,7 @@ actor ServerSession {
     private func beginShutdown() {
         closed = true
         pendingInboundEvents.removeAll()
-        resumeNotifyReadyWaiter()
+        wakeReadyWaiterWithoutLatch()
         resumeNotifyReadyWaiterParkedWaiters()
         resumeOutboundQueueWaiter()
         resumeAllMeasurementSubscriberWaiters()
@@ -579,12 +578,11 @@ actor ServerSession {
         return head.id == id
     }
 
-    private func removeHeadIndicationIfOwned(_ id: UUID, _ indication: inout IndicationItem) -> Bool {
+    private func removeHeadIndicationIfOwned(_ id: UUID) -> Bool {
         guard isHeadIndication(id) else {
             return false
         }
         outboundQueue.removeFirst()
-        completeIndication(&indication)
         return true
     }
 
@@ -597,19 +595,18 @@ actor ServerSession {
             }
             return false
         }
-        guard let index, case var .indication(indication) = outboundQueue.remove(at: index) else {
+        guard let index, case .indication = outboundQueue.remove(at: index) else {
             return nil
         }
-        completeIndication(&indication)
         return index == 0
     }
 
     /// Returns `true` when the pump should stop processing this indication item.
-    private func dropIndicationIfCentralDeparted(_ indication: inout IndicationItem) -> Bool {
+    private func dropIndicationIfCentralDeparted(_ indication: IndicationItem) -> Bool {
         guard !controlPointSubscribers.contains(indication.centralID) else {
             return false
         }
-        if removeHeadIndicationIfOwned(indication.id, &indication) {
+        if removeHeadIndicationIfOwned(indication.id) {
             endProcedure()
         }
         return true
@@ -707,7 +704,7 @@ actor ServerSession {
     }
 
     private func processIndicationItem() async {
-        guard case var .indication(indication) = outboundQueue.first else {
+        guard case .indication(let indication) = outboundQueue.first else {
             return
         }
 
@@ -721,14 +718,14 @@ actor ServerSession {
             }
 
             if closed {
-                if removeHeadIndicationIfOwned(indicationID, &indication) {
+                if removeHeadIndicationIfOwned(indicationID) {
                     endProcedure()
                 }
                 drainOutboundQueueOnShutdown()
                 return
             }
 
-            if dropIndicationIfCentralDeparted(&indication) {
+            if dropIndicationIfCentralDeparted(indication) {
                 return
             }
 
@@ -742,7 +739,7 @@ actor ServerSession {
                     onSubscribedCentrals: [indication.centralID],
                 )
             } catch {
-                if removeHeadIndicationIfOwned(indicationID, &indication) {
+                if removeHeadIndicationIfOwned(indicationID) {
                     endProcedure()
                 }
                 return
@@ -753,7 +750,7 @@ actor ServerSession {
             }
 
             if accepted {
-                if removeHeadIndicationIfOwned(indicationID, &indication) {
+                if removeHeadIndicationIfOwned(indicationID) {
                     endProcedure()
                 }
                 return
@@ -764,7 +761,7 @@ actor ServerSession {
                 return
             }
 
-            if dropIndicationIfCentralDeparted(&indication) {
+            if dropIndicationIfCentralDeparted(indication) {
                 return
             }
 
@@ -779,7 +776,7 @@ actor ServerSession {
                 return
             }
 
-            if dropIndicationIfCentralDeparted(&indication) {
+            if dropIndicationIfCentralDeparted(indication) {
                 return
             }
         }
@@ -790,8 +787,8 @@ actor ServerSession {
             switch outboundQueue.removeFirst() {
             case var .measurement(item):
                 completeEmit(&item)
-            case var .indication(item):
-                completeIndication(&item)
+            case .indication:
+                break
             }
         }
         if procedureInProgress {
@@ -802,13 +799,6 @@ actor ServerSession {
     private func completeEmit(_ item: inout MeasurementItem) {
         if let continuation = item.emitContinuation {
             item.emitContinuation = nil
-            continuation.resume()
-        }
-    }
-
-    private func completeIndication(_ item: inout IndicationItem) {
-        if let continuation = item.completionContinuation {
-            item.completionContinuation = nil
             continuation.resume()
         }
     }
@@ -901,7 +891,6 @@ actor ServerSession {
             id: UUID(),
             payload: response.encode(),
             centralID: centralID,
-            completionContinuation: nil,
         )
         procedureIndicationID = item.id
         outboundQueue.append(.indication(item))
@@ -964,10 +953,6 @@ actor ServerSession {
             emitContinuation: nil,
         )
 
-        if closed {
-            return
-        }
-
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             var queuedItem = item
             queuedItem.emitContinuation = continuation
@@ -993,10 +978,6 @@ actor ServerSession {
             producedCrank: sample,
             emitContinuation: nil,
         )
-
-        if closed {
-            return
-        }
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             var queuedItem = item
@@ -1119,13 +1100,6 @@ actor ServerSession {
             waiter.resume()
         } else {
             notifyReady = true
-        }
-    }
-
-    private func resumeNotifyReadyWaiter() {
-        if let waiter = notifyReadyWaiter {
-            notifyReadyWaiter = nil
-            waiter.resume()
         }
     }
 

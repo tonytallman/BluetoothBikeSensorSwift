@@ -104,9 +104,6 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     package func removeService(uuid: UUID) async throws {
         let callsManager = state == .poweredOn
         try queue.sync {
-            guard delegateBridge.service(for: uuid) != nil else {
-                throw BluetoothPeripheralError.serviceNotFound
-            }
             guard let cbService = delegateBridge.removeService(for: uuid) else {
                 throw BluetoothPeripheralError.serviceNotFound
             }
@@ -452,12 +449,6 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         lock.lock()
         handler = nil
         lock.unlock()
-    }
-
-    func service(for uuid: UUID) -> CBMutableService? {
-        lock.lock()
-        defer { lock.unlock() }
-        return services[uuid]
     }
 
     func store(service: CBMutableService, for uuid: UUID) {
