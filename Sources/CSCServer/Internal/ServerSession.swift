@@ -452,10 +452,13 @@ actor ServerSession {
     }
 
     private func waitForOutboundQueueItem() async {
-        await parkUntilReady(
-            latched: { !self.outboundQueue.isEmpty },
-            assignWaiter: { self.outboundQueueWaiter = $0 },
-        )
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if closed || !outboundQueue.isEmpty {
+                continuation.resume()
+            } else {
+                outboundQueueWaiter = continuation
+            }
+        }
     }
 
     private func resumeOutboundQueueWaiter() {
@@ -935,39 +938,16 @@ actor ServerSession {
     }
 
     private func waitForReadyToUpdate() async {
-        await parkUntilReady(
-            latched: { self.isReadyToUpdate },
-            onLatched: { self.isReadyToUpdate = false },
-            assignWaiter: { self.readyToUpdateWaiter = $0 },
-            onPark: { self.resumeSatisfiedTestWaiters() },
-        )
-    }
-
-    private func parkUntilReady(
-        latched: () -> Bool,
-        onLatched: (() -> Void)? = nil,
-        assignWaiter: (CheckedContinuation<Void, Never>?) -> Void,
-        onPark: (() -> Void)? = nil,
-    ) async {
-        if closed {
-            return
-        }
-        if latched() {
-            onLatched?()
-            return
-        }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             if closed {
                 continuation.resume()
-                return
-            }
-            if latched() {
-                onLatched?()
+            } else if isReadyToUpdate {
+                isReadyToUpdate = false
                 continuation.resume()
-                return
+            } else {
+                readyToUpdateWaiter = continuation
+                resumeSatisfiedTestWaiters()
             }
-            assignWaiter(continuation)
-            onPark?()
         }
     }
 
