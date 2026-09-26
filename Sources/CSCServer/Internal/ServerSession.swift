@@ -49,13 +49,13 @@ actor ServerSession {
     private var testWaiters: [(condition: ServerTestCondition, continuation: CheckedContinuation<Void, Never>)] = []
 
     private var startLossCount = 0
-    private var radioLost = false
+    private var isSuspended = false
     private var radioLossEpoch: UInt64 = 0
     private var lastRadioState: BluetoothState = .poweredOn
     private var recoveryInProgress = false
 
-    private var notifyReady = false
-    private var notifyReadyWaiter: CheckedContinuation<Void, Never>?
+    private var isReadyToUpdate = false
+    private var readyToUpdateWaiter: CheckedContinuation<Void, Never>?
 
     private var startupGateOpen = false
     private var pendingInboundEvents: [PeripheralEvent] = []
@@ -80,7 +80,7 @@ actor ServerSession {
     private let servedSensorLocation: ServedSensorLocationBox?
 
     private var inboundTask: Task<Void, Never>?
-    private var senderTask: Task<Void, Never>?
+    private var outboundPumpTask: Task<Void, Never>?
     private var wheelTask: Task<Void, Never>?
     private var crankTask: Task<Void, Never>?
     private var procedureTask: Task<Void, Never>?
@@ -98,6 +98,8 @@ actor ServerSession {
         self.clock = clock
         self.onMeasurementSubscriberCountChange = onMeasurementSubscriberCountChange
     }
+
+    // MARK: - Opening and closing
 
     static func open(
         configuration: ServerConfiguration,
@@ -152,7 +154,7 @@ actor ServerSession {
         case let .outboundCount(atLeast: count):
             return outboundQueue.count >= count
         case .readyToUpdateWaiterParked:
-            return notifyReadyWaiter != nil
+            return readyToUpdateWaiter != nil
         case .controlPointProcedureIdle:
             return !procedureInProgress
         case .measurementSubscriberWaiterParked:
@@ -202,26 +204,26 @@ actor ServerSession {
     private func beginShutdown() {
         closed = true
         pendingInboundEvents.removeAll()
-        wakeReadyWaiterWithoutLatch()
+        wakeReadyToUpdateWaiterWithoutLatch()
         resumeOutboundQueueWaiter()
         resumeSatisfiedTestWaiters()
     }
 
     private func stopTasks() async {
         let timeoutTask = procedureTimeoutTask
-        senderTask?.cancel()
+        outboundPumpTask?.cancel()
         procedureTask?.cancel()
         timeoutTask?.cancel()
         wheelTask?.cancel()
         crankTask?.cancel()
 
-        _ = await senderTask?.value
+        _ = await outboundPumpTask?.value
         _ = await procedureTask?.value
         _ = await timeoutTask?.value
         _ = await wheelTask?.value
         _ = await crankTask?.value
 
-        senderTask = nil
+        outboundPumpTask = nil
         procedureTask = nil
         procedureTimeoutTask = nil
         wheelTask = nil
@@ -234,6 +236,8 @@ actor ServerSession {
         inboundTask = nil
         pendingInboundEvents.removeAll()
     }
+
+    // MARK: - Startup and teardown
 
     private func startup() async throws {
         try await waitForPoweredOn()
@@ -272,7 +276,7 @@ actor ServerSession {
         }
         publishStage = .advertising
 
-        senderTask = spawnSenderTask()
+        outboundPumpTask = spawnOutboundPumpTask()
         await drainPendingInboundEvents()
         if closed || Task.isCancelled {
             throw CancellationError()
@@ -325,23 +329,25 @@ actor ServerSession {
         Advertisement(localName: nil, serviceUUIDs: [configuration.service.uuid])
     }
 
+    // MARK: - Radio recovery
+
     /// Settles any recovery already in progress before answering.
     func isRadioSuspended() async -> Bool {
         await waitUntil(.bluetoothRecoveryIdle)
-        return radioLost
+        return isSuspended
     }
 
     private func handleRadioState(_ state: BluetoothState) async {
         let previous = lastRadioState
         lastRadioState = state
         guard state == .poweredOn else {
-            if !radioLost {
+            if !isSuspended {
                 await suspendForRadioLoss()
             }
             return
         }
         // Retrying needs a real transition back into .poweredOn, not a duplicate event.
-        guard previous != .poweredOn, radioLost, !closed else {
+        guard previous != .poweredOn, isSuspended, !closed else {
             return
         }
         recoveryInProgress = true
@@ -351,12 +357,12 @@ actor ServerSession {
     }
 
     private func suspendForRadioLoss() async {
-        radioLost = true
+        isSuspended = true
         radioLossEpoch &+= 1
         measurementSubscribers.removeAll()
         controlPointSubscribers.removeAll()
-        notifyReady = false
-        wakeReadyWaiterWithoutLatch()
+        isReadyToUpdate = false
+        wakeReadyToUpdateWaiterWithoutLatch()
         await notifyMeasurementSubscriberCount()
         resumeSatisfiedTestWaiters()
     }
@@ -405,8 +411,8 @@ actor ServerSession {
         }
 
         publishStage = .advertising
-        notifyReady = false
-        radioLost = false
+        isReadyToUpdate = false
+        isSuspended = false
     }
 
     private func isStaleWheelPayload(_ item: QueuedMeasurement) -> Bool {
@@ -416,7 +422,9 @@ actor ServerSession {
         return stamp != wheelGeneration
     }
 
-    private func spawnSenderTask() -> Task<Void, Never> {
+    // MARK: - Outbound pump
+
+    private func spawnOutboundPumpTask() -> Task<Void, Never> {
         Task {
             await self.runOutboundPump()
         }
@@ -464,9 +472,9 @@ actor ServerSession {
         }
     }
 
-    private func wakeReadyWaiterWithoutLatch() {
-        if let waiter = notifyReadyWaiter {
-            notifyReadyWaiter = nil
+    private func wakeReadyToUpdateWaiterWithoutLatch() {
+        if let waiter = readyToUpdateWaiter {
+            readyToUpdateWaiter = nil
             waiter.resume()
         }
     }
@@ -567,7 +575,7 @@ actor ServerSession {
                 item = current
             }
 
-            notifyReady = false
+            isReadyToUpdate = false
             let lossEpoch = radioLossEpoch
             let accepted: Bool
             do {
@@ -608,7 +616,7 @@ actor ServerSession {
                 item = current
             }
 
-            await waitForNotifyReady()
+            await waitForReadyToUpdate()
             if closed {
                 drainOutboundQueueOnShutdown()
                 return
@@ -657,7 +665,7 @@ actor ServerSession {
                 return
             }
 
-            notifyReady = false
+            isReadyToUpdate = false
             let accepted: Bool
             do {
                 accepted = try await peripheral.updateValue(
@@ -689,7 +697,7 @@ actor ServerSession {
                 return
             }
 
-            await waitForNotifyReady()
+            await waitForReadyToUpdate()
 
             if closed {
                 drainOutboundQueueOnShutdown()
@@ -773,7 +781,7 @@ actor ServerSession {
             return
         }
         if removeIndication(id: indicationID) == true {
-            wakeReadyWaiterWithoutLatch()
+            wakeReadyToUpdateWaiterWithoutLatch()
         }
         endProcedure()
     }
@@ -865,6 +873,8 @@ actor ServerSession {
         return (payload, stamp)
     }
 
+    // MARK: - Inbound events
+
     private func waitForPoweredOn() async throws {
         let stateStream = await peripheral.stateUpdates
         var iterator = stateStream.makeAsyncIterator()
@@ -920,24 +930,24 @@ actor ServerSession {
         case let .subscription(change):
             await handleSubscription(change)
         case .readyToUpdateSubscribers:
-            signalNotifyReady()
+            signalReadyToUpdate()
         }
     }
 
-    private func signalNotifyReady() {
-        if let waiter = notifyReadyWaiter {
-            notifyReadyWaiter = nil
+    private func signalReadyToUpdate() {
+        if let waiter = readyToUpdateWaiter {
+            readyToUpdateWaiter = nil
             waiter.resume()
         } else {
-            notifyReady = true
+            isReadyToUpdate = true
         }
     }
 
-    private func waitForNotifyReady() async {
+    private func waitForReadyToUpdate() async {
         await parkUntilReady(
-            latched: { self.notifyReady },
-            onLatched: { self.notifyReady = false },
-            assignWaiter: { self.notifyReadyWaiter = $0 },
+            latched: { self.isReadyToUpdate },
+            onLatched: { self.isReadyToUpdate = false },
+            assignWaiter: { self.readyToUpdateWaiter = $0 },
             onPark: { self.resumeSatisfiedTestWaiters() },
         )
     }
@@ -1018,6 +1028,8 @@ actor ServerSession {
         }
         return (.success, Data(value.dropFirst(offset)))
     }
+
+    // MARK: - Control point
 
     private func handleWrite(_ transaction: PeripheralWriteTransaction) async {
         guard transaction.requests.count == 1,
@@ -1168,7 +1180,7 @@ actor ServerSession {
             value: .success,
             to: centralID,
         )
-        wakeReadyWaiterWithoutLatch()
+        wakeReadyToUpdateWaiterWithoutLatch()
     }
 
     private func runUpdateSensorLocationProcedure(assignedNumber: UInt8, centralID: UUID) async {
@@ -1291,12 +1303,14 @@ actor ServerSession {
             }
             if wasHead {
                 endProcedure()
-                wakeReadyWaiterWithoutLatch()
+                wakeReadyToUpdateWaiterWithoutLatch()
             } else if isProcedureIndication {
                 endProcedure()
             }
         }
     }
+
+    // MARK: - Revolution loops
 
     private func startCrankLoopIfNeeded() {
         guard let crankRevolutions = configuration.crankRevolutions else {
