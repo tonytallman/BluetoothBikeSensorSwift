@@ -619,27 +619,7 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         central: CBCentral,
         didSubscribeTo characteristic: CBCharacteristic,
     ) {
-        lock.lock()
-        centrals[central.identifier] = central
-        lock.unlock()
-
-        guard
-            let service = characteristic.service,
-            let serviceUUID = service.uuid.foundationUUID,
-            let characteristicUUID = characteristic.uuid.foundationUUID
-        else {
-            return
-        }
-
-        emit(
-            .subscription(
-                .subscribed(
-                    centralID: central.identifier,
-                    serviceUUID: serviceUUID,
-                    characteristicUUID: characteristicUUID,
-                ),
-            ),
-        )
+        emitSubscriptionChange(central: central, characteristic: characteristic, subscribed: true)
     }
 
     func peripheralManager(
@@ -647,27 +627,47 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         central: CBCentral,
         didUnsubscribeFrom characteristic: CBCharacteristic,
     ) {
+        emitSubscriptionChange(central: central, characteristic: characteristic, subscribed: false)
+    }
+
+    private func emitSubscriptionChange(
+        central: CBCentral,
+        characteristic: CBCharacteristic,
+        subscribed: Bool,
+    ) {
         lock.lock()
         centrals[central.identifier] = central
         lock.unlock()
 
+        guard let identity = characteristicIdentity(characteristic) else {
+            return
+        }
+
+        let change: SubscriptionChange = subscribed
+            ? .subscribed(
+                centralID: central.identifier,
+                serviceUUID: identity.serviceUUID,
+                characteristicUUID: identity.characteristicUUID,
+            )
+            : .unsubscribed(
+                centralID: central.identifier,
+                serviceUUID: identity.serviceUUID,
+                characteristicUUID: identity.characteristicUUID,
+            )
+        emit(.subscription(change))
+    }
+
+    private func characteristicIdentity(
+        _ characteristic: CBCharacteristic,
+    ) -> (serviceUUID: UUID, characteristicUUID: UUID)? {
         guard
             let service = characteristic.service,
             let serviceUUID = service.uuid.foundationUUID,
             let characteristicUUID = characteristic.uuid.foundationUUID
         else {
-            return
+            return nil
         }
-
-        emit(
-            .subscription(
-                .unsubscribed(
-                    centralID: central.identifier,
-                    serviceUUID: serviceUUID,
-                    characteristicUUID: characteristicUUID,
-                ),
-            ),
-        )
+        return (serviceUUID, characteristicUUID)
     }
 
     func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) {
