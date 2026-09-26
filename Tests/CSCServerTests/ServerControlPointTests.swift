@@ -38,7 +38,7 @@ struct ServerControlPointTests {
             return false
         }
         await fake.waitForRecordedCall { call in
-            if case let .updateValue(value, _, characteristicUUID, .only(centrals)) = call {
+            if case let .updateValue(value, _, characteristicUUID, centrals?) = call {
                 return characteristicUUID == CSCS.controlPointUUID
                     && centrals == [writer]
                     && value == CSCControlPointResponse(

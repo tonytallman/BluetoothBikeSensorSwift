@@ -55,7 +55,7 @@ struct ServerLocationProcedureTests {
             parameter: Data(),
         ).encode()
         await fake.waitForRecordedCall { call in
-            if case let .updateValue(value, _, CSCS.controlPointUUID, .only(centrals)) = call {
+            if case let .updateValue(value, _, CSCS.controlPointUUID, centrals?) = call {
                 return value == success && centrals == [writer]
             }
             return false

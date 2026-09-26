@@ -12,11 +12,6 @@ import Foundation
 /// `updateValue` records its attempt before parking and returns the accepted value read at
 /// release time.
 package actor FakeBluetoothPeripheral: BluetoothPeripheral {
-    package enum UpdateValueCentralFilter: Sendable, Equatable {
-        case all
-        case only([UUID])
-    }
-
     package enum RecordedCall: Sendable, Equatable {
         case add(PeripheralService)
         case removeService(uuid: UUID)
@@ -27,7 +22,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
             value: Data,
             serviceUUID: UUID,
             characteristicUUID: UUID,
-            centralIDs: UpdateValueCentralFilter,
+            onSubscribedCentrals: [UUID]?,
         )
         case respond(id: UUID, result: ATTResult, value: Data?)
     }
@@ -234,19 +229,12 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
             throw BluetoothPeripheralError.characteristicNotFound
         }
 
-        let filter: UpdateValueCentralFilter
-        if let centralIDs {
-            filter = .only(centralIDs)
-        } else {
-            filter = .all
-        }
-
         appendRecordedCall(
             .updateValue(
                 value: value,
                 serviceUUID: serviceUUID,
                 characteristicUUID: characteristicUUID,
-                centralIDs: filter,
+                onSubscribedCentrals: centralIDs,
             ),
         )
 

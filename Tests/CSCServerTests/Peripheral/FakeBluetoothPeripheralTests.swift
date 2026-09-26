@@ -590,7 +590,7 @@ struct FakeBluetoothPeripheralTests {
             value: value,
             serviceUUID: service.uuid,
             characteristicUUID: characteristicUUID,
-            centralIDs: .all,
+            onSubscribedCentrals: nil,
         )
         #expect(await fake.recordedCalls == [.add(service), expectedCall])
 
@@ -643,7 +643,7 @@ struct FakeBluetoothPeripheralTests {
                 value: value,
                 serviceUUID: service.uuid,
                 characteristicUUID: characteristicUUID,
-                centralIDs: .all,
+                onSubscribedCentrals: nil,
             ),
         ))
         #expect(calls.contains(
@@ -651,7 +651,7 @@ struct FakeBluetoothPeripheralTests {
                 value: value,
                 serviceUUID: service.uuid,
                 characteristicUUID: characteristicUUID,
-                centralIDs: .only(centralIDs),
+                onSubscribedCentrals: centralIDs,
             ),
         ))
     }

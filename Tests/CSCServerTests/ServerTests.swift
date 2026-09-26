@@ -474,7 +474,7 @@ struct ServerTests {
         ).encode()!
 
         await fake.waitForRecordedCall { call in
-            if case let .updateValue(value, serviceUUID, characteristicUUID, .all) = call {
+            if case let .updateValue(value, serviceUUID, characteristicUUID, nil) = call {
                 return value == expected
                     && serviceUUID == CSCS.serviceUUID
                     && characteristicUUID == CSCS.measurementUUID
