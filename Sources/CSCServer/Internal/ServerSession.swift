@@ -13,11 +13,6 @@ actor ServerSession {
         let value: Data?
     }
 
-    private struct SubscriberWaiter: Sendable {
-        let expected: Set<UUID>
-        let continuation: CheckedContinuation<Void, Never>
-    }
-
     private struct MeasurementItem {
         var payload: Data
         var encodedWheelGeneration: UInt64?
@@ -46,20 +41,16 @@ actor ServerSession {
     private var closed = false
     private var measurementSubscribers: Set<UUID> = []
     private var controlPointSubscribers: Set<UUID> = []
-    private var measurementSubscriberWaiters: [SubscriberWaiter] = []
-    private var controlPointSubscriberWaiters: [SubscriberWaiter] = []
-    private var measurementSubscriberWaiterParkedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var testWaiters: [(condition: ServerTestCondition, continuation: CheckedContinuation<Void, Never>)] = []
 
     private var startLossCount = 0
     private var radioLost = false
     private var radioLossEpoch: UInt64 = 0
     private var lastRadioState: BluetoothState = .poweredOn
     private var recoveryInProgress = false
-    private var recoveryIdleWaiters: [CheckedContinuation<Void, Never>] = []
 
     private var notifyReady = false
     private var notifyReadyWaiter: CheckedContinuation<Void, Never>?
-    private var notifyReadyWaiterParkedWaiters: [CheckedContinuation<Void, Never>] = []
 
     private var startupGateOpen = false
     private var pendingInboundEvents: [PeripheralEvent] = []
@@ -74,16 +65,12 @@ actor ServerSession {
     private static let procedureTimeout: Duration = .seconds(30)
 
     private var procedureInProgress = false
-    private var procedureIdleWaiters: [CheckedContinuation<Void, Never>] = []
     private var procedureIndicationID: UUID?
     private var procedureGeneration: UInt64 = 0
     private var procedureTimedOut = false
     private var procedureTimeoutTask: Task<Void, Never>?
 
     private var acceptedMeasurementCount = 0
-    private var acceptedMeasurementCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
-
-    private var outboundCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
     private let servedSensorLocation: ServedSensorLocationBox?
 
@@ -137,76 +124,96 @@ actor ServerSession {
         }
     }
 
-    func waitForMeasurementSubscribers(_ ids: Set<UUID>) async {
-        if closed || measurementSubscribers == ids {
-            return
-        }
+    func waitUntil(_ condition: ServerTestCondition) async {
+        guard !isSatisfied(condition) else { return }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            measurementSubscriberWaiters.append(
-                SubscriberWaiter(expected: ids, continuation: continuation),
-            )
-            resumeMeasurementSubscriberWaiterParkedWaiters()
+            testWaiters.append((condition, continuation))
+            resumeSatisfiedTestWaiters()
         }
+    }
+
+    func waitForMeasurementSubscribers(_ ids: Set<UUID>) async {
+        await waitUntil(.measurementSubscribers(ids))
     }
 
     func waitUntilMeasurementSubscriberWaiterParked() async {
-        if !measurementSubscriberWaiters.isEmpty {
-            return
-        }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            measurementSubscriberWaiterParkedWaiters.append(continuation)
-            resumeMeasurementSubscriberWaiterParkedWaiters()
-        }
+        await waitUntil(.measurementSubscriberWaiterParked)
     }
 
     func waitForControlPointSubscribers(_ ids: Set<UUID>) async {
-        if closed || controlPointSubscribers == ids {
-            return
-        }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            controlPointSubscriberWaiters.append(
-                SubscriberWaiter(expected: ids, continuation: continuation),
-            )
-        }
+        await waitUntil(.controlPointSubscribers(ids))
     }
 
     func waitUntilControlPointProcedureIdle() async {
-        if closed || !procedureInProgress {
-            return
-        }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            if closed || !procedureInProgress {
-                continuation.resume()
-                return
-            }
-            procedureIdleWaiters.append(continuation)
-        }
+        await waitUntil(.controlPointProcedureIdle)
     }
 
     func waitUntilAcceptedMeasurementCount(_ count: Int) async {
-        if closed || acceptedMeasurementCount >= count {
-            return
-        }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            if closed || acceptedMeasurementCount >= count {
-                continuation.resume()
-                return
-            }
-            acceptedMeasurementCountWaiters.append((count, continuation))
-        }
+        await waitUntil(.acceptedMeasurementCount(atLeast: count))
     }
 
     func waitUntilOutboundCount(atLeast count: Int) async {
-        if closed || outboundQueue.count >= count {
-            return
-        }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            if closed || outboundQueue.count >= count {
-                continuation.resume()
-                return
+        await waitUntil(.outboundCount(atLeast: count))
+    }
+
+    func waitUntilNotifyReadyWaiterParked() async {
+        await waitUntil(.readyToUpdateWaiterParked)
+    }
+
+    private func isSatisfied(_ condition: ServerTestCondition) -> Bool {
+        (closed && condition.isSatisfiedByClose) || isMet(condition)
+    }
+
+    private func isMet(_ condition: ServerTestCondition) -> Bool {
+        switch condition {
+        case let .measurementSubscribers(ids):
+            return measurementSubscribers == ids
+        case let .controlPointSubscribers(ids):
+            return controlPointSubscribers == ids
+        case let .acceptedMeasurementCount(atLeast: count):
+            return acceptedMeasurementCount >= count
+        case let .outboundCount(atLeast: count):
+            return outboundQueue.count >= count
+        case .readyToUpdateWaiterParked:
+            return notifyReadyWaiter != nil
+        case .controlPointProcedureIdle:
+            return !procedureInProgress
+        case .measurementSubscriberWaiterParked:
+            return testWaiters.contains { entry in
+                if case .measurementSubscribers = entry.condition {
+                    return true
+                }
+                return false
             }
-            outboundCountWaiters.append((count, continuation))
+        case .bluetoothRecoveryIdle:
+            return !recoveryInProgress
         }
+    }
+
+    private func resumeSatisfiedTestWaiters() {
+        var remaining: [(condition: ServerTestCondition, continuation: CheckedContinuation<Void, Never>)] = []
+        for entry in testWaiters {
+            if case .measurementSubscriberWaiterParked = entry.condition {
+                remaining.append(entry)
+                continue
+            }
+            if isSatisfied(entry.condition) {
+                entry.continuation.resume()
+            } else {
+                remaining.append(entry)
+            }
+        }
+        testWaiters = remaining
+
+        var afterSecondPass: [(condition: ServerTestCondition, continuation: CheckedContinuation<Void, Never>)] = []
+        for entry in testWaiters {
+            if isSatisfied(entry.condition) {
+                entry.continuation.resume()
+            } else {
+                afterSecondPass.append(entry)
+            }
+        }
+        testWaiters = afterSecondPass
     }
 
     func close() async {
@@ -231,13 +238,8 @@ actor ServerSession {
         closed = true
         pendingInboundEvents.removeAll()
         wakeReadyWaiterWithoutLatch()
-        resumeNotifyReadyWaiterParkedWaiters()
         resumeOutboundQueueWaiter()
-        resumeAllMeasurementSubscriberWaiters()
-        resumeAllControlPointSubscriberWaiters()
-        resumeMeasurementSubscriberWaiterParkedWaiters()
-        resumeAllAcceptedMeasurementCountWaiters()
-        resumeAllOutboundCountWaiters()
+        resumeSatisfiedTestWaiters()
     }
 
     private func stopTasks() async {
@@ -356,15 +358,7 @@ actor ServerSession {
 
     /// Settles any recovery already in progress before answering.
     func isRadioSuspended() async -> Bool {
-        if recoveryInProgress {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                if !recoveryInProgress {
-                    continuation.resume()
-                    return
-                }
-                recoveryIdleWaiters.append(continuation)
-            }
-        }
+        await waitUntil(.bluetoothRecoveryIdle)
         return radioLost
     }
 
@@ -384,11 +378,7 @@ actor ServerSession {
         recoveryInProgress = true
         await recoverFromRadioLoss()
         recoveryInProgress = false
-        let waiters = recoveryIdleWaiters
-        recoveryIdleWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
-        }
+        resumeSatisfiedTestWaiters()
     }
 
     private func suspendForRadioLoss() async {
@@ -399,8 +389,7 @@ actor ServerSession {
         notifyReady = false
         wakeReadyWaiterWithoutLatch()
         await notifyMeasurementSubscriberCount()
-        resumeMeasurementSubscriberWaiters()
-        resumeControlPointSubscriberWaiters()
+        resumeSatisfiedTestWaiters()
     }
 
     /// Republishes the build-time service. `close()` may run during any await here and owns
@@ -681,7 +670,7 @@ actor ServerSession {
             crankCache = crank
         }
         acceptedMeasurementCount += 1
-        resumeAcceptedMeasurementCountWaiters(for: acceptedMeasurementCount)
+        resumeSatisfiedTestWaiters()
     }
 
     private func processIndicationItem() async {
@@ -793,7 +782,7 @@ actor ServerSession {
         procedureTimeoutTask?.cancel()
         procedureTimeoutTask = nil
         procedureGeneration &+= 1
-        resumeProcedureIdleWaiters()
+        resumeSatisfiedTestWaiters()
     }
 
     private func armProcedureTimeout() {
@@ -829,38 +818,10 @@ actor ServerSession {
         endProcedure()
     }
 
-    private func resumeProcedureIdleWaiters() {
-        let waiters = procedureIdleWaiters
-        procedureIdleWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
-        }
-    }
-
-    private func resumeAllAcceptedMeasurementCountWaiters() {
-        let waiters = acceptedMeasurementCountWaiters
-        acceptedMeasurementCountWaiters.removeAll()
-        for (_, continuation) in waiters {
-            continuation.resume()
-        }
-    }
-
-    private func resumeAcceptedMeasurementCountWaiters(for count: Int) {
-        var remaining: [(Int, CheckedContinuation<Void, Never>)] = []
-        for (target, continuation) in acceptedMeasurementCountWaiters {
-            if count >= target {
-                continuation.resume()
-            } else {
-                remaining.append((target, continuation))
-            }
-        }
-        acceptedMeasurementCountWaiters = remaining
-    }
-
     private func enqueueMeasurement(_ item: MeasurementItem) {
         outboundQueue.append(.measurement(item))
         resumeOutboundQueueWaiter()
-        resumeOutboundCountWaiters()
+        resumeSatisfiedTestWaiters()
     }
 
     private func enqueueIndication(_ response: CSCControlPointResponse, centralID: UUID) {
@@ -876,28 +837,7 @@ actor ServerSession {
         procedureIndicationID = item.id
         outboundQueue.append(.indication(item))
         resumeOutboundQueueWaiter()
-        resumeOutboundCountWaiters()
-    }
-
-    private func resumeOutboundCountWaiters() {
-        let count = outboundQueue.count
-        var remaining: [(Int, CheckedContinuation<Void, Never>)] = []
-        for (target, continuation) in outboundCountWaiters {
-            if count >= target {
-                continuation.resume()
-            } else {
-                remaining.append((target, continuation))
-            }
-        }
-        outboundCountWaiters = remaining
-    }
-
-    private func resumeAllOutboundCountWaiters() {
-        let waiters = outboundCountWaiters
-        outboundCountWaiters.removeAll()
-        for (_, continuation) in waiters {
-            continuation.resume()
-        }
+        resumeSatisfiedTestWaiters()
     }
 
     private func indicate(
@@ -1054,27 +994,6 @@ actor ServerSession {
         }
     }
 
-    func waitUntilNotifyReadyWaiterParked() async {
-        if closed || notifyReadyWaiter != nil {
-            return
-        }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            if closed || notifyReadyWaiter != nil {
-                continuation.resume()
-                return
-            }
-            notifyReadyWaiterParkedWaiters.append(continuation)
-        }
-    }
-
-    private func resumeNotifyReadyWaiterParkedWaiters() {
-        let waiters = notifyReadyWaiterParkedWaiters
-        notifyReadyWaiterParkedWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
-        }
-    }
-
     private func signalNotifyReady() {
         if let waiter = notifyReadyWaiter {
             notifyReadyWaiter = nil
@@ -1103,7 +1022,7 @@ actor ServerSession {
                 return
             }
             notifyReadyWaiter = continuation
-            resumeNotifyReadyWaiterParkedWaiters()
+            resumeSatisfiedTestWaiters()
         }
     }
 
@@ -1444,10 +1363,10 @@ actor ServerSession {
                 if inserted {
                     await notifyMeasurementSubscriberCount()
                 }
-                resumeMeasurementSubscriberWaiters()
+                resumeSatisfiedTestWaiters()
             case CSCS.controlPointUUID:
                 controlPointSubscribers.insert(centralID)
-                resumeControlPointSubscriberWaiters()
+                resumeSatisfiedTestWaiters()
             default:
                 return
             }
@@ -1461,10 +1380,10 @@ actor ServerSession {
                 if removed {
                     await notifyMeasurementSubscriberCount()
                 }
-                resumeMeasurementSubscriberWaiters()
+                resumeSatisfiedTestWaiters()
             case CSCS.controlPointUUID:
                 controlPointSubscribers.remove(centralID)
-                resumeControlPointSubscriberWaiters()
+                resumeSatisfiedTestWaiters()
                 dropQueuedIndications(for: centralID)
             default:
                 return
@@ -1490,58 +1409,6 @@ actor ServerSession {
             } else if isProcedureIndication {
                 endProcedure()
             }
-        }
-    }
-
-    private func resumeMeasurementSubscriberWaiters() {
-        let pending = measurementSubscriberWaiters
-        measurementSubscriberWaiters.removeAll()
-        for waiter in pending {
-            if measurementSubscribers == waiter.expected {
-                waiter.continuation.resume()
-            } else {
-                measurementSubscriberWaiters.append(waiter)
-            }
-        }
-        resumeMeasurementSubscriberWaiterParkedWaiters()
-    }
-
-    private func resumeControlPointSubscriberWaiters() {
-        let pending = controlPointSubscriberWaiters
-        controlPointSubscriberWaiters.removeAll()
-        for waiter in pending {
-            if controlPointSubscribers == waiter.expected {
-                waiter.continuation.resume()
-            } else {
-                controlPointSubscriberWaiters.append(waiter)
-            }
-        }
-    }
-
-    private func resumeAllMeasurementSubscriberWaiters() {
-        let pending = measurementSubscriberWaiters
-        measurementSubscriberWaiters.removeAll()
-        for waiter in pending {
-            waiter.continuation.resume()
-        }
-    }
-
-    private func resumeAllControlPointSubscriberWaiters() {
-        let pending = controlPointSubscriberWaiters
-        controlPointSubscriberWaiters.removeAll()
-        for waiter in pending {
-            waiter.continuation.resume()
-        }
-    }
-
-    private func resumeMeasurementSubscriberWaiterParkedWaiters() {
-        guard !measurementSubscriberWaiters.isEmpty else {
-            return
-        }
-        let waiters = measurementSubscriberWaiterParkedWaiters
-        measurementSubscriberWaiterParkedWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
         }
     }
 

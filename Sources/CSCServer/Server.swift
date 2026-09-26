@@ -58,39 +58,43 @@ public final class Server: Sendable {
         try await lifecycle.start(peripheral: peripheral, clock: clock)
     }
 
+    package func waitUntil(_ condition: ServerTestCondition) async {
+        await lifecycle.waitUntil(condition)
+    }
+
     /// Blocks until the measurement subscriber set equals `ids`.
     package func waitForMeasurementSubscribers(_ ids: Set<UUID>) async {
-        await lifecycle.waitForMeasurementSubscribers(ids)
+        await waitUntil(.measurementSubscribers(ids))
     }
 
     /// Returns once a subscriber waiter is parked on the running session.
     package func waitUntilMeasurementSubscriberWaiterParked() async {
-        await lifecycle.waitUntilMeasurementSubscriberWaiterParked()
+        await waitUntil(.measurementSubscriberWaiterParked)
     }
 
     /// Blocks until the control-point subscriber set equals `ids`.
     package func waitForControlPointSubscribers(_ ids: Set<UUID>) async {
-        await lifecycle.waitForControlPointSubscribers(ids)
+        await waitUntil(.controlPointSubscribers(ids))
     }
 
     /// Blocks until no control-point procedure is in progress.
     package func waitUntilControlPointProcedureIdle() async {
-        await lifecycle.waitUntilControlPointProcedureIdle()
+        await waitUntil(.controlPointProcedureIdle)
     }
 
     /// Blocks until the accepted measurement count reaches `count`.
     package func waitUntilAcceptedMeasurementCount(_ count: Int) async {
-        await lifecycle.waitUntilAcceptedMeasurementCount(count)
+        await waitUntil(.acceptedMeasurementCount(atLeast: count))
     }
 
     /// Blocks until the outbound queue holds at least `count` items.
     package func waitUntilOutboundCount(atLeast count: Int) async {
-        await lifecycle.waitUntilOutboundCount(atLeast: count)
+        await waitUntil(.outboundCount(atLeast: count))
     }
 
     /// Returns once the outbound pump is parked waiting for a ready-to-update signal.
     package func waitUntilNotifyReadyWaiterParked() async {
-        await lifecycle.waitUntilNotifyReadyWaiterParked()
+        await waitUntil(.readyToUpdateWaiterParked)
     }
 
     /// Whether the running session lost Bluetooth and has not republished yet. Waits for a

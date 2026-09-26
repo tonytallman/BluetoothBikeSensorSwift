@@ -138,46 +138,38 @@ actor ServerLifecycle {
         finishStoppingEntryCountWaiters = remaining
     }
 
-    func waitForMeasurementSubscribers(_ ids: Set<UUID>) async {
+    func waitUntil(_ condition: ServerTestCondition) async {
         if case .running(let session) = phase {
-            await session.waitForMeasurementSubscribers(ids)
+            await session.waitUntil(condition)
         }
+    }
+
+    func waitForMeasurementSubscribers(_ ids: Set<UUID>) async {
+        await waitUntil(.measurementSubscribers(ids))
     }
 
     func waitUntilMeasurementSubscriberWaiterParked() async {
-        if case .running(let session) = phase {
-            await session.waitUntilMeasurementSubscriberWaiterParked()
-        }
+        await waitUntil(.measurementSubscriberWaiterParked)
     }
 
     func waitForControlPointSubscribers(_ ids: Set<UUID>) async {
-        if case .running(let session) = phase {
-            await session.waitForControlPointSubscribers(ids)
-        }
+        await waitUntil(.controlPointSubscribers(ids))
     }
 
     func waitUntilControlPointProcedureIdle() async {
-        if case .running(let session) = phase {
-            await session.waitUntilControlPointProcedureIdle()
-        }
+        await waitUntil(.controlPointProcedureIdle)
     }
 
     func waitUntilAcceptedMeasurementCount(_ count: Int) async {
-        if case .running(let session) = phase {
-            await session.waitUntilAcceptedMeasurementCount(count)
-        }
+        await waitUntil(.acceptedMeasurementCount(atLeast: count))
     }
 
     func waitUntilOutboundCount(atLeast count: Int) async {
-        if case .running(let session) = phase {
-            await session.waitUntilOutboundCount(atLeast: count)
-        }
+        await waitUntil(.outboundCount(atLeast: count))
     }
 
     func waitUntilNotifyReadyWaiterParked() async {
-        if case .running(let session) = phase {
-            await session.waitUntilNotifyReadyWaiterParked()
-        }
+        await waitUntil(.readyToUpdateWaiterParked)
     }
 
     var isRadioSuspended: Bool {
