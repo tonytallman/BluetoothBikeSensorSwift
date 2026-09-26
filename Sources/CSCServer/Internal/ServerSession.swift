@@ -1,16 +1,7 @@
 import Foundation
 internal import CSCWire
 
-/// Owns one start-to-stop lifetime of a published CSC GATT service: the inbound event loop, the
-/// outbound notify/indicate pump, SC Control Point procedures, and Bluetooth suspend/recovery.
-///
-/// A `Server` creates a new `ServerSession` on every `start()`; `stop()` (or a startup failure)
-/// discards it — there is no reuse. All mutable state below is actor-isolated; the only code that
-/// runs outside actor isolation is the delegate/fake peripheral on the other side of the
-/// `BluetoothPeripheral` seam.
 actor ServerSession {
-    /// Tracks how much of the build-time `service` is currently published, so `close()`,
-    /// `rollbackStartup()`, and radio recovery each undo only what they actually published.
     private enum PublishStage: Sendable {
         case none
         case serviceAdded
@@ -27,13 +18,6 @@ actor ServerSession {
         let continuation: CheckedContinuation<Void, Never>
     }
 
-    /// One queued measurement send. `producedWheel`/`producedCrank` identify which source
-    /// produced it (mutually exclusive) so an accepted send can update the right cache
-    /// (``wheelCache``/``crankCache``). `encodedWheelGeneration` is the ``wheelGeneration`` this
-    /// payload's wheel half was encoded against, or `nil` if it has no wheel half; a mismatch
-    /// against the current generation marks it stale (see ``isStaleWheelPayload(_:)``).
-    /// `emitContinuation` resumes the producing loop once the item leaves the queue, whether
-    /// sent, dropped, or discarded at shutdown.
     private struct MeasurementItem {
         var payload: Data
         var encodedWheelGeneration: UInt64?
@@ -42,9 +26,6 @@ actor ServerSession {
         var emitContinuation: CheckedContinuation<Void, Never>?
     }
 
-    /// One queued SC Control Point indication. `id` is stable identity used to find this item
-    /// again after the pump suspends mid-send (via ``waitForNotifyReady()``), since something
-    /// else (unsubscribe, timeout) may have removed it from the queue while suspended.
     private struct IndicationItem {
         let id: UUID
         let payload: Data
@@ -72,67 +53,33 @@ actor ServerSession {
     private var controlPointSubscriberWaiters: [SubscriberWaiter] = []
     private var measurementSubscriberWaiterParkedWaiters: [CheckedContinuation<Void, Never>] = []
 
-    /// `powerLossCount` captured right after the startup power wait; if it has changed by the
-    /// time `startAdvertising` succeeds, Bluetooth was lost and regained mid-startup and startup
-    /// rolls back and throws `.notPoweredOn` even though the calls themselves succeeded.
     private var startLossCount = 0
     private var radioLost = false
-    /// Bumped on every suspension. A measurement send whose `updateValue` await straddles a
-    /// suspension is not recorded as accepted, even if it returns `true`, because it reached no
-    /// current subscriber (see ``processMeasurementItem()``).
     private var radioLossEpoch: UInt64 = 0
-    /// Last state seen by `handleRadioState`, used to require a genuine transition into
-    /// `.poweredOn` (not a duplicate `.poweredOn` event) before attempting recovery.
     private var lastRadioState: BluetoothState = .poweredOn
     private var recoveryInProgress = false
     private var recoveryIdleWaiters: [CheckedContinuation<Void, Never>] = []
 
-    /// Ready-to-update latch for CoreBluetooth backpressure. The inbound loop sets it when the
-    /// pump is not parked; the pump clears it immediately before every `updateValue` call and
-    /// parks `notifyReadyWaiter` only when it must wait. At most one waiter exists at a time,
-    /// because the pump is the only consumer.
     private var notifyReady = false
     private var notifyReadyWaiter: CheckedContinuation<Void, Never>?
     private var notifyReadyWaiterParkedWaiters: [CheckedContinuation<Void, Never>] = []
 
-    /// Buffers inbound events that arrive before startup finishes, so `add`/`startAdvertising`
-    /// races with an eager central do not lose events. Drained, and the gate flipped, with no
-    /// `await` in between (see ``drainPendingInboundEvents()``).
     private var startupGateOpen = false
     private var pendingInboundEvents: [PeripheralEvent] = []
 
-    /// Last accepted half of a combined CSC Measurement from each source, used to fill in the
-    /// other half when only one source produces a new sample.
     private var wheelCache: WheelRevolution?
     private var crankCache: CrankRevolution?
-    /// Bumped on every successful Set Cumulative Value. Stamps queued wheel-bearing payloads so
-    /// one still queued when the value changes can be recognized as stale and dropped or
-    /// recomputed. Wraps after `UInt64.max`; a stamp of `0` can then match again, which is
-    /// accepted as harmless.
     private var wheelGeneration: UInt64 = 0
 
-    /// The single outbound FIFO. Only ``runOutboundPump()`` removes the head; everything else
-    /// (unsubscribe, timeout, radio loss) removes queued indications by id instead, since the
-    /// pump may already be mid-send on the head.
     private var outboundQueue: [OutboundItem] = []
     private var outboundQueueWaiter: CheckedContinuation<Void, Never>?
 
-    /// CSCS §3.4.4: CoreBluetooth never reports the ATT confirmation for an indication, so the
-    /// server bounds what it controls with its own budget from the accepted write to the
-    /// indication being handed to `updateValue`.
     private static let procedureTimeout: Duration = .seconds(30)
 
     private var procedureInProgress = false
     private var procedureIdleWaiters: [CheckedContinuation<Void, Never>] = []
-    /// The queued indication that owns the current procedure, or `nil` while its delegate call
-    /// is still running (before the indication exists).
     private var procedureIndicationID: UUID?
-    /// Bumped on every new procedure so a timeout task armed for an earlier procedure recognizes
-    /// it is stale and no-ops instead of ending a procedure it no longer owns.
     private var procedureGeneration: UInt64 = 0
-    /// Set when the 30 s budget elapses. Blocks a delegate call that returns successfully after
-    /// the deadline from being indicated, even though its side effect (stored value, generation
-    /// bump) is already applied.
     private var procedureTimedOut = false
     private var procedureTimeoutTask: Task<Void, Never>?
 
@@ -170,9 +117,6 @@ actor ServerSession {
         self.onMeasurementSubscriberCountChange = onMeasurementSubscriberCountChange
     }
 
-    /// Creates and starts up a session. Guarantees `rollbackStartup()` runs on any failure path,
-    /// including cancellation of the awaiting task during `startup()` — the cancellation handler
-    /// and the `catch` both call it, but ``rollbackStartup()`` is safe to invoke more than once.
     static func open(
         service: PeripheralService,
         wheel: WheelConfiguration?,
@@ -281,9 +225,6 @@ actor ServerSession {
         }
     }
 
-    /// Teardown for a session that reached `.running`, so `stopAdvertising` is called
-    /// unconditionally (unlike ``rollbackStartup()``, which must check `publishStage` because
-    /// startup may have failed before advertising began).
     func close() async {
         beginShutdown()
         await stopTasks()
@@ -302,9 +243,6 @@ actor ServerSession {
         await notifyMeasurementSubscriberCount()
     }
 
-    /// Flips `closed` and wakes every parked waiter so nothing blocks forever once shutdown
-    /// starts. Does not itself cancel tasks or touch the peripheral — ``stopTasks()`` and the
-    /// caller (``close()``/``rollbackStartup()``) do that afterward.
     private func beginShutdown() {
         closed = true
         pendingInboundEvents.removeAll()
@@ -318,8 +256,6 @@ actor ServerSession {
         resumeAllOutboundCountWaiters()
     }
 
-    /// Cancels and awaits every long-running task together, so none keeps running on state the
-    /// others are about to tear down.
     private func stopTasks() async {
         let timeoutTask = procedureTimeoutTask
         senderTask?.cancel()
@@ -348,10 +284,6 @@ actor ServerSession {
         pendingInboundEvents.removeAll()
     }
 
-    /// Subscribes to `events` before `add`/`startAdvertising` (the stream does not replay), then
-    /// publishes the service, advertises, and only then drains buffered events and starts the
-    /// revolution loops. Checks `closed`/cancellation after every await so a `stop()` or
-    /// cancellation racing startup is caught as early as possible and rolled back by the caller.
     private func startup() async throws {
         try await waitForPoweredOn()
         startLossCount = await peripheral.powerLossCount
@@ -410,8 +342,6 @@ actor ServerSession {
         }
     }
 
-    /// Teardown for a startup that failed or was cancelled before reaching `.running`; mirrors
-    /// ``close()`` but must check `publishStage` since advertising may never have started.
     private func rollbackStartup() async {
         beginShutdown()
         await stopTasks()
@@ -477,8 +407,6 @@ actor ServerSession {
         }
     }
 
-    /// Drops subscriptions and lets the pump discard queued sends, but leaves `publishStage`
-    /// unchanged — the service stays exactly as CoreBluetooth left it until recovery runs.
     private func suspendForRadioLoss() async {
         radioLost = true
         radioLossEpoch &+= 1
@@ -539,8 +467,6 @@ actor ServerSession {
         radioLost = false
     }
 
-    /// Whether this build includes SC Control Point — GATT truth for the write gate in
-    /// ``handleWrite(_:)``, independent of `wheel != nil`.
     private var hasControlPointCharacteristic: Bool {
         service.characteristics.contains { $0.uuid == CSCS.controlPointUUID }
     }
@@ -558,8 +484,6 @@ actor ServerSession {
         }
     }
 
-    /// The sole `updateValue` caller and the sole consumer of the outbound queue. Loops between
-    /// waiting for work and processing the head item until cancelled or closed.
     private func runOutboundPump() async {
         while !Task.isCancelled {
             if closed {
@@ -615,10 +539,6 @@ actor ServerSession {
         }
     }
 
-    /// Resumes a parked pump without setting ``notifyReady``. Used for wakeups that are not a
-    /// real CoreBluetooth ready signal (radio loss, a successful Set Cumulative Value, a
-    /// dropped queue head) — if nobody is currently parked, this is a no-op rather than an idle
-    /// signal that could let the pump skip its next real wait.
     private func wakeReadyWaiterWithoutLatch() {
         if let waiter = notifyReadyWaiter {
             notifyReadyWaiter = nil
@@ -652,9 +572,6 @@ actor ServerSession {
         return false
     }
 
-    /// Re-checked after every suspension point in ``processIndicationItem()``, since something
-    /// else may have removed this exact indication (by id, possibly not from the head) while the
-    /// pump was awaiting.
     private func isHeadIndication(_ id: UUID) -> Bool {
         guard case .indication(let head) = outboundQueue.first else {
             return false
@@ -662,8 +579,6 @@ actor ServerSession {
         return head.id == id
     }
 
-    /// Only removes and completes the item if it is still the head with this id — a no-op if
-    /// something else already removed or replaced it while the pump was suspended.
     private func removeHeadIndicationIfOwned(_ id: UUID, _ indication: inout IndicationItem) -> Bool {
         guard isHeadIndication(id) else {
             return false
@@ -700,10 +615,6 @@ actor ServerSession {
         return true
     }
 
-    /// Sends the head measurement, retrying the same payload after `updateValue` returns `false`
-    /// (CoreBluetooth backpressure) until it is accepted, dropped for lack of subscribers,
-    /// discarded for staleness, or shutdown intervenes. Re-checks all three exit conditions after
-    /// every suspension point, since state can change while parked on ``waitForNotifyReady()``.
     private func processMeasurementItem() async {
         guard case var .measurement(item) = outboundQueue.first else {
             return
@@ -778,12 +689,6 @@ actor ServerSession {
         }
     }
 
-    /// Called only when `updateValue` returned `true` for a payload that overlapped no radio
-    /// loss. `wheelGeneration` can still have bumped while `updateValue` was suspended (a Set
-    /// Cumulative Value procedure runs on the same actor and can interleave during that await);
-    /// re-checking staleness here catches that case. A stale wheel-bearing payload still caches
-    /// its crank half (still current) but does not cache the wheel half or count toward
-    /// ``acceptedMeasurementCount``.
     private func recordAcceptedMeasurement(_ item: MeasurementItem) {
         if isStaleWheelPayload(item) {
             if item.producedWheel == nil, let crank = item.producedCrank {
@@ -801,10 +706,6 @@ actor ServerSession {
         resumeAcceptedMeasurementCountWaiters(for: acceptedMeasurementCount)
     }
 
-    /// Sends the head indication, retrying after `updateValue` returns `false`, exactly like
-    /// ``processMeasurementItem()`` — but must additionally re-validate that this item is still
-    /// the head by id after every suspension, since a timeout, unsubscribe, or radio loss can
-    /// remove or end the owning procedure for this exact item while the pump is parked.
     private func processIndicationItem() async {
         guard case var .indication(indication) = outboundQueue.first else {
             return
@@ -884,9 +785,6 @@ actor ServerSession {
         }
     }
 
-    /// Discards every remaining queued item without sending, resuming each producer's emit
-    /// waiter. Also ends an in-progress procedure, since its indication (if queued) was just
-    /// discarded here rather than through the normal accept/timeout/unsubscribe path.
     private func drainOutboundQueueOnShutdown() {
         while !outboundQueue.isEmpty {
             switch outboundQueue.removeFirst() {
@@ -994,9 +892,6 @@ actor ServerSession {
         resumeOutboundCountWaiters()
     }
 
-    /// Called when a procedure's delegate call finishes successfully. If the 30 s budget already
-    /// elapsed, the side effect already applied but this drops the indication and ends the
-    /// procedure instead of sending it late.
     private func enqueueIndication(_ response: CSCControlPointResponse, centralID: UUID) {
         guard !closed, !procedureTimedOut else {
             endProcedure()
@@ -1050,9 +945,6 @@ actor ServerSession {
         )
     }
 
-    /// Enqueues one wheel sample and awaits until it leaves the outbound queue (sent, dropped, or
-    /// discarded), which throttles ``startWheelLoopIfNeeded()`` to the pump's pace rather than
-    /// letting the wheel source race ahead of what CoreBluetooth can actually send.
     private func emitWheel(_ sample: WheelRevolution) async {
         if closed {
             return
@@ -1083,8 +975,6 @@ actor ServerSession {
         }
     }
 
-    /// Mirrors ``emitWheel(_:)`` for the crank source; same backpressure-through-the-queue effect
-    /// on ``startCrankLoopIfNeeded()``.
     private func emitCrank(_ sample: CrankRevolution) async {
         if closed {
             return
@@ -1115,9 +1005,6 @@ actor ServerSession {
         }
     }
 
-    /// Combines the new wheel sample with the last-accepted crank half (if any) into one CSC
-    /// Measurement payload. The generation stamp is non-nil exactly when the payload carries a
-    /// wheel half, so a crank-only encoding is never mistaken for stale wheel data.
     private func encodeWheelSample(_ sample: WheelRevolution) -> (Data, UInt64?)? {
         let measurement = CSCMeasurement(
             cumulativeWheelRevolutions: sample.cumulativeRevolutions,
@@ -1132,8 +1019,6 @@ actor ServerSession {
         return (payload, stamp)
     }
 
-    /// Mirrors ``encodeWheelSample(_:)``, combining the new crank sample with the last-accepted
-    /// wheel half.
     private func encodeCrankSample(_ sample: CrankRevolution) -> (Data, UInt64?)? {
         let measurement = CSCMeasurement(
             cumulativeWheelRevolutions: wheelCache?.cumulativeRevolutions,
@@ -1148,9 +1033,6 @@ actor ServerSession {
         return (payload, stamp)
     }
 
-    /// Startup-only power gate: waits through `.unknown`/`.resetting` (e.g. while the Bluetooth
-    /// permission prompt is pending) but fails fast for any other non-`.poweredOn` state. Once
-    /// running, ``handleRadioState(_:)`` takes over via `events` instead of this stream.
     private func waitForPoweredOn() async throws {
         let stateStream = await peripheral.stateUpdates
         var iterator = stateStream.makeAsyncIterator()
@@ -1184,8 +1066,6 @@ actor ServerSession {
         }
     }
 
-    /// Buffers events until startup opens the gate; after `closed`, events are dropped rather
-    /// than buffered, since there is no future gate opening that would drain them.
     private func receiveInbound(_ event: PeripheralEvent) async {
         if closed {
             return
@@ -1233,9 +1113,6 @@ actor ServerSession {
         }
     }
 
-    /// The real CoreBluetooth ready-to-update callback. Unlike ``wakeReadyWaiterWithoutLatch()``,
-    /// this sets ``notifyReady`` when nobody is parked, so the next ``waitForNotifyReady()`` call
-    /// does not have to wait for a signal that already arrived.
     private func signalNotifyReady() {
         if let waiter = notifyReadyWaiter {
             notifyReadyWaiter = nil
@@ -1288,11 +1165,6 @@ actor ServerSession {
         }
     }
 
-    /// ATT error codes: `0x0A` unknown characteristic, `0x02` read not permitted (the
-    /// notify-only Measurement characteristic has no readable value), `0x07` invalid offset.
-    /// Multiple-location Sensor Location is read from ``ServedSensorLocationBox`` (the byte
-    /// Update Sensor Location last stored) rather than from `characteristic.value`, which is
-    /// `nil` for that configuration.
     private func readResponse(for request: PeripheralReadRequest) -> ReadResponse {
         guard request.serviceUUID == service.uuid else {
             return ReadResponse(result: .error(code: 0x0A), value: nil)
@@ -1332,10 +1204,6 @@ actor ServerSession {
         return ReadResponse(result: .success, value: Data(value.dropFirst(offset)))
     }
 
-    /// SC Control Point write gate, checked in order: the characteristic-absent gate (`0x03`,
-    /// before any other check, so a service that lacks `0x2A55` never leaks a more specific
-    /// error), wrong characteristic (`0x03`), non-zero offset (`0x07`), undecodable value
-    /// (`0x0D`), CCCD not subscribed (`0x81`), and a procedure already running (`0x80`).
     private func handleWrite(_ transaction: PeripheralWriteTransaction) async {
         guard transaction.requests.count == 1,
               transaction.requests[0].serviceUUID == service.uuid
@@ -1417,10 +1285,6 @@ actor ServerSession {
         }
     }
 
-    /// Dispatches one decoded SC Control Point request to its procedure, or indicates
-    /// `opCodeNotSupported`/`invalidParameter` directly for combinations this build does not
-    /// serve (e.g. Update Sensor Location on a build without multiple locations). Runs on
-    /// ``procedureTask``, started once per accepted write by ``handleWrite(_:)``.
     private func runProcedure(_ request: CSCControlPointRequest, centralID: UUID) async {
         switch request {
         case let .setCumulativeValue(value):
@@ -1505,10 +1369,6 @@ actor ServerSession {
         }
     }
 
-    /// Calls the delegate, then bumps ``wheelGeneration`` and clears ``wheelCache`` on success so
-    /// any still-queued wheel-bearing payload is recognized as stale. Wakes a parked pump without
-    /// setting the ready latch, so it re-checks staleness immediately instead of waiting for an
-    /// unrelated CoreBluetooth ready signal that may not come soon.
     private func runSetCumulativeProcedure(value: UInt32, centralID: UUID) async {
         guard let wheel else {
             indicate(
@@ -1565,9 +1425,6 @@ actor ServerSession {
         return nil
     }
 
-    /// Stores the new location on success before checking `closed`, so the byte served on
-    /// `0x2A5D` updates immediately even if the success indication that follows is backpressured
-    /// or later dropped by shutdown. A delegate throw or cancellation never stores anything.
     private func runUpdateSensorLocationProcedure(assignedNumber: UInt8, centralID: UUID) async {
         guard let configuration = multipleSensorLocationsConfiguration else {
             endProcedure()
@@ -1613,8 +1470,6 @@ actor ServerSession {
         )
     }
 
-    /// Answers from the `build()`-time snapshot (builder order, no length prefix) — never
-    /// re-reads the delegate's `supported`, which is why the list cannot change after `build()`.
     private func runRequestSupportedSensorLocationsProcedure(centralID: UUID) async {
         guard let configuration = multipleSensorLocationsConfiguration else {
             endProcedure()
@@ -1636,9 +1491,6 @@ actor ServerSession {
         )
     }
 
-    /// CCCD enable/disable. `inserted`/`removed` guard the subscriber-count notification against
-    /// a duplicate event for a central already in the expected state. Control-point unsubscribe
-    /// also drops that central's queued indications, since it can no longer accept them.
     private func handleSubscription(_ change: SubscriptionChange) async {
         switch change {
         case let .subscribed(centralID, serviceUUID, characteristicUUID):
@@ -1679,9 +1531,6 @@ actor ServerSession {
         }
     }
 
-    /// Removes every queued indication for `centralID`, at whatever position it sits in the
-    /// queue, and ends the owning procedure — whether because the removed item was the head, or
-    /// because it was the current procedure's indication even if queued behind something else.
     private func dropQueuedIndications(for centralID: UUID) {
         let ids = outboundQueue.compactMap { item -> UUID? in
             if case .indication(let indication) = item, indication.centralID == centralID {
@@ -1755,10 +1604,6 @@ actor ServerSession {
         }
     }
 
-    /// Iterates the crank source from exactly one task for its whole lifetime, per the
-    /// single-task-per-box contract in ``AnyAsyncSequence``. Any iterator failure, or the
-    /// sequence ending naturally, silently stops this loop only — reads and advertising continue,
-    /// and a single-pass source (e.g. `AsyncStream`) cannot be restarted by a later `start()`.
     private func startCrankLoopIfNeeded() {
         guard let crankRevolutions else {
             return
@@ -1786,7 +1631,6 @@ actor ServerSession {
         }
     }
 
-    /// Mirrors ``startCrankLoopIfNeeded()`` for the wheel source.
     private func startWheelLoopIfNeeded() {
         guard let wheel else {
             return
@@ -1814,10 +1658,6 @@ actor ServerSession {
         }
     }
 
-    /// Maps a failure from `peripheral.add` to ``ServerError``. Kept separate from
-    /// ``mapAdvertisingError(_:)`` so the same underlying `BluetoothPeripheralError` produces
-    /// `.publishFailed` here but `.advertisingFailed` there, depending on which startup call
-    /// actually failed.
     private func mapPublishError(_ error: Error) -> ServerError {
         if let serverError = error as? ServerError {
             return serverError

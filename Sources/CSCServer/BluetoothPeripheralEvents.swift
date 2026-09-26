@@ -1,28 +1,18 @@
 import Foundation
 
-/// Errors from ``BluetoothPeripheral`` conformers.
 package enum BluetoothPeripheralError: Error, Sendable, Equatable {
     case notPoweredOn
     case serviceNotFound
     case characteristicNotFound
-    /// `respond(to:with:value:)` was called with an id that has no outstanding request.
     case unknownRequest
     case addServiceFailed(serviceUUID: UUID, reason: String)
     case advertisingFailed(reason: String)
-    /// A characteristic declared both `.write` and `.writeWithoutResponse`, or both `.notify`
-    /// and `.indicate`.
     case conflictingProperties
-    /// A characteristic had a non-nil cached `value` but was not exactly `[.read]` / `[.readable]`.
     case cachedValueNotReadOnly
-    /// A second `add` was issued while one was already in flight.
     case addInProgress
-    /// A second `startAdvertising` was issued while one was already in flight.
     case advertisingInProgress
-    /// `respond(to:with:value:)` was called with `.success` for a read but `value` was `nil`.
     case missingReadValue
-    /// `respond(to:with:value:)` was called with a non-nil `value` for a write or an error response.
     case unexpectedResponseValue
-    /// The peripheral was deinitialized with continuations still pending.
     case peripheralInvalidated
 }
 
@@ -55,9 +45,6 @@ package struct PeripheralCharacteristic: Sendable, Equatable {
     package let uuid: UUID
     package let properties: CharacteristicProperties
     package let permissions: CharacteristicPermissions
-    /// Non-nil (CoreBluetooth cached read) is legal only when `properties == [.read]` and
-    /// `permissions == [.readable]`; anything else throws `cachedValueNotReadOnly` from
-    /// ``PeripheralServiceValidation``. `nil` means dynamic — reads arrive on `events`.
     package let value: Data?
 
     package init(
@@ -153,15 +140,11 @@ package struct PeripheralWriteTransaction: Sendable, Equatable {
     }
 }
 
-/// CCCD (`0x2902`) enable/disable for one characteristic. Delivered as `.subscription` events,
-/// not `.writeTransaction`.
 package enum SubscriptionChange: Sendable, Equatable {
     case subscribed(centralID: UUID, serviceUUID: UUID, characteristicUUID: UUID)
     case unsubscribed(centralID: UUID, serviceUUID: UUID, characteristicUUID: UUID)
 }
 
-/// Result for `respond(to:with:value:)`. `error(code:)` passes the raw ATT error byte through,
-/// so application-specific codes (e.g. `0x80`/`0x81`) survive unchanged.
 package enum ATTResult: Sendable, Equatable {
     case success
     case error(code: UInt8)
@@ -176,9 +159,6 @@ package enum PeripheralEvent: Sendable, Equatable {
     case readyToUpdateSubscribers
 }
 
-/// Rejects a service with conflicting characteristic properties or a cached value on a
-/// characteristic that is not read-only readable. Run before `add` in both the production and
-/// fake peripherals so both reject the same malformed services.
 enum PeripheralServiceValidation {
     static func validate(_ service: PeripheralService) throws {
         for characteristic in service.characteristics {

@@ -1,10 +1,5 @@
 internal import CSCWire
 
-/// The only place that turns a completed builder configuration into a `Server`: computes CSC
-/// Feature bits and the fixed characteristic inventory (order: Measurement, Feature, Sensor
-/// Location, Control Point), re-validates the multiple-location invariants the builder already
-/// checked (belt and suspenders for the internal `Server` initializer), and constructs the
-/// `Server`. Everything decided here is fixed for the `Server`'s lifetime.
 enum ServerAssembly {
     private static let maximumMultipleSensorLocations = 17 // 3 + 17 = 20 default-MTU payload bytes
 
@@ -84,9 +79,6 @@ enum ServerAssembly {
             )
         }
 
-        // SC Control Point is included for Set Cumulative Value (needs wheel data) or Update /
-        // Request Supported Sensor Locations (needs multiple locations) — CSCS 1.0 §3.4 / Table
-        // 3.3. Crank-only and crank-plus-static builds omit it entirely.
         let includesControlPoint = wheel != nil || {
             if case .multiple = location {
                 return true
