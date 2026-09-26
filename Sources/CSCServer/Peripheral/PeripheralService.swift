@@ -60,18 +60,8 @@ package struct PeripheralService: Sendable, Equatable {
     }
 }
 
-package struct Advertisement: Sendable, Equatable {
-    package let localName: String?
-    package let serviceUUIDs: [UUID]
-
-    package init(localName: String?, serviceUUIDs: [UUID]) {
-        self.localName = localName
-        self.serviceUUIDs = serviceUUIDs
-    }
-}
-
-enum PeripheralServiceValidation {
-    static func validate(_ service: PeripheralService) throws {
+package enum PeripheralServiceValidation {
+    package static func validate(_ service: PeripheralService) throws {
         for characteristic in service.characteristics {
             if characteristic.properties.contains(.write),
                characteristic.properties.contains(.writeWithoutResponse)

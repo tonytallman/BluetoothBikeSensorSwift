@@ -207,22 +207,11 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
             throw BluetoothPeripheralError.notPoweredOn
         }
 
-        if isRead {
-            switch result {
-            case .success:
-                guard let value else {
-                    throw BluetoothPeripheralError.missingReadValue
-                }
-            case .error:
-                guard value == nil else {
-                    throw BluetoothPeripheralError.unexpectedResponseValue
-                }
-            }
-        } else {
-            guard value == nil else {
-                throw BluetoothPeripheralError.unexpectedResponseValue
-            }
-        }
+        try RespondPayloadValidation.validate(
+            requestKind: isRead ? .read : .write,
+            result: result,
+            value: value,
+        )
 
         if respondHold.isHeld {
             await park(.respond)
