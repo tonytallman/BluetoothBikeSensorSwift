@@ -21,27 +21,23 @@ actor ServerLifecycle {
         replaysLatest: true,
         initialLatest: 0,
     )
-    private var measurementSubscriberCountLatest = 0
-    private var measurementSubscriberCountPublished: Int?
+    private var measurementSubscriberCount = 0
+    private var lastYieldedMeasurementSubscriberCount: Int?
 
     func measurementSubscriberCount() async -> AsyncStream<Int> {
         await measurementSubscriberCountBroadcaster.makeStream()
     }
 
-    private func publishMeasurementSubscriberCount(_ count: Int) async {
-        measurementSubscriberCountLatest = count
+    private func setMeasurementSubscriberCount(_ count: Int) async {
+        measurementSubscriberCount = count
         guard case .running = phase else { return }
-        await publishMeasurementSubscriberCountIfChanged(count)
-    }
-
-    private func publishMeasurementSubscriberCountIfChanged(_ count: Int) async {
-        if measurementSubscriberCountPublished == count { return }
-        measurementSubscriberCountPublished = count
+        guard lastYieldedMeasurementSubscriberCount != count else { return }
+        lastYieldedMeasurementSubscriberCount = count
         await measurementSubscriberCountBroadcaster.yield(count)
     }
 
-    private func syncMeasurementSubscriberCountPublication() async {
-        await publishMeasurementSubscriberCountIfChanged(measurementSubscriberCountLatest)
+    private func replayMeasurementSubscriberCount() async {
+        await setMeasurementSubscriberCount(measurementSubscriberCount)
     }
 
     init(configuration: ServerConfiguration) {
@@ -107,9 +103,9 @@ actor ServerLifecycle {
             return
         }
         phase = .idle
-        measurementSubscriberCountLatest = 0
-        measurementSubscriberCountPublished = nil
-        await publishMeasurementSubscriberCountIfChanged(0)
+        measurementSubscriberCount = 0
+        lastYieldedMeasurementSubscriberCount = 0
+        await measurementSubscriberCountBroadcaster.yield(0)
     }
 
     func waitUntilFinishStoppingEntryCount(_ count: Int) async {
@@ -173,7 +169,7 @@ actor ServerLifecycle {
                 peripheral: resolvedPeripheral,
                 clock: clock,
                 onMeasurementSubscriberCountChange: { count in
-                    await self.publishMeasurementSubscriberCount(count)
+                    await self.setMeasurementSubscriberCount(count)
                 },
             )
         }
@@ -186,8 +182,8 @@ actor ServerLifecycle {
                 throw CancellationError()
             }
             phase = .running(session)
-            measurementSubscriberCountPublished = nil
-            await syncMeasurementSubscriberCountPublication()
+            lastYieldedMeasurementSubscriberCount = nil
+            await replayMeasurementSubscriberCount()
         } catch {
             let stillOwnsStartup = {
                 if case .starting(let currentTask) = phase, currentTask == startupTask {
