@@ -37,7 +37,7 @@ struct ServerProcedureTimeoutTests {
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: setCumulativeValue(3))) == .error(code: 0x80))
 
         await delegate.release()
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
         await clock.waitUntilSleeperCount(0)
 
         #expect(await clock.requestedDurations == [.seconds(30)])
@@ -58,13 +58,13 @@ struct ServerProcedureTimeoutTests {
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: setCumulativeValue(2))) == .error(code: 0x80))
 
         await clock.advance(by: .seconds(1))
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await fake.setNextUpdateValueAccepted(true)
         await fake.emitReadyToUpdateSubscribers()
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: setCumulativeValue(3))) == .success)
         await fake.waitUntilUpdateValueCount(2, characteristic: CSCS.controlPointUUID, matching: { $0 == Self.setCumulativeSuccess })
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         #expect(await fake.countUpdateValues(characteristic: CSCS.controlPointUUID, matching: { $0 == Self.setCumulativeSuccess }) == 2)
         #expect(await delegate.recordedValues == [1, 3])
@@ -75,19 +75,19 @@ struct ServerProcedureTimeoutTests {
         let writer = UUID()
         await fake.subscribeControlPoint(server: server, centralID: writer)
 
-        await fake.holdNextUpdateValue()
+        await fake.hold(.updateValue)
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: setCumulativeValue(1))) == .success)
-        await fake.waitUntilUpdateValueHeld()
+        await fake.waitUntilHeld(.updateValue)
         await clock.waitUntilSleeperCount(1)
 
         await clock.advance(by: .seconds(30))
-        await server.waitUntilControlPointProcedureIdle()
-        await fake.releaseUpdateValue()
+        await server.waitUntil(.controlPointProcedureIdle)
+        await fake.release(.updateValue)
         await fake.emitReadyToUpdateSubscribers()
 
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: setCumulativeValue(2))) == .success)
         await fake.waitUntilUpdateValueCount(2, characteristic: CSCS.controlPointUUID, matching: { $0 == Self.setCumulativeSuccess })
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         #expect(await fake.countUpdateValues(characteristic: CSCS.controlPointUUID, matching: { $0 == Self.setCumulativeSuccess }) == 2)
         #expect(await delegate.recordedValues == [1, 2])
@@ -104,12 +104,12 @@ struct ServerProcedureTimeoutTests {
         await clock.waitUntilSleeperCount(1)
 
         await clock.advance(by: .seconds(30))
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
         #expect(await fake.countUpdateValues(characteristic: CSCS.controlPointUUID) == 0)
 
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: setCumulativeValue(2))) == .success)
         await fake.waitUntilUpdateValueCount(1, characteristic: CSCS.controlPointUUID, matching: { $0 == Self.setCumulativeSuccess })
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         #expect(await fake.countUpdateValues(characteristic: CSCS.controlPointUUID) == 1)
         #expect(await delegate.recordedValues == [1, 2])
@@ -136,7 +136,7 @@ struct ServerProcedureTimeoutTests {
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: updateSensorLocationValue(.leftCrank))) == .error(code: 0x80))
 
         locations.release()
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         #expect(await fake.countUpdateValues(characteristic: CSCS.controlPointUUID, matching: { $0.starts(with: [0x10, 0x03]) }) == 0)
         #expect(await fake.read(characteristicUUID: CSCS.sensorLocationUUID) == Data([0x06]))
@@ -144,7 +144,7 @@ struct ServerProcedureTimeoutTests {
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: updateSensorLocationValue(.leftCrank))) == .success)
         let updateSuccess = controlPointResponse(opcode: 0x03, value: 0x01)
         await fake.waitUntilUpdateValueCount(1, characteristic: CSCS.controlPointUUID, matching: { $0 == updateSuccess })
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
         #expect(locations.recordedUpdateKinds == [.rightCrank, .leftCrank])
     }
 
@@ -155,14 +155,14 @@ struct ServerProcedureTimeoutTests {
 
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: setCumulativeValue(1))) == .success)
         await fake.waitUntilUpdateValueCount(1, characteristic: CSCS.controlPointUUID, matching: { $0 == Self.setCumulativeSuccess })
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
         await clock.waitUntilSleeperCount(0)
 
         await clock.advance(by: .seconds(60))
 
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: setCumulativeValue(2))) == .success)
         await fake.waitUntilUpdateValueCount(2, characteristic: CSCS.controlPointUUID, matching: { $0 == Self.setCumulativeSuccess })
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         #expect(await fake.countUpdateValues(characteristic: CSCS.controlPointUUID) == 2)
         #expect(await delegate.recordedValues == [1, 2])
@@ -194,11 +194,11 @@ struct ServerProcedureTimeoutTests {
         await fake.emitWriteTransaction(
             controlPointWrite(centralID: central, value: requestSupportedSensorLocationsValue),
         )
-        await server.waitUntilOutboundCount(atLeast: 2)
+        await server.waitUntil(.outboundCount(atLeast: 2))
         await clock.waitUntilSleeperCount(1)
 
         await clock.advance(by: .seconds(30))
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await fake.setNextUpdateValueAccepted(true)
         await fake.emitReadyToUpdateSubscribers()
@@ -207,7 +207,7 @@ struct ServerProcedureTimeoutTests {
             characteristic: CSCS.measurementUUID,
             matching: { $0 == wheelPayload },
         )
-        await server.waitUntilAcceptedMeasurementCount(1)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
 
         #expect(await fake.countUpdateValues(characteristic: CSCS.controlPointUUID) == 0)
     }

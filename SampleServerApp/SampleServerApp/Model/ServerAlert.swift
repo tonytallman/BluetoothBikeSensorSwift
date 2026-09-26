@@ -38,7 +38,7 @@ struct ServerAlert: Identifiable, Equatable {
                 )
             case .alreadyStarted:
                 return ServerAlert(
-                    message: "Another server in this app is still running or stopping. Try again in a moment.",
+                    message: "The server is already running or still stopping. Try again in a moment.",
                     offersSettings: false,
                 )
             case let .publishFailed(reason):
@@ -49,11 +49,6 @@ struct ServerAlert: Identifiable, Equatable {
             case let .advertisingFailed(reason):
                 return ServerAlert(
                     message: "Couldn't start advertising: \(reason)",
-                    offersSettings: false,
-                )
-            case .unsupportedConfiguration:
-                return ServerAlert(
-                    message: "This server configuration isn't supported.",
                     offersSettings: false,
                 )
             }

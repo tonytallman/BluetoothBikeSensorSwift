@@ -1,4 +1,5 @@
-package struct AnyAsyncSequence<Element: Sendable>: Sendable {
+package struct AnyAsyncSequence<Element: Sendable>: Sendable, AsyncSequence {
+    package typealias AsyncIterator = Iterator
     private let makeIterator: @Sendable () -> Iterator
 
     package init<Base: AsyncSequence & Sendable>(
@@ -33,8 +34,7 @@ package struct AnyAsyncSequence<Element: Sendable>: Sendable {
 /// Holds a base iterator that need not be `Sendable`, such as `AsyncStream.Iterator`.
 ///
 /// Each `makeAsyncIterator()` creates its own box. `ServerSession` iterates each box from exactly
-/// one task (`startCrankLoopIfNeeded` / `startWheelLoopIfNeeded`), so `next()` calls never overlap.
-/// The iterator must not cross into a second task.
+/// one task per revolution source, so `next()` calls never overlap.
 private final class IteratorBox<Base: AsyncIteratorProtocol>: @unchecked Sendable where Base.Element: Sendable {
     private var base: Base
 
