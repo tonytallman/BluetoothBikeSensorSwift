@@ -62,41 +62,6 @@ public final class Server: Sendable {
         await lifecycle.waitUntil(condition)
     }
 
-    /// Blocks until the measurement subscriber set equals `ids`.
-    package func waitForMeasurementSubscribers(_ ids: Set<UUID>) async {
-        await waitUntil(.measurementSubscribers(ids))
-    }
-
-    /// Returns once a subscriber waiter is parked on the running session.
-    package func waitUntilMeasurementSubscriberWaiterParked() async {
-        await waitUntil(.measurementSubscriberWaiterParked)
-    }
-
-    /// Blocks until the control-point subscriber set equals `ids`.
-    package func waitForControlPointSubscribers(_ ids: Set<UUID>) async {
-        await waitUntil(.controlPointSubscribers(ids))
-    }
-
-    /// Blocks until no control-point procedure is in progress.
-    package func waitUntilControlPointProcedureIdle() async {
-        await waitUntil(.controlPointProcedureIdle)
-    }
-
-    /// Blocks until the accepted measurement count reaches `count`.
-    package func waitUntilAcceptedMeasurementCount(_ count: Int) async {
-        await waitUntil(.acceptedMeasurementCount(atLeast: count))
-    }
-
-    /// Blocks until the outbound queue holds at least `count` items.
-    package func waitUntilOutboundCount(atLeast count: Int) async {
-        await waitUntil(.outboundCount(atLeast: count))
-    }
-
-    /// Returns once the outbound pump is parked waiting for a ready-to-update signal.
-    package func waitUntilNotifyReadyWaiterParked() async {
-        await waitUntil(.readyToUpdateWaiterParked)
-    }
-
     /// Whether the running session lost Bluetooth and has not republished yet. Waits for a
     /// recovery that is already in progress to finish.
     package var isRadioSuspended: Bool {

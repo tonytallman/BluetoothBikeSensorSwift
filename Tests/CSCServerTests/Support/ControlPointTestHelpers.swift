@@ -13,7 +13,7 @@ extension FakeBluetoothPeripheral {
                 characteristicUUID: CSCS.controlPointUUID,
             ),
         )
-        await server.waitForControlPointSubscribers([centralID])
+        await server.waitUntil(.controlPointSubscribers([centralID]))
     }
 
     nonisolated func unsubscribeControlPoint(centralID: UUID) async {
@@ -34,7 +34,7 @@ extension FakeBluetoothPeripheral {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
     }
 
     /// Emits a read and returns the value of its success response.

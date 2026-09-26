@@ -144,34 +144,6 @@ actor ServerLifecycle {
         }
     }
 
-    func waitForMeasurementSubscribers(_ ids: Set<UUID>) async {
-        await waitUntil(.measurementSubscribers(ids))
-    }
-
-    func waitUntilMeasurementSubscriberWaiterParked() async {
-        await waitUntil(.measurementSubscriberWaiterParked)
-    }
-
-    func waitForControlPointSubscribers(_ ids: Set<UUID>) async {
-        await waitUntil(.controlPointSubscribers(ids))
-    }
-
-    func waitUntilControlPointProcedureIdle() async {
-        await waitUntil(.controlPointProcedureIdle)
-    }
-
-    func waitUntilAcceptedMeasurementCount(_ count: Int) async {
-        await waitUntil(.acceptedMeasurementCount(atLeast: count))
-    }
-
-    func waitUntilOutboundCount(atLeast count: Int) async {
-        await waitUntil(.outboundCount(atLeast: count))
-    }
-
-    func waitUntilNotifyReadyWaiterParked() async {
-        await waitUntil(.readyToUpdateWaiterParked)
-    }
-
     var isRadioSuspended: Bool {
         get async {
             guard case .running(let session) = phase else {

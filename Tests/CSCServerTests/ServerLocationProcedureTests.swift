@@ -74,7 +74,7 @@ struct ServerLocationProcedureTests {
         } else {
             Issue.record("Expected multiple location configuration")
         }
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
     }
 
     @Test func unsupportedAndOutOfRangeUpdateBytes() async throws {
@@ -109,7 +109,7 @@ struct ServerLocationProcedureTests {
                     return false
                 }.count >= nth
             }
-            await server.waitUntilControlPointProcedureIdle()
+            await server.waitUntil(.controlPointProcedureIdle)
         }
 
         #expect(locations.updateInvocationCount == 0)
@@ -162,7 +162,7 @@ struct ServerLocationProcedureTests {
                     return false
                 }.count >= nth
             }
-            await server.waitUntilControlPointProcedureIdle()
+            await server.waitUntil(.controlPointProcedureIdle)
         }
         #expect(locations.updateInvocationCount == 0)
     }
@@ -193,7 +193,7 @@ struct ServerLocationProcedureTests {
             }
             return false
         }
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await emitSensorLocationRead(fake: fake, offset: 0)
         await fake.waitForRecordedCall { call in
@@ -240,7 +240,7 @@ struct ServerLocationProcedureTests {
             }
             return false
         }
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await server.stop()
         fake = FakeBluetoothPeripheral()
@@ -278,7 +278,7 @@ struct ServerLocationProcedureTests {
             }
             return false
         }
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await fake.emitWriteTransaction(requestSupportedWrite(centralID: writer))
         await fake.waitForRecordedCall { call in
@@ -319,7 +319,7 @@ struct ServerLocationProcedureTests {
             return false
         }
         #expect(locations.recordedUpdateKinds == [.leftCrank])
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await emitSensorLocationRead(fake: fake, offset: 0)
         await fake.waitForRecordedCall { call in
@@ -389,7 +389,7 @@ struct ServerLocationProcedureTests {
             return false
         }
         #expect(locations.updateInvocationCount == 0)
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await emitSensorLocationRead(fake: fake, offset: 0)
         await fake.waitForRecordedCall { call in
@@ -548,7 +548,7 @@ struct ServerLocationProcedureTests {
             }
             return false
         }
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await fake.emitWriteTransaction(updateLocationWrite(centralID: writer, assignedNumber: 0x05))
         await fake.waitForRecordedCall { call in
@@ -646,7 +646,7 @@ struct ServerLocationProcedureTests {
             return false
         }
         #expect(measurementUpdates.isEmpty)
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await emitSensorLocationRead(fake: fake, offset: 0)
         await fake.waitForRecordedCall { call in
@@ -702,7 +702,7 @@ struct ServerLocationProcedureTests {
                 return false
             }.count == 2
         }
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
     }
 
     @Test func requestBackpressureMatchesUpdatePattern() async throws {
@@ -740,7 +740,7 @@ struct ServerLocationProcedureTests {
                 return false
             }.count == 2
         }
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
     }
 
     @Test func delegateParkThenReadAfterIndicationAttempt() async throws {
@@ -832,7 +832,7 @@ struct ServerLocationProcedureTests {
                 characteristicUUID: CSCS.controlPointUUID,
             ),
         )
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         let attempts = await fake.recordedCalls.filter { call in
             if case let .updateValue(value, _, CSCS.controlPointUUID, _) = call {
@@ -888,7 +888,7 @@ struct ServerLocationProcedureTests {
         }
 
         locations.release()
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         let success = CSCControlPointResponse(
             requestOpcode: 0x03,
@@ -981,7 +981,7 @@ struct ServerLocationProcedureTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([writer])
+        await server.waitUntil(.measurementSubscribers([writer]))
         await subscribeControlPoint(fake: fake, server: server, centralID: writer)
 
         await yieldWheel(WheelRevolution(cumulativeRevolutions: 42, lastEventTime: 7))
@@ -997,7 +997,7 @@ struct ServerLocationProcedureTests {
         }
 
         await fake.emitWriteTransaction(requestSupportedWrite(centralID: writer))
-        await server.waitUntilOutboundCount(atLeast: 2)
+        await server.waitUntil(.outboundCount(atLeast: 2))
 
         let controlPointBeforeReady = await fake.recordedCalls.contains { call in
             if case .updateValue(_, _, CSCS.controlPointUUID, _) = call { return true }
@@ -1116,7 +1116,7 @@ private func subscribeControlPoint(
             characteristicUUID: CSCS.controlPointUUID,
         ),
     )
-    await server.waitForControlPointSubscribers([centralID])
+    await server.waitUntil(.controlPointSubscribers([centralID]))
 }
 
 private func emitSensorLocationRead(fake: FakeBluetoothPeripheral, offset: Int) async {

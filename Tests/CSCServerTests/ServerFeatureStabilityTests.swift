@@ -60,7 +60,7 @@ struct ServerFeatureStabilityTests {
             characteristic: CSCS.controlPointUUID,
             matching: { $0 == controlPointResponse(opcode: 0x03, value: 0x01) },
         )
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: setCumulativeValue(9))) == .success)
         await fake.waitUntilUpdateValueCount(
@@ -68,7 +68,7 @@ struct ServerFeatureStabilityTests {
             characteristic: CSCS.controlPointUUID,
             matching: { $0 == controlPointResponse(opcode: 0x01, value: 0x01) },
         )
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         #expect(await fake.read(characteristicUUID: CSCS.featureUUID) == Data([0x05, 0x00]))
         #expect(server.configuration.feature.encode() == Data([0x05, 0x00]))

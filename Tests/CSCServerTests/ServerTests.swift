@@ -463,7 +463,7 @@ struct ServerTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         let revolution = CrankRevolution(cumulativeRevolutions: 0x1234, lastEventTime: 0xABCD)
         await yield(revolution)
@@ -498,7 +498,7 @@ struct ServerTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         await yield(CrankRevolution(cumulativeRevolutions: 0xFFFF, lastEventTime: 100))
 
@@ -617,7 +617,7 @@ struct ServerTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         await yield(CrankRevolution(cumulativeRevolutions: 1, lastEventTime: 2))
 
@@ -633,7 +633,7 @@ struct ServerTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([])
+        await server.waitUntil(.measurementSubscribers([]))
 
         await yield(CrankRevolution(cumulativeRevolutions: 3, lastEventTime: 4))
 
@@ -659,7 +659,7 @@ struct ServerTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         let revolution = CrankRevolution(cumulativeRevolutions: 9, lastEventTime: 10)
         await yield(revolution)
@@ -703,7 +703,7 @@ struct ServerTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         await yield(CrankRevolution(cumulativeRevolutions: 1, lastEventTime: 2))
 
@@ -757,10 +757,10 @@ struct ServerTests {
 
         let missingID = UUID()
         let waiterTask = Task {
-            await server.waitForMeasurementSubscribers([missingID])
+            await server.waitUntil(.measurementSubscribers([missingID]))
         }
 
-        await server.waitUntilMeasurementSubscriberWaiterParked()
+        await server.waitUntil(.measurementSubscriberWaiterParked)
 
         await server.stop()
         await waiterTask.value
@@ -857,7 +857,7 @@ struct ServerTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         await yield(CrankRevolution(cumulativeRevolutions: 7, lastEventTime: 8))
 
@@ -893,7 +893,7 @@ struct ServerTests {
             lastCrankEventTime: 0xABCD,
         ).encode()!
         await fake.waitUntilUpdateValueCount(1, characteristic: CSCS.measurementUUID, matching: { $0 == expected })
-        await server.waitUntilAcceptedMeasurementCount(1)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
         await server.stop()
     }
 
