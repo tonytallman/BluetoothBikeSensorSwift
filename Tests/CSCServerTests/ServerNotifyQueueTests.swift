@@ -44,11 +44,11 @@ struct ServerNotifyQueueTests {
         let server = Server.wheelRevolutions(NeverYieldingWheelSequence(), setCumulativeWheelRevolutions: delegate)
             .build()
 
-        await fake.holdNextAdvertise()
+        await fake.hold(.advertise)
         let startTask = Task {
             try await server.start(peripheral: fake)
         }
-        await fake.waitUntilAdvertiseHeld()
+        await fake.waitUntilHeld(.advertise)
 
         let writer = UUID()
         let readID = UUID()
@@ -69,14 +69,14 @@ struct ServerNotifyQueueTests {
             ),
         )
 
-        await fake.holdNextRespond()
-        await fake.releaseAdvertise()
-        await fake.waitUntilRespondHeld()
+        await fake.hold(.respond)
+        await fake.release(.advertise)
+        await fake.waitUntilHeld(.respond)
 
         let write = controlPointWrite(centralID: writer, value: setCumulativeValue(9))
         await fake.emitWriteTransaction(write)
 
-        await fake.releaseRespond()
+        await fake.release(.respond)
         try await startTask.value
         await fake.waitForRecordedCall { call in
             if case let .respond(id, _, _) = call {
@@ -101,7 +101,7 @@ struct ServerNotifyQueueTests {
         await fake.setNextUpdateValueAccepted(false)
         await sequence.yield(CrankRevolution(cumulativeRevolutions: 3, lastEventTime: 4))
         await fake.waitUntilUpdateValueCount(1, characteristic: CSCS.measurementUUID)
-        await server.waitUntilNotifyReadyWaiterParked()
+        await server.waitUntil(.readyToUpdateWaiterParked)
 
         #expect(await fake.countUpdateValues(characteristic: CSCS.measurementUUID) == 1)
     }
@@ -121,10 +121,10 @@ struct ServerNotifyQueueTests {
         await fake.emitWriteTransaction(
             controlPointWrite(centralID: central, value: requestSupportedSensorLocationsValue),
         )
-        await server.waitUntilOutboundCount(atLeast: 2)
+        await server.waitUntil(.outboundCount(atLeast: 2))
 
         await fake.unsubscribeControlPoint(centralID: central)
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await fake.setNextUpdateValueAccepted(true)
         await fake.emitReadyToUpdateSubscribers()
@@ -133,7 +133,7 @@ struct ServerNotifyQueueTests {
             characteristic: CSCS.measurementUUID,
             matching: { $0 == wheelPayload },
         )
-        await server.waitUntilAcceptedMeasurementCount(1)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
 
         #expect(await fake.countUpdateValues(characteristic: CSCS.controlPointUUID) == 0)
     }
@@ -148,21 +148,58 @@ struct ServerNotifyQueueTests {
         await fake.subscribeControlPoint(server: server, centralID: writer)
         let success = controlPointResponse(opcode: 0x01, value: 0x01)
 
-        await fake.holdNextUpdateValue()
+        await fake.hold(.updateValue)
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: setCumulativeValue(1))) == .success)
-        await fake.waitUntilUpdateValueHeld()
+        await fake.waitUntilHeld(.updateValue)
 
         await fake.unsubscribeControlPoint(centralID: writer)
-        await server.waitUntilControlPointProcedureIdle()
-        await fake.releaseUpdateValue()
+        await server.waitUntil(.controlPointProcedureIdle)
+        await fake.release(.updateValue)
 
         await fake.subscribeControlPoint(server: server, centralID: writer)
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: setCumulativeValue(2))) == .success)
         await fake.waitUntilUpdateValueCount(2, characteristic: CSCS.controlPointUUID, matching: { $0 == success })
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         #expect(await fake.countUpdateValues(characteristic: CSCS.controlPointUUID, matching: { $0 == success }) == 2)
         #expect(await delegate.recordedValues == [1, 2])
+    }
+
+    @Test func unsubscribeDuringHeldFalseUpdateValueDropsHeadWithoutReady() async throws {
+        let wheel = YieldingWheelSequence()
+        let fake = FakeBluetoothPeripheral()
+        let server = Server.wheelRevolutions(wheel, setCumulativeWheelRevolutions: ScriptedCumulativeDelegate())
+            .build()
+        try await server.start(peripheral: fake)
+        let central = UUID()
+        await fake.subscribeMeasurement(server: server, centralID: central)
+
+        await fake.hold(.updateValue)
+        await wheel.yield(WheelRevolution(cumulativeRevolutions: 1, lastEventTime: 1))
+        await fake.waitUntilHeld(.updateValue)
+
+        await fake.emitSubscription(
+            .unsubscribed(
+                centralID: central,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.measurementUUID,
+            ),
+        )
+        await server.waitUntil(.measurementSubscribers([]))
+
+        await fake.setNextUpdateValueAccepted(false)
+        await fake.release(.updateValue)
+        await wheel.waitUntilNextEntered(count: 2)
+
+        await fake.subscribeMeasurement(server: server, centralID: central)
+        await fake.setNextUpdateValueAccepted(true)
+        let sample = WheelRevolution(cumulativeRevolutions: 2, lastEventTime: 2)
+        await wheel.yield(sample)
+        await fake.waitUntilUpdateValueCount(
+            1,
+            characteristic: CSCS.measurementUUID,
+            matching: { $0 == Self.wheelPayload(sample) },
+        )
     }
 
     @Test func otherCentralUnsubscribeKeepsQueuedIndication() async throws {
@@ -178,7 +215,7 @@ struct ServerNotifyQueueTests {
                 characteristicUUID: CSCS.controlPointUUID,
             ),
         )
-        await server.waitForControlPointSubscribers([writer, other])
+        await server.waitUntil(.controlPointSubscribers([writer, other]))
 
         await fake.setNextUpdateValueAccepted(false)
         let sample = WheelRevolution(cumulativeRevolutions: 42, lastEventTime: 7)
@@ -188,10 +225,10 @@ struct ServerNotifyQueueTests {
         await fake.emitWriteTransaction(
             controlPointWrite(centralID: writer, value: requestSupportedSensorLocationsValue),
         )
-        await server.waitUntilOutboundCount(atLeast: 2)
+        await server.waitUntil(.outboundCount(atLeast: 2))
 
         await fake.unsubscribeControlPoint(centralID: other)
-        await server.waitForControlPointSubscribers([writer])
+        await server.waitUntil(.controlPointSubscribers([writer]))
 
         await fake.setNextUpdateValueAccepted(true)
         await fake.emitReadyToUpdateSubscribers()
@@ -201,7 +238,7 @@ struct ServerNotifyQueueTests {
             characteristic: CSCS.controlPointUUID,
             matching: { $0 == requestResponse },
         )
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
         #expect(await fake.countUpdateValues(characteristic: CSCS.measurementUUID, matching: { $0 == Self.wheelPayload(sample) }) == 2)
     }
 

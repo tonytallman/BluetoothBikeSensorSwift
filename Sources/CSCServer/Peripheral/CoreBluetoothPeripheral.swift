@@ -10,13 +10,12 @@ import Foundation
 /// calls are skipped: `stopAdvertising` does nothing, service removal updates bookkeeping only,
 /// and `respond` drops the request and throws.
 ///
-/// Queue crossing and actor isolation are documented in `project.md` (CSC Server).
 /// Manager queue: `com.bluetoothbikesensor.peripheral`.
 package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     private let queue = DispatchQueue(label: "com.bluetoothbikesensor.peripheral")
     private let peripheralManager: CBPeripheralManager
     private let delegateBridge: PeripheralDelegateBridge
-    private let inFlightBox: InFlightContinuationBox
+    private let startupContinuations = StartupAsyncContinuations()
     private let delegateEvents: AsyncStream<PeripheralDelegateEvent>.Continuation
 
     private var state: BluetoothState = .unknown
@@ -27,10 +26,8 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
 
     package init() {
         let bridge = PeripheralDelegateBridge()
-        let box = InFlightContinuationBox()
         let (stream, continuation) = AsyncStream.makeStream(of: PeripheralDelegateEvent.self)
         delegateBridge = bridge
-        inFlightBox = box
         delegateEvents = continuation
         let manager = CBPeripheralManager(delegate: bridge, queue: queue)
         peripheralManager = manager
@@ -49,7 +46,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     deinit {
         delegateBridge.clearHandler()
         delegateEvents.finish()
-        inFlightBox.failAll(with: BluetoothPeripheralError.peripheralInvalidated)
+        startupContinuations.failAll(with: BluetoothPeripheralError.peripheralInvalidated)
     }
 
     package var currentState: BluetoothState {
@@ -66,26 +63,16 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         get async { lossCount }
     }
 
-    package var isAdvertising: Bool {
-        get async {
-            queue.sync {
-                peripheralManager.isAdvertising
-            }
-        }
-    }
-
     package func add(_ service: PeripheralService) async throws {
-        try PeripheralServiceValidation.validate(service)
-
         guard state == .poweredOn else {
             throw BluetoothPeripheralError.notPoweredOn
         }
-        guard !inFlightBox.hasAddInProgress else {
+        guard !startupContinuations.hasAddInProgress else {
             throw BluetoothPeripheralError.addInProgress
         }
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            inFlightBox.setAddContinuation(continuation)
+            startupContinuations.setAddContinuation(continuation)
             queue.sync {
                 let (cbService, characteristicPairs) = Self.makeCBService(from: service)
                 delegateBridge.store(service: cbService, for: service.uuid)
@@ -104,9 +91,6 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     package func removeService(uuid: UUID) async throws {
         let callsManager = state == .poweredOn
         try queue.sync {
-            guard delegateBridge.service(for: uuid) != nil else {
-                throw BluetoothPeripheralError.serviceNotFound
-            }
             guard let cbService = delegateBridge.removeService(for: uuid) else {
                 throw BluetoothPeripheralError.serviceNotFound
             }
@@ -116,35 +100,20 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
-    package func removeAllServices() async {
-        let callsManager = state == .poweredOn
-        queue.sync {
-            delegateBridge.removeAllServices()
-            if callsManager {
-                peripheralManager.removeAllServices()
-            }
-        }
-    }
-
-    package func startAdvertising(_ advertisement: Advertisement) async throws {
+    package func startAdvertising(serviceUUIDs: [UUID]) async throws {
         guard state == .poweredOn else {
             throw BluetoothPeripheralError.notPoweredOn
         }
-        guard !inFlightBox.hasAdvertisingInProgress else {
+        guard !startupContinuations.hasAdvertisingInProgress else {
             throw BluetoothPeripheralError.advertisingInProgress
         }
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            inFlightBox.setAdvertisingContinuation(continuation)
+            startupContinuations.setAdvertisingContinuation(continuation)
             queue.sync {
                 var advertisementData: [String: Any] = [:]
-                if let localName = advertisement.localName {
-                    advertisementData[CBAdvertisementDataLocalNameKey] = localName
-                }
-                if !advertisement.serviceUUIDs.isEmpty {
-                    advertisementData[CBAdvertisementDataServiceUUIDsKey] = advertisement.serviceUUIDs.map {
-                        CBUUIDBridge(uuid: $0).cbUUID
-                    }
+                if !serviceUUIDs.isEmpty {
+                    advertisementData[CBAdvertisementDataServiceUUIDsKey] = serviceUUIDs.map(\.cbUUID)
                 }
                 peripheralManager.startAdvertising(advertisementData)
             }
@@ -171,24 +140,9 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         with result: ATTResult,
         value: Data?,
     ) async throws {
-        guard let requestKind = delegateBridge.requestKind(for: requestID) else {
-            throw BluetoothPeripheralError.unknownRequest
-        }
-
         guard state == .poweredOn else {
             delegateBridge.removeRequest(for: requestID)
             throw BluetoothPeripheralError.notPoweredOn
-        }
-
-        switch (requestKind, result) {
-        case (.read, .success):
-            guard let value else {
-                throw BluetoothPeripheralError.missingReadValue
-            }
-        case (.read, .error), (.write, _):
-            guard value == nil else {
-                throw BluetoothPeripheralError.unexpectedResponseValue
-            }
         }
 
         try queue.sync {
@@ -200,7 +154,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
             switch result {
             case .success:
                 cbResult = .success
-                if case .read = requestKind {
+                if let value {
                     request.value = value
                 }
             case let .error(code):
@@ -250,14 +204,14 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
             state = newState
             if newState != .poweredOn {
                 lossCount += 1
-                inFlightBox.failAll(with: BluetoothPeripheralError.notPoweredOn)
+                startupContinuations.failAll(with: BluetoothPeripheralError.notPoweredOn)
                 delegateBridge.removeCentralsAndRequests()
             }
             await eventBroadcaster.yield(.stateUpdated(newState))
             await stateBroadcaster.yield(newState)
 
         case let .serviceAdded(serviceUUID, errorReason):
-            let continuation = inFlightBox.takeAddContinuation()
+            let continuation = startupContinuations.takeAddContinuation()
             if let errorReason {
                 delegateBridge.removeService(for: serviceUUID)
                 continuation?.resume(
@@ -271,7 +225,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
             }
 
         case let .advertisingStarted(errorReason):
-            let continuation = inFlightBox.takeAdvertisingContinuation()
+            let continuation = startupContinuations.takeAdvertisingContinuation()
             if let errorReason {
                 continuation?.resume(
                     throwing: BluetoothPeripheralError.advertisingFailed(reason: errorReason),
@@ -297,10 +251,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     private static func makeCBService(
         from service: PeripheralService,
     ) -> (CBMutableService, [(uuid: UUID, characteristic: CBMutableCharacteristic)]) {
-        let cbService = CBMutableService(
-            type: CBUUIDBridge(uuid: service.uuid).cbUUID,
-            primary: service.isPrimary,
-        )
+        let cbService = CBMutableService(type: service.uuid.cbUUID, primary: true)
         let characteristicPairs = service.characteristics.map { characteristic in
             let cbCharacteristic = makeCBCharacteristic(from: characteristic)
             return (uuid: characteristic.uuid, characteristic: cbCharacteristic)
@@ -310,8 +261,12 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     }
 
     private static func makeCBCharacteristic(from characteristic: PeripheralCharacteristic) -> CBMutableCharacteristic {
-        CBMutableCharacteristic(
-            type: CBUUIDBridge(uuid: characteristic.uuid).cbUUID,
+        assert(
+            characteristic.value == nil
+                || (characteristic.properties == [.read] && characteristic.permissions == [.readable]),
+        )
+        return CBMutableCharacteristic(
+            type: characteristic.uuid.cbUUID,
             properties: cbProperties(from: characteristic.properties),
             value: characteristic.value,
             permissions: cbPermissions(from: characteristic.permissions),
@@ -320,39 +275,72 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
 
     private static func cbProperties(from properties: CharacteristicProperties) -> CBCharacteristicProperties {
         var result: CBCharacteristicProperties = []
-        if properties.contains(.read) {
-            result.insert(.read)
-        }
-        if properties.contains(.write) {
-            result.insert(.write)
-        }
-        if properties.contains(.writeWithoutResponse) {
-            result.insert(.writeWithoutResponse)
-        }
-        if properties.contains(.notify) {
-            result.insert(.notify)
-        }
-        if properties.contains(.indicate) {
-            result.insert(.indicate)
-        }
+        if properties.contains(.read) { result.insert(.read) }
+        if properties.contains(.write) { result.insert(.write) }
+        if properties.contains(.notify) { result.insert(.notify) }
+        if properties.contains(.indicate) { result.insert(.indicate) }
         return result
     }
 
     private static func cbPermissions(from permissions: CharacteristicPermissions) -> CBAttributePermissions {
         var result: CBAttributePermissions = []
-        if permissions.contains(.readable) {
-            result.insert(.readable)
-        }
-        if permissions.contains(.writeable) {
-            result.insert(.writeable)
-        }
+        if permissions.contains(.readable) { result.insert(.readable) }
+        if permissions.contains(.writeable) { result.insert(.writeable) }
         return result
     }
 }
 
-private enum StoredRequestKind: Sendable {
-    case read
-    case write
+private final class StartupAsyncContinuations: @unchecked Sendable {
+    private let lock = NSLock()
+    private var addContinuation: CheckedContinuation<Void, Error>?
+    private var advertisingContinuation: CheckedContinuation<Void, Error>?
+
+    var hasAddInProgress: Bool {
+        lock.withLock { addContinuation != nil }
+    }
+
+    var hasAdvertisingInProgress: Bool {
+        lock.withLock { advertisingContinuation != nil }
+    }
+
+    func setAddContinuation(_ continuation: CheckedContinuation<Void, Error>) {
+        lock.withLock { addContinuation = continuation }
+    }
+
+    func setAdvertisingContinuation(_ continuation: CheckedContinuation<Void, Error>) {
+        lock.withLock { advertisingContinuation = continuation }
+    }
+
+    func takeAddContinuation() -> CheckedContinuation<Void, Error>? {
+        lock.withLock {
+            let continuation = addContinuation
+            addContinuation = nil
+            return continuation
+        }
+    }
+
+    func takeAdvertisingContinuation() -> CheckedContinuation<Void, Error>? {
+        lock.withLock {
+            let continuation = advertisingContinuation
+            advertisingContinuation = nil
+            return continuation
+        }
+    }
+
+    func failAll(with error: Error) {
+        let add = lock.withLock {
+            let continuation = addContinuation
+            addContinuation = nil
+            return continuation
+        }
+        let advertising = lock.withLock {
+            let continuation = advertisingContinuation
+            advertisingContinuation = nil
+            return continuation
+        }
+        add?.resume(throwing: error)
+        advertising?.resume(throwing: error)
+    }
 }
 
 private enum PeripheralDelegateEvent: Sendable {
@@ -365,64 +353,6 @@ private enum PeripheralDelegateEvent: Sendable {
     case readyToUpdateSubscribers
 }
 
-private final class InFlightContinuationBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var addContinuation: CheckedContinuation<Void, Error>?
-    private var advertisingContinuation: CheckedContinuation<Void, Error>?
-
-    var hasAddInProgress: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return addContinuation != nil
-    }
-
-    var hasAdvertisingInProgress: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return advertisingContinuation != nil
-    }
-
-    func setAddContinuation(_ continuation: CheckedContinuation<Void, Error>) {
-        lock.lock()
-        addContinuation = continuation
-        lock.unlock()
-    }
-
-    func setAdvertisingContinuation(_ continuation: CheckedContinuation<Void, Error>) {
-        lock.lock()
-        advertisingContinuation = continuation
-        lock.unlock()
-    }
-
-    func takeAddContinuation() -> CheckedContinuation<Void, Error>? {
-        lock.lock()
-        defer { lock.unlock() }
-        let continuation = addContinuation
-        addContinuation = nil
-        return continuation
-    }
-
-    func takeAdvertisingContinuation() -> CheckedContinuation<Void, Error>? {
-        lock.lock()
-        defer { lock.unlock() }
-        let continuation = advertisingContinuation
-        advertisingContinuation = nil
-        return continuation
-    }
-
-    func failAll(with error: Error) {
-        lock.lock()
-        let add = addContinuation
-        let advertising = advertisingContinuation
-        addContinuation = nil
-        advertisingContinuation = nil
-        lock.unlock()
-
-        add?.resume(throwing: error)
-        advertising?.resume(throwing: error)
-    }
-}
-
 private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var handler: (@Sendable (PeripheralDelegateEvent) -> Void)?
@@ -430,7 +360,6 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
     private var characteristics: [CharacteristicKey: CBMutableCharacteristic] = [:]
     private var centrals: [UUID: CBCentral] = [:]
     private var attRequests: [UUID: CBATTRequest] = [:]
-    private var attRequestKinds: [UUID: StoredRequestKind] = [:]
 
     func bind(handler: @escaping @Sendable (PeripheralDelegateEvent) -> Void) {
         lock.lock()
@@ -454,12 +383,6 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         lock.unlock()
     }
 
-    func service(for uuid: UUID) -> CBMutableService? {
-        lock.lock()
-        defer { lock.unlock() }
-        return services[uuid]
-    }
-
     func store(service: CBMutableService, for uuid: UUID) {
         lock.lock()
         services[uuid] = service
@@ -472,13 +395,6 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         defer { lock.unlock() }
         characteristics = characteristics.filter { $0.key.serviceUUID != uuid }
         return services.removeValue(forKey: uuid)
-    }
-
-    func removeAllServices() {
-        lock.lock()
-        services.removeAll()
-        characteristics.removeAll()
-        lock.unlock()
     }
 
     func store(
@@ -504,17 +420,10 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         return centrals[id]
     }
 
-    func requestKind(for id: UUID) -> StoredRequestKind? {
-        lock.lock()
-        defer { lock.unlock() }
-        return attRequestKinds[id]
-    }
-
     func removeCentralsAndRequests() {
         lock.lock()
         centrals.removeAll()
         attRequests.removeAll()
-        attRequestKinds.removeAll()
         lock.unlock()
     }
 
@@ -522,21 +431,12 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
     func removeRequest(for id: UUID) -> CBATTRequest? {
         lock.lock()
         defer { lock.unlock() }
-        attRequestKinds.removeValue(forKey: id)
         return attRequests.removeValue(forKey: id)
     }
 
-    private func storeReadRequest(_ request: CBATTRequest, id: UUID) {
+    private func storeRequest(_ request: CBATTRequest, id: UUID) {
         lock.lock()
         attRequests[id] = request
-        attRequestKinds[id] = .read
-        lock.unlock()
-    }
-
-    private func storeWriteRequest(_ request: CBATTRequest, id: UUID) {
-        lock.lock()
-        attRequests[id] = request
-        attRequestKinds[id] = .write
         lock.unlock()
     }
 
@@ -552,7 +452,7 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
-        guard let serviceUUID = CBUUIDBridge.foundationUUID(from: service.uuid) else {
+        guard let serviceUUID = service.uuid.foundationUUID else {
             return
         }
         emit(.serviceAdded(serviceUUID: serviceUUID, errorReason: error?.localizedDescription))
@@ -567,25 +467,20 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         centrals[request.central.identifier] = request.central
         lock.unlock()
 
-        let characteristic = request.characteristic
-        guard
-            let service = characteristic.service,
-            let serviceUUID = CBUUIDBridge.foundationUUID(from: service.uuid),
-            let characteristicUUID = CBUUIDBridge.foundationUUID(from: characteristic.uuid)
-        else {
+        guard let identity = characteristicIdentity(request.characteristic) else {
             peripheral.respond(to: request, withResult: .invalidHandle)
             return
         }
 
         let requestID = UUID()
-        storeReadRequest(request, id: requestID)
+        storeRequest(request, id: requestID)
         emit(
             .read(
                 PeripheralReadRequest(
                     id: requestID,
                     centralID: request.central.identifier,
-                    serviceUUID: serviceUUID,
-                    characteristicUUID: characteristicUUID,
+                    serviceUUID: identity.serviceUUID,
+                    characteristicUUID: identity.characteristicUUID,
                     offset: request.offset,
                 ),
             ),
@@ -605,12 +500,7 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
 
         var writeRequests: [PeripheralWriteRequest] = []
         for request in requests {
-            let characteristic = request.characteristic
-            guard
-                let service = characteristic.service,
-                let serviceUUID = CBUUIDBridge.foundationUUID(from: service.uuid),
-                let characteristicUUID = CBUUIDBridge.foundationUUID(from: characteristic.uuid)
-            else {
+            guard let identity = characteristicIdentity(request.characteristic) else {
                 peripheral.respond(to: firstRequest, withResult: .invalidHandle)
                 return
             }
@@ -618,8 +508,8 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
             writeRequests.append(
                 PeripheralWriteRequest(
                     centralID: request.central.identifier,
-                    serviceUUID: serviceUUID,
-                    characteristicUUID: characteristicUUID,
+                    serviceUUID: identity.serviceUUID,
+                    characteristicUUID: identity.characteristicUUID,
                     offset: request.offset,
                     value: request.value ?? Data(),
                 ),
@@ -627,7 +517,7 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         }
 
         let transactionID = UUID()
-        storeWriteRequest(firstRequest, id: transactionID)
+        storeRequest(firstRequest, id: transactionID)
         emit(
             .writeTransaction(
                 PeripheralWriteTransaction(
@@ -643,27 +533,7 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         central: CBCentral,
         didSubscribeTo characteristic: CBCharacteristic,
     ) {
-        lock.lock()
-        centrals[central.identifier] = central
-        lock.unlock()
-
-        guard
-            let service = characteristic.service,
-            let serviceUUID = CBUUIDBridge.foundationUUID(from: service.uuid),
-            let characteristicUUID = CBUUIDBridge.foundationUUID(from: characteristic.uuid)
-        else {
-            return
-        }
-
-        emit(
-            .subscription(
-                .subscribed(
-                    centralID: central.identifier,
-                    serviceUUID: serviceUUID,
-                    characteristicUUID: characteristicUUID,
-                ),
-            ),
-        )
+        emitSubscriptionChange(central: central, characteristic: characteristic, subscribed: true)
     }
 
     func peripheralManager(
@@ -671,27 +541,47 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         central: CBCentral,
         didUnsubscribeFrom characteristic: CBCharacteristic,
     ) {
+        emitSubscriptionChange(central: central, characteristic: characteristic, subscribed: false)
+    }
+
+    private func emitSubscriptionChange(
+        central: CBCentral,
+        characteristic: CBCharacteristic,
+        subscribed: Bool,
+    ) {
         lock.lock()
         centrals[central.identifier] = central
         lock.unlock()
 
-        guard
-            let service = characteristic.service,
-            let serviceUUID = CBUUIDBridge.foundationUUID(from: service.uuid),
-            let characteristicUUID = CBUUIDBridge.foundationUUID(from: characteristic.uuid)
-        else {
+        guard let identity = characteristicIdentity(characteristic) else {
             return
         }
 
-        emit(
-            .subscription(
-                .unsubscribed(
-                    centralID: central.identifier,
-                    serviceUUID: serviceUUID,
-                    characteristicUUID: characteristicUUID,
-                ),
-            ),
-        )
+        let change: SubscriptionChange = subscribed
+            ? .subscribed(
+                centralID: central.identifier,
+                serviceUUID: identity.serviceUUID,
+                characteristicUUID: identity.characteristicUUID,
+            )
+            : .unsubscribed(
+                centralID: central.identifier,
+                serviceUUID: identity.serviceUUID,
+                characteristicUUID: identity.characteristicUUID,
+            )
+        emit(.subscription(change))
+    }
+
+    private func characteristicIdentity(
+        _ characteristic: CBCharacteristic,
+    ) -> (serviceUUID: UUID, characteristicUUID: UUID)? {
+        guard
+            let service = characteristic.service,
+            let serviceUUID = service.uuid.foundationUUID,
+            let characteristicUUID = characteristic.uuid.foundationUUID
+        else {
+            return nil
+        }
+        return (serviceUUID, characteristicUUID)
     }
 
     func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) {
@@ -722,6 +612,25 @@ private extension BluetoothState {
         @unknown default:
             self = .unknown
         }
+    }
+}
+
+private extension UUID {
+    var cbUUID: CBUUID {
+        CBUUID(nsuuid: self)
+    }
+}
+
+private extension CBUUID {
+    var foundationUUID: UUID? {
+        let uuidString = uuidString
+        if uuidString.count == 4 {
+            return UUID(uuidString: "0000\(uuidString)-0000-1000-8000-00805F9B34FB")
+        }
+        if uuidString.count == 8 {
+            return UUID(uuidString: "\(uuidString)-0000-1000-8000-00805F9B34FB")
+        }
+        return UUID(uuidString: uuidString)
     }
 }
 #endif

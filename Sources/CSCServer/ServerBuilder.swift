@@ -32,12 +32,12 @@ public struct ServerBuilder<
 >: Sendable {
     private var wheel: WheelConfiguration?
     private var crankRevolutions: AnyAsyncSequence<CrankRevolution>?
-    private var location: ServerLocationConfiguration
+    private var location: SensorLocationConfiguration
 
     internal init(
         wheel: WheelConfiguration? = nil,
         crankRevolutions: AnyAsyncSequence<CrankRevolution>? = nil,
-        location: ServerLocationConfiguration = .none,
+        location: SensorLocationConfiguration = .none,
     ) {
         self.wheel = wheel
         self.crankRevolutions = crankRevolutions
@@ -49,11 +49,11 @@ extension Server {
     /// Begins building a server with wheel revolution data and a set-cumulative delegate.
     public static func wheelRevolutions<Revolutions>(
         _ revolutions: Revolutions,
-        setCumulativeWheelRevolutions delegate: any SetCumulativeWheelRevolutions,
+        setCumulativeWheelRevolutions delegate: any CumulativeWheelRevolutionsDelegate,
     ) -> ServerBuilder<
         ServerWheel.Selected,
         ServerCrank.Unselected,
-        ServerLocation.Unselected
+        ServerLocation.Unselected,
     >
     where Revolutions: AsyncSequence & Sendable,
           Revolutions.Element == WheelRevolution
@@ -61,7 +61,7 @@ extension Server {
         ServerBuilder(
             wheel: WheelConfiguration(
                 revolutions: AnyAsyncSequence(revolutions),
-                setCumulativeWheelRevolutions: delegate,
+                delegate: delegate,
             ),
         )
     }
@@ -72,7 +72,7 @@ extension Server {
     ) -> ServerBuilder<
         ServerWheel.Unselected,
         ServerCrank.Selected,
-        ServerLocation.Unselected
+        ServerLocation.Unselected,
     >
     where Revolutions: AsyncSequence & Sendable,
           Revolutions.Element == CrankRevolution
@@ -85,11 +85,11 @@ extension ServerBuilder where Wheel == ServerWheel.Unselected {
     /// Adds wheel revolution data and a set-cumulative delegate.
     public func wheelRevolutions<Revolutions>(
         _ revolutions: Revolutions,
-        setCumulativeWheelRevolutions delegate: any SetCumulativeWheelRevolutions,
+        setCumulativeWheelRevolutions delegate: any CumulativeWheelRevolutionsDelegate,
     ) -> ServerBuilder<
         ServerWheel.Selected,
         Crank,
-        Location
+        Location,
     >
     where Revolutions: AsyncSequence & Sendable,
           Revolutions.Element == WheelRevolution
@@ -97,7 +97,7 @@ extension ServerBuilder where Wheel == ServerWheel.Unselected {
         ServerBuilder<ServerWheel.Selected, Crank, Location>(
             wheel: WheelConfiguration(
                 revolutions: AnyAsyncSequence(revolutions),
-                setCumulativeWheelRevolutions: delegate,
+                delegate: delegate,
             ),
             crankRevolutions: crankRevolutions,
             location: location,
@@ -112,7 +112,7 @@ extension ServerBuilder where Crank == ServerCrank.Unselected {
     ) -> ServerBuilder<
         Wheel,
         ServerCrank.Selected,
-        Location
+        Location,
     >
     where Revolutions: AsyncSequence & Sendable,
           Revolutions.Element == CrankRevolution
@@ -132,7 +132,7 @@ extension ServerBuilder where Location == ServerLocation.Unselected {
     ) -> ServerBuilder<
         Wheel,
         Crank,
-        ServerLocation.Static
+        ServerLocation.Static,
     > {
         ServerBuilder<Wheel, Crank, ServerLocation.Static>(
             wheel: wheel,
@@ -147,7 +147,7 @@ extension ServerBuilder where Location == ServerLocation.Unselected {
     ) -> ServerBuilder<
         Wheel,
         Crank,
-        ServerLocation.Multiple
+        ServerLocation.Multiple,
     > {
         let supported = delegate.supported
         let current = delegate.current
@@ -179,38 +179,15 @@ extension ServerBuilder where Location == ServerLocation.Unselected {
     }
 }
 
-extension ServerBuilder
-where Wheel == ServerWheel.Selected, Crank == ServerCrank.Unselected {
-    /// Builds the server from a wheel-only configuration.
+extension ServerBuilder {
+    /// Builds the server from the configured revolution sources and location settings.
     public consuming func build() -> Server {
-        ServerAssembly.assemble(
-            wheel: wheel,
-            crankRevolutions: crankRevolutions,
-            location: location,
-        )
-    }
-}
-
-extension ServerBuilder
-where Wheel == ServerWheel.Unselected, Crank == ServerCrank.Selected {
-    /// Builds the server from a crank-only configuration.
-    public consuming func build() -> Server {
-        ServerAssembly.assemble(
-            wheel: wheel,
-            crankRevolutions: crankRevolutions,
-            location: location,
-        )
-    }
-}
-
-extension ServerBuilder
-where Wheel == ServerWheel.Selected, Crank == ServerCrank.Selected {
-    /// Builds the server from a wheel-and-crank configuration.
-    public consuming func build() -> Server {
-        ServerAssembly.assemble(
-            wheel: wheel,
-            crankRevolutions: crankRevolutions,
-            location: location,
+        Server(
+            configuration: ServerConfiguration(
+                wheel: wheel,
+                crankRevolutions: crankRevolutions,
+                location: location,
+            ),
         )
     }
 }

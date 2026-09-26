@@ -38,7 +38,7 @@ struct ServerControlPointTests {
             return false
         }
         await fake.waitForRecordedCall { call in
-            if case let .updateValue(value, _, characteristicUUID, .only(centrals)) = call {
+            if case let .updateValue(value, _, characteristicUUID, centrals?) = call {
                 return characteristicUUID == CSCS.controlPointUUID
                     && centrals == [writer]
                     && value == CSCControlPointResponse(
@@ -51,7 +51,7 @@ struct ServerControlPointTests {
         }
 
         #expect(await delegate.recordedValues == [0x12345678])
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         let measurementUpdates = await fake.recordedCalls.filter { call in
             if case .updateValue(_, _, CSCS.measurementUUID, _) = call { return true }
@@ -73,7 +73,7 @@ struct ServerControlPointTests {
         let writer = UUID()
         await subscribeMeasurement(fake: fake, server: server, centralID: writer)
         await yieldWheel(WheelRevolution(cumulativeRevolutions: 50, lastEventTime: 1))
-        await server.waitUntilAcceptedMeasurementCount(1)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
 
         await fake.setNextUpdateValueAccepted(false)
         await delegate.setShouldThrow(true)
@@ -100,10 +100,10 @@ struct ServerControlPointTests {
 
         await fake.setNextUpdateValueAccepted(true)
         await fake.emitReadyToUpdateSubscribers()
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await yieldCrank(CrankRevolution(cumulativeRevolutions: 10, lastEventTime: 2))
-        await server.waitUntilAcceptedMeasurementCount(2)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 2))
 
         let expected = CSCMeasurement(
             cumulativeWheelRevolutions: 50,
@@ -178,7 +178,7 @@ struct ServerControlPointTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([writer])
+        await server.waitUntil(.measurementSubscribers([writer]))
 
         let transactionID = UUID()
         await fake.emitWriteTransaction(controlPointWrite(centralID: writer, transactionID: transactionID))
@@ -216,7 +216,7 @@ struct ServerControlPointTests {
         #expect(await delegate.recordedValues.count == 1)
 
         await delegate.release()
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
     }
 
     @Test func calibrationIndicatesOpCodeNotSupported() async throws {
@@ -281,7 +281,7 @@ struct ServerControlPointTests {
         #expect(await delegate.recordedValues.count == 1)
 
         await delegate.release()
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         let indicationCountBeforeThird = await fake.recordedCalls.filter { call in
             if case let .updateValue(value, _, CSCS.controlPointUUID, _) = call {
@@ -303,7 +303,7 @@ struct ServerControlPointTests {
             }
             return false
         }
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         let indicationCount = await fake.recordedCalls.filter { call in
             if case let .updateValue(value, _, CSCS.controlPointUUID, _) = call {
@@ -350,7 +350,7 @@ struct ServerControlPointTests {
 
         await fake.setNextUpdateValueAccepted(true)
         await fake.emitReadyToUpdateSubscribers()
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         let write3ID = UUID()
         await fake.emitWriteTransaction(controlPointWrite(centralID: writer, transactionID: write3ID))
@@ -379,7 +379,7 @@ struct ServerControlPointTests {
                 characteristicUUID: CSCS.controlPointUUID,
             ),
         )
-        await server.waitForControlPointSubscribers([writer, secondCentral])
+        await server.waitUntil(.controlPointSubscribers([writer, secondCentral]))
 
         await fake.emitWriteTransaction(controlPointWrite(centralID: writer))
         await fake.waitForRecordedCall { call in
@@ -400,7 +400,7 @@ struct ServerControlPointTests {
                 characteristicUUID: CSCS.controlPointUUID,
             ),
         )
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await fake.setNextUpdateValueAccepted(true)
 
@@ -412,7 +412,7 @@ struct ServerControlPointTests {
             }
             return false
         }
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
     }
 
     @Test func locationProceduresIndicateOpCodeNotSupported() async throws {
@@ -448,7 +448,7 @@ struct ServerControlPointTests {
             }
             return false
         }
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await fake.emitWriteTransaction(
             PeripheralWriteTransaction(
@@ -526,7 +526,7 @@ struct ServerControlPointTests {
                 }
                 return false
             }
-            await server.waitUntilControlPointProcedureIdle()
+            await server.waitUntil(.controlPointProcedureIdle)
         }
         #expect(await delegate.recordedValues.isEmpty)
     }
@@ -571,7 +571,7 @@ struct ServerControlPointTests {
                 }
                 return false
             }
-            await server.waitUntilControlPointProcedureIdle()
+            await server.waitUntil(.controlPointProcedureIdle)
         }
         #expect(await delegate.recordedValues.isEmpty)
     }
@@ -644,7 +644,7 @@ struct ServerControlPointTests {
                 characteristicUUID: CSCS.controlPointUUID,
             ),
         )
-        await server.waitForControlPointSubscribers([])
+        await server.waitUntil(.controlPointSubscribers([]))
 
         await fake.emitWriteTransaction(controlPointWrite(centralID: writer))
         await fake.waitForRecordedCall { call in
@@ -667,7 +667,7 @@ struct ServerControlPointTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([writer])
+        await server.waitUntil(.measurementSubscribers([writer]))
         await subscribeControlPoint(fake: fake, server: server, centralID: writer)
 
         await fake.emitSubscription(
@@ -677,7 +677,7 @@ struct ServerControlPointTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([])
+        await server.waitUntil(.measurementSubscribers([]))
 
         await fake.emitWriteTransaction(controlPointWrite(centralID: writer))
         await fake.waitForRecordedCall { call in
@@ -911,7 +911,7 @@ struct ServerControlPointTests {
             }
             return false
         }
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         let finalUpdates = await fake.recordedCalls.compactMap { call -> Data? in
             if case let .updateValue(value, _, CSCS.controlPointUUID, _) = call {
@@ -984,7 +984,7 @@ private func subscribeMeasurement(
             characteristicUUID: CSCS.measurementUUID,
         ),
     )
-    await server.waitForMeasurementSubscribers([centralID])
+    await server.waitUntil(.measurementSubscribers([centralID]))
 }
 
 private func subscribeControlPoint(
@@ -999,7 +999,7 @@ private func subscribeControlPoint(
             characteristicUUID: CSCS.controlPointUUID,
         ),
     )
-    await server.waitForControlPointSubscribers([centralID])
+    await server.waitUntil(.controlPointSubscribers([centralID]))
 }
 
 private func controlPointWrite(

@@ -1,22 +1,18 @@
 import Foundation
 
-final class ServedSensorLocationBox: @unchecked Sendable {
+final class ServedSensorLocationBox: Sendable {
     private let lock = NSLock()
-    private var kind: SensorLocationKind
+    private nonisolated(unsafe) var kind: SensorLocationKind
 
     init(initial: SensorLocationKind) {
         kind = initial
     }
 
     func read() -> SensorLocationKind {
-        lock.lock()
-        defer { lock.unlock() }
-        return kind
+        lock.withLock { kind }
     }
 
     func store(_ newKind: SensorLocationKind) {
-        lock.lock()
-        defer { lock.unlock() }
-        kind = newKind
+        lock.withLock { kind = newKind }
     }
 }

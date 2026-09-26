@@ -3,7 +3,7 @@ import CoreBluetooth
 #endif
 import Foundation
 
-actor ServerRuntime {
+actor ServerLifecycle {
     private enum Phase {
         case idle
         case starting(Task<ServerSession, Error>)
@@ -11,54 +11,34 @@ actor ServerRuntime {
         case stopping(Task<Void, Never>)
     }
 
-    private let service: PeripheralService
-    private let wheel: WheelConfiguration?
-    private let crankRevolutions: AnyAsyncSequence<CrankRevolution>?
-    private let location: ServerLocationConfiguration
+    private let configuration: ServerConfiguration
     private let servedSensorLocation: ServedSensorLocationBox?
 
     private var phase: Phase = .idle
-    private var lease: (registry: LiveServerRegistry, token: UUID)?
     private var finishStoppingEntryCount = 0
     private var finishStoppingEntryCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
     private let measurementSubscriberCountBroadcaster = StreamBroadcaster<Int>(
         replaysLatest: true,
         initialLatest: 0,
     )
-    private var measurementSubscriberCountLatest = 0
-    private var measurementSubscriberCountPublished: Int?
+    private var sessionSubscriberCount = 0
+    private var publishedSubscriberCount: Int?
 
     func measurementSubscriberCount() async -> AsyncStream<Int> {
         await measurementSubscriberCountBroadcaster.makeStream()
     }
 
-    private func publishMeasurementSubscriberCount(_ count: Int) async {
-        measurementSubscriberCountLatest = count
+    private func setMeasurementSubscriberCount(_ count: Int) async {
+        sessionSubscriberCount = count
         guard case .running = phase else { return }
-        await publishMeasurementSubscriberCountIfChanged(count)
-    }
-
-    private func publishMeasurementSubscriberCountIfChanged(_ count: Int) async {
-        if measurementSubscriberCountPublished == count { return }
-        measurementSubscriberCountPublished = count
+        guard publishedSubscriberCount != count else { return }
+        publishedSubscriberCount = count
         await measurementSubscriberCountBroadcaster.yield(count)
     }
 
-    private func syncMeasurementSubscriberCountPublication() async {
-        await publishMeasurementSubscriberCountIfChanged(measurementSubscriberCountLatest)
-    }
-
-    init(
-        service: PeripheralService,
-        wheel: WheelConfiguration?,
-        crankRevolutions: AnyAsyncSequence<CrankRevolution>?,
-        location: ServerLocationConfiguration,
-    ) {
-        self.service = service
-        self.wheel = wheel
-        self.crankRevolutions = crankRevolutions
-        self.location = location
-        switch location {
+    init(configuration: ServerConfiguration) {
+        self.configuration = configuration
+        switch configuration.location {
         case .multiple(let configuration):
             servedSensorLocation = ServedSensorLocationBox(initial: configuration.current)
         case .none, .staticLocation:
@@ -69,15 +49,10 @@ actor ServerRuntime {
     func start(
         peripheral: (any BluetoothPeripheral)?,
         clock: any ServerClock,
-        liveServers: LiveServerRegistry,
     ) async throws {
-        guard case .idle = phase, lease == nil else {
+        guard case .idle = phase else {
             throw ServerError.alreadyStarted
         }
-        guard let token = liveServers.claim() else {
-            throw ServerError.alreadyStarted
-        }
-        lease = (registry: liveServers, token: token)
 
         try await withTaskCancellationHandler {
             try await performStart(peripheral: peripheral, clock: clock)
@@ -115,8 +90,7 @@ actor ServerRuntime {
         await finishStopping(task)
     }
 
-    /// Waits for `task`, then returns to idle and releases the live-server slot once, whichever
-    /// caller resumes first.
+    /// Waits for `task`, then returns to idle, whichever caller resumes first.
     private func finishStopping(_ task: Task<Void, Never>) async {
         finishStoppingEntryCount += 1
         resumeFinishStoppingEntryCountWaiters()
@@ -125,10 +99,9 @@ actor ServerRuntime {
             return
         }
         phase = .idle
-        measurementSubscriberCountLatest = 0
-        measurementSubscriberCountPublished = nil
-        await publishMeasurementSubscriberCountIfChanged(0)
-        releaseLease()
+        sessionSubscriberCount = 0
+        publishedSubscriberCount = nil
+        await measurementSubscriberCountBroadcaster.yield(0)
     }
 
     func waitUntilFinishStoppingEntryCount(_ count: Int) async {
@@ -136,11 +109,8 @@ actor ServerRuntime {
             return
         }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            if finishStoppingEntryCount >= count {
-                continuation.resume()
-                return
-            }
             finishStoppingEntryCountWaiters.append((count, continuation))
+            resumeFinishStoppingEntryCountWaiters()
         }
     }
 
@@ -157,52 +127,9 @@ actor ServerRuntime {
         finishStoppingEntryCountWaiters = remaining
     }
 
-    private func releaseLease() {
-        if let lease {
-            lease.registry.release(lease.token)
-            self.lease = nil
-        }
-    }
-
-    func waitForMeasurementSubscribers(_ ids: Set<UUID>) async {
+    func waitUntil(_ condition: ServerTestCondition) async {
         if case .running(let session) = phase {
-            await session.waitForMeasurementSubscribers(ids)
-        }
-    }
-
-    func waitUntilMeasurementSubscriberWaiterParked() async {
-        if case .running(let session) = phase {
-            await session.waitUntilMeasurementSubscriberWaiterParked()
-        }
-    }
-
-    func waitForControlPointSubscribers(_ ids: Set<UUID>) async {
-        if case .running(let session) = phase {
-            await session.waitForControlPointSubscribers(ids)
-        }
-    }
-
-    func waitUntilControlPointProcedureIdle() async {
-        if case .running(let session) = phase {
-            await session.waitUntilControlPointProcedureIdle()
-        }
-    }
-
-    func waitUntilAcceptedMeasurementCount(_ count: Int) async {
-        if case .running(let session) = phase {
-            await session.waitUntilAcceptedMeasurementCount(count)
-        }
-    }
-
-    func waitUntilOutboundCount(atLeast count: Int) async {
-        if case .running(let session) = phase {
-            await session.waitUntilOutboundCount(atLeast: count)
-        }
-    }
-
-    func waitUntilNotifyReadyWaiterParked() async {
-        if case .running(let session) = phase {
-            await session.waitUntilNotifyReadyWaiterParked()
+            await session.waitUntil(condition)
         }
     }
 
@@ -230,15 +157,12 @@ actor ServerRuntime {
         let startupTask = Task {
             let resolvedPeripheral = try self.resolvePeripheral(peripheral)
             return try await ServerSession.open(
-                service: service,
-                wheel: wheel,
-                crankRevolutions: crankRevolutions,
-                location: location,
+                configuration: configuration,
                 servedSensorLocation: servedSensorLocation,
                 peripheral: resolvedPeripheral,
                 clock: clock,
                 onMeasurementSubscriberCountChange: { count in
-                    await self.publishMeasurementSubscriberCount(count)
+                    await self.setMeasurementSubscriberCount(count)
                 },
             )
         }
@@ -251,16 +175,10 @@ actor ServerRuntime {
                 throw CancellationError()
             }
             phase = .running(session)
-            measurementSubscriberCountPublished = nil
-            await syncMeasurementSubscriberCountPublication()
+            publishedSubscriberCount = nil
+            await setMeasurementSubscriberCount(sessionSubscriberCount)
         } catch {
-            let stillOwnsStartup = {
-                if case .starting(let currentTask) = phase, currentTask == startupTask {
-                    return true
-                }
-                return false
-            }()
-            if stillOwnsStartup {
+            if case .starting(let currentTask) = phase, currentTask == startupTask {
                 await beginStopping(Self.teardown(after: startupTask))
             }
             throw error

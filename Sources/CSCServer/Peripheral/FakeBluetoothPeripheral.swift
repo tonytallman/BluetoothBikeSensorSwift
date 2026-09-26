@@ -12,22 +12,16 @@ import Foundation
 /// `updateValue` records its attempt before parking and returns the accepted value read at
 /// release time.
 package actor FakeBluetoothPeripheral: BluetoothPeripheral {
-    package enum UpdateValueCentralFilter: Sendable, Equatable {
-        case all
-        case only([UUID])
-    }
-
     package enum RecordedCall: Sendable, Equatable {
         case add(PeripheralService)
         case removeService(uuid: UUID)
-        case removeAllServices
-        case startAdvertising(Advertisement)
+        case startAdvertising(serviceUUIDs: [UUID])
         case stopAdvertising
         case updateValue(
             value: Data,
             serviceUUID: UUID,
             characteristicUUID: UUID,
-            centralIDs: UpdateValueCentralFilter,
+            onSubscribedCentrals: [UUID]?,
         )
         case respond(id: UUID, result: ATTResult, value: Data?)
     }
@@ -35,15 +29,9 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     private struct Hold {
         var isHeld = false
         var parked: [CheckedContinuation<Void, Never>] = []
-        var parkedWaiters: [CheckedContinuation<Void, Never>] = []
 
         mutating func park(_ continuation: CheckedContinuation<Void, Never>) {
             parked.append(continuation)
-            let waiters = parkedWaiters
-            parkedWaiters.removeAll()
-            for waiter in waiters {
-                waiter.resume()
-            }
         }
 
         mutating func release() {
@@ -56,7 +44,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
-    private enum HoldKind {
+    package enum HeldCall: Sendable {
         case add
         case advertise
         case updateValue
@@ -67,33 +55,22 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     private var advertising = false
     private var lossCount = 0
     private var services: [UUID: PeripheralService] = [:]
-    private var outstandingReadRequestIDs: Set<UUID> = []
-    private var outstandingWriteTransactionIDs: Set<UUID> = []
+    private var outstandingRequestIDs: Set<UUID> = []
 
     private var shouldFailNextAdd = false
     private var shouldFailNextAdvertise = false
     private var nextUpdateValueAccepted = true
-    private var addHold = Hold()
-    private var advertiseHold = Hold()
-    private var updateValueHold = Hold()
-    private var respondHold = Hold()
+    private var holds: [HeldCall: Hold] = [
+        .add: Hold(),
+        .advertise: Hold(),
+        .updateValue: Hold(),
+        .respond: Hold(),
+    ]
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
     private let eventBroadcaster = StreamBroadcaster<PeripheralEvent>()
 
-    private struct RecordedCallWaiter {
-        let predicate: @Sendable (RecordedCall) -> Bool
-        let continuation: CheckedContinuation<Void, Never>
-    }
-
-    private struct RecordedCallsWaiter {
-        let predicate: @Sendable ([RecordedCall]) -> Bool
-        let continuation: CheckedContinuation<Void, Never>
-    }
-
-    private var recordedCallWaiters: [RecordedCallWaiter] = []
-    private var recordedCallsWaiters: [RecordedCallsWaiter] = []
-    private var stateUpdatesSubscriberWaiters: [CheckedContinuation<Void, Never>] = []
+    private var conditionWaiters: [(isMet: () -> Bool, continuation: CheckedContinuation<Void, Never>)] = []
     private var stateUpdatesSubscriberCount = 0
 
     package private(set) var recordedCalls: [RecordedCall] = []
@@ -110,7 +87,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         get async {
             stateUpdatesSubscriberCount += 1
             let stream = await stateBroadcaster.makeStream()
-            resumeStateUpdatesSubscriberWaiters()
+            resumeConditionWaiters()
             return stream
         }
     }
@@ -131,10 +108,9 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     }
 
     package func add(_ service: PeripheralService) async throws {
-        try PeripheralServiceValidation.validate(service)
         try requirePoweredOn()
 
-        if addHold.isHeld {
+        if holdState(.add).isHeld {
             await park(.add)
             try requirePoweredOn()
         }
@@ -161,20 +137,15 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         services.removeValue(forKey: uuid)
     }
 
-    package func removeAllServices() async {
-        appendRecordedCall(.removeAllServices)
-        services.removeAll()
-    }
-
-    package func startAdvertising(_ advertisement: Advertisement) async throws {
+    package func startAdvertising(serviceUUIDs: [UUID]) async throws {
         try requirePoweredOn()
 
-        if advertiseHold.isHeld {
+        if holdState(.advertise).isHeld {
             await park(.advertise)
             try requirePoweredOn()
         }
 
-        appendRecordedCall(.startAdvertising(advertisement))
+        appendRecordedCall(.startAdvertising(serviceUUIDs: serviceUUIDs))
 
         if shouldFailNextAdvertise {
             shouldFailNextAdvertise = false
@@ -194,44 +165,22 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         with result: ATTResult,
         value: Data?,
     ) async throws {
-        let isRead = outstandingReadRequestIDs.contains(requestID)
-        let isWrite = outstandingWriteTransactionIDs.contains(requestID)
-
-        guard isRead || isWrite else {
+        guard outstandingRequestIDs.contains(requestID) else {
             throw BluetoothPeripheralError.unknownRequest
         }
 
         guard state == .poweredOn else {
-            outstandingReadRequestIDs.remove(requestID)
-            outstandingWriteTransactionIDs.remove(requestID)
+            outstandingRequestIDs.remove(requestID)
             throw BluetoothPeripheralError.notPoweredOn
         }
 
-        if isRead {
-            switch result {
-            case .success:
-                guard let value else {
-                    throw BluetoothPeripheralError.missingReadValue
-                }
-            case .error:
-                guard value == nil else {
-                    throw BluetoothPeripheralError.unexpectedResponseValue
-                }
-            }
-        } else {
-            guard value == nil else {
-                throw BluetoothPeripheralError.unexpectedResponseValue
-            }
-        }
-
-        if respondHold.isHeld {
+        if holdState(.respond).isHeld {
             await park(.respond)
             try requirePoweredOn()
         }
 
         appendRecordedCall(.respond(id: requestID, result: result, value: value))
-        outstandingReadRequestIDs.remove(requestID)
-        outstandingWriteTransactionIDs.remove(requestID)
+        outstandingRequestIDs.remove(requestID)
     }
 
     package func updateValue(
@@ -245,23 +194,16 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
             throw BluetoothPeripheralError.characteristicNotFound
         }
 
-        let filter: UpdateValueCentralFilter
-        if let centralIDs {
-            filter = .only(centralIDs)
-        } else {
-            filter = .all
-        }
-
         appendRecordedCall(
             .updateValue(
                 value: value,
                 serviceUUID: serviceUUID,
                 characteristicUUID: characteristicUUID,
-                centralIDs: filter,
+                onSubscribedCentrals: centralIDs,
             ),
         )
 
-        if updateValueHold.isHeld {
+        if holdState(.updateValue).isHeld {
             await park(.updateValue)
         }
         return nextUpdateValueAccepted
@@ -282,12 +224,12 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     }
 
     package func emitRead(_ request: PeripheralReadRequest) async {
-        outstandingReadRequestIDs.insert(request.id)
+        outstandingRequestIDs.insert(request.id)
         await eventBroadcaster.yield(.read(request))
     }
 
     package func emitWriteTransaction(_ transaction: PeripheralWriteTransaction) async {
-        outstandingWriteTransactionIDs.insert(transaction.id)
+        outstandingRequestIDs.insert(transaction.id)
         await eventBroadcaster.yield(.writeTransaction(transaction))
     }
 
@@ -311,56 +253,26 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         nextUpdateValueAccepted = accepted
     }
 
-    /// Parks every `add` until ``releaseAdd()``.
-    package func holdNextAdd() {
-        addHold.isHeld = true
+    package func hold(_ call: HeldCall) {
+        mutateHold(call) { $0.isHeld = true }
     }
 
-    package func releaseAdd() {
-        addHold.release()
+    package func release(_ call: HeldCall) {
+        mutateHold(call) { $0.release() }
     }
 
-    package func waitUntilAddHeld() async {
-        await waitUntilParked(.add)
+    package func waitUntil(_ isMet: @escaping () -> Bool) async {
+        if isMet() {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            conditionWaiters.append((isMet, continuation))
+            resumeConditionWaiters()
+        }
     }
 
-    /// Parks every `startAdvertising` until ``releaseAdvertise()``.
-    package func holdNextAdvertise() {
-        advertiseHold.isHeld = true
-    }
-
-    package func releaseAdvertise() {
-        advertiseHold.release()
-    }
-
-    package func waitUntilAdvertiseHeld() async {
-        await waitUntilParked(.advertise)
-    }
-
-    /// Parks every `updateValue` after it is recorded, until ``releaseUpdateValue()``.
-    package func holdNextUpdateValue() {
-        updateValueHold.isHeld = true
-    }
-
-    package func releaseUpdateValue() {
-        updateValueHold.release()
-    }
-
-    package func waitUntilUpdateValueHeld() async {
-        await waitUntilParked(.updateValue)
-    }
-
-    /// Parks every `respond` after validation until ``releaseRespond()``.
-    package func holdNextRespond() {
-        respondHold.isHeld = true
-    }
-
-    package func releaseRespond() {
-        respondHold.release()
-    }
-
-    package func waitUntilRespondHeld() async {
-        await waitUntilParked(.respond)
+    package func waitUntilHeld(_ call: HeldCall) async {
+        await waitUntil { !self.holdState(call).parked.isEmpty }
     }
 
     package func waitUntilEventSubscriberCount(_ count: Int) async {
@@ -370,38 +282,17 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     package func waitForRecordedCall(
         where predicate: @escaping @Sendable (RecordedCall) -> Bool,
     ) async {
-        if recordedCalls.contains(where: predicate) {
-            return
-        }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            recordedCallWaiters.append(
-                RecordedCallWaiter(predicate: predicate, continuation: continuation),
-            )
-            resumeRecordedCallWaiters()
-        }
+        await waitUntil { self.recordedCalls.contains(where: predicate) }
     }
 
     package func waitForStateUpdatesSubscriber() async {
-        if stateUpdatesSubscriberCount > 0 {
-            return
-        }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            stateUpdatesSubscriberWaiters.append(continuation)
-        }
+        await waitUntil { self.stateUpdatesSubscriberCount > 0 }
     }
 
     package func waitUntilRecordedCallsSatisfy(
         _ predicate: @escaping @Sendable ([RecordedCall]) -> Bool,
     ) async {
-        if predicate(recordedCalls) {
-            return
-        }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            recordedCallsWaiters.append(
-                RecordedCallsWaiter(predicate: predicate, continuation: continuation),
-            )
-            resumeRecordedCallsWaiters()
-        }
+        await waitUntil { predicate(self.recordedCalls) }
     }
 
     private func requirePoweredOn() throws {
@@ -410,89 +301,38 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
-    private func park(_ kind: HoldKind) async {
+    private func holdState(_ call: HeldCall) -> Hold {
+        holds[call]!
+    }
+
+    private func mutateHold(_ call: HeldCall, _ mutate: (inout Hold) -> Void) {
+        var hold = holds[call]!
+        mutate(&hold)
+        holds[call] = hold
+        resumeConditionWaiters()
+    }
+
+    private func park(_ call: HeldCall) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            switch kind {
-            case .add:
-                addHold.park(continuation)
-            case .advertise:
-                advertiseHold.park(continuation)
-            case .updateValue:
-                updateValueHold.park(continuation)
-            case .respond:
-                respondHold.park(continuation)
-            }
+            mutateHold(call) { $0.park(continuation) }
         }
     }
 
-    private func waitUntilParked(_ kind: HoldKind) async {
-        let isParked: Bool
-        switch kind {
-        case .add:
-            isParked = !addHold.parked.isEmpty
-        case .advertise:
-            isParked = !advertiseHold.parked.isEmpty
-        case .updateValue:
-            isParked = !updateValueHold.parked.isEmpty
-        case .respond:
-            isParked = !respondHold.parked.isEmpty
-        }
-        if isParked {
-            return
-        }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            switch kind {
-            case .add:
-                addHold.parkedWaiters.append(continuation)
-            case .advertise:
-                advertiseHold.parkedWaiters.append(continuation)
-            case .updateValue:
-                updateValueHold.parkedWaiters.append(continuation)
-            case .respond:
-                respondHold.parkedWaiters.append(continuation)
-            }
-        }
-    }
-
-    private func resumeRecordedCallWaiters() {
-        var remaining: [RecordedCallWaiter] = []
-        for waiter in recordedCallWaiters {
-            if recordedCalls.contains(where: waiter.predicate) {
+    private func resumeConditionWaiters() {
+        var remaining: [(isMet: () -> Bool, continuation: CheckedContinuation<Void, Never>)] = []
+        for waiter in conditionWaiters {
+            if waiter.isMet() {
                 waiter.continuation.resume()
             } else {
                 remaining.append(waiter)
             }
         }
-        recordedCallWaiters = remaining
-    }
-
-    private func resumeRecordedCallsWaiters() {
-        var remaining: [RecordedCallsWaiter] = []
-        for waiter in recordedCallsWaiters {
-            if waiter.predicate(recordedCalls) {
-                waiter.continuation.resume()
-            } else {
-                remaining.append(waiter)
-            }
-        }
-        recordedCallsWaiters = remaining
-    }
-
-    private func resumeStateUpdatesSubscriberWaiters() {
-        guard stateUpdatesSubscriberCount > 0 else {
-            return
-        }
-        let waiters = stateUpdatesSubscriberWaiters
-        stateUpdatesSubscriberWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
-        }
+        conditionWaiters = remaining
     }
 
     private func appendRecordedCall(_ call: RecordedCall) {
         recordedCalls.append(call)
-        resumeRecordedCallWaiters()
-        resumeRecordedCallsWaiters()
+        resumeConditionWaiters()
     }
 
     private func hasCharacteristic(serviceUUID: UUID, characteristicUUID: UUID) -> Bool {

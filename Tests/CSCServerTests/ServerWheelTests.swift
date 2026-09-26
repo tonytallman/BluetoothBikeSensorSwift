@@ -20,10 +20,10 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         await yield(WheelRevolution(cumulativeRevolutions: 1000, lastEventTime: 1024))
-        await server.waitUntilAcceptedMeasurementCount(1)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
 
         let expected = CSCMeasurement(
             cumulativeWheelRevolutions: 1000,
@@ -31,7 +31,7 @@ struct ServerWheelTests {
         ).encode()!
 
         await fake.waitForRecordedCall { call in
-            if case let .updateValue(value, serviceUUID, characteristicUUID, .all) = call {
+            if case let .updateValue(value, serviceUUID, characteristicUUID, nil) = call {
                 return value == expected
                     && serviceUUID == CSCS.serviceUUID
                     && characteristicUUID == CSCS.measurementUUID
@@ -58,7 +58,7 @@ struct ServerWheelTests {
 
         let calls = await fake.recordedCalls
         #expect(calls.contains { call in
-            if case .add(server.service) = call { return true }
+            if case .add(server.configuration.service) = call { return true }
             return false
         })
     }
@@ -81,13 +81,13 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         await yieldWheel(WheelRevolution(cumulativeRevolutions: 100, lastEventTime: 1024))
-        await server.waitUntilAcceptedMeasurementCount(1)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
 
         await yieldCrank(CrankRevolution(cumulativeRevolutions: 80, lastEventTime: 2048))
-        await server.waitUntilAcceptedMeasurementCount(2)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 2))
 
         let combined = CSCMeasurement(
             cumulativeWheelRevolutions: 100,
@@ -105,7 +105,7 @@ struct ServerWheelTests {
         }
 
         await yieldWheel(WheelRevolution(cumulativeRevolutions: 101, lastEventTime: 1100))
-        await server.waitUntilAcceptedMeasurementCount(3)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 3))
 
         let finalCombined = CSCMeasurement(
             cumulativeWheelRevolutions: 101,
@@ -141,10 +141,10 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([writer])
+        await server.waitUntil(.measurementSubscribers([writer]))
 
         await yieldWheel(WheelRevolution(cumulativeRevolutions: 50, lastEventTime: 1))
-        await server.waitUntilAcceptedMeasurementCount(1)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
 
         await fake.emitSubscription(
             .subscribed(
@@ -153,7 +153,7 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.controlPointUUID,
             ),
         )
-        await server.waitForControlPointSubscribers([writer])
+        await server.waitUntil(.controlPointSubscribers([writer]))
 
         let transactionID = UUID()
         await fake.emitWriteTransaction(
@@ -183,10 +183,10 @@ struct ServerWheelTests {
             }
             return false
         }
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await yieldCrank(CrankRevolution(cumulativeRevolutions: 10, lastEventTime: 2))
-        await server.waitUntilAcceptedMeasurementCount(2)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 2))
 
         let expected = CSCMeasurement(
             cumulativeWheelRevolutions: 50,
@@ -225,12 +225,12 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([writer])
+        await server.waitUntil(.measurementSubscribers([writer]))
 
         await yieldWheel(WheelRevolution(cumulativeRevolutions: 50, lastEventTime: 1))
-        await server.waitUntilAcceptedMeasurementCount(1)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
         await yieldCrank(CrankRevolution(cumulativeRevolutions: 10, lastEventTime: 2))
-        await server.waitUntilAcceptedMeasurementCount(2)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 2))
 
         await fake.emitSubscription(
             .subscribed(
@@ -239,7 +239,7 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.controlPointUUID,
             ),
         )
-        await server.waitForControlPointSubscribers([writer])
+        await server.waitUntil(.controlPointSubscribers([writer]))
 
         let transactionID = UUID()
         await fake.emitWriteTransaction(
@@ -262,10 +262,10 @@ struct ServerWheelTests {
             }
             return false
         }
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await yieldCrank(CrankRevolution(cumulativeRevolutions: 11, lastEventTime: 3))
-        await server.waitUntilAcceptedMeasurementCount(3)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 3))
 
         let crankOnly = CSCMeasurement(
             cumulativeCrankRevolutions: 11,
@@ -283,7 +283,7 @@ struct ServerWheelTests {
         }
 
         await yieldWheel(WheelRevolution(cumulativeRevolutions: 0, lastEventTime: 4))
-        await server.waitUntilAcceptedMeasurementCount(4)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 4))
 
         let combined = CSCMeasurement(
             cumulativeWheelRevolutions: 0,
@@ -319,7 +319,7 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([writer])
+        await server.waitUntil(.measurementSubscribers([writer]))
 
         await fake.emitSubscription(
             .subscribed(
@@ -328,7 +328,7 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.controlPointUUID,
             ),
         )
-        await server.waitForControlPointSubscribers([writer])
+        await server.waitUntil(.controlPointSubscribers([writer]))
 
         await yield(WheelRevolution(cumulativeRevolutions: 42, lastEventTime: 7))
         let wheelPayload = CSCMeasurement(
@@ -386,7 +386,7 @@ struct ServerWheelTests {
 
         await fake.setNextUpdateValueAccepted(true)
         await fake.emitReadyToUpdateSubscribers()
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
     }
 
     @Test func setCumulativeDiscardsUnsentCombinedCrankAndRequeuesCrankOnly() async throws {
@@ -407,10 +407,10 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([writer])
+        await server.waitUntil(.measurementSubscribers([writer]))
 
         await yieldWheel(WheelRevolution(cumulativeRevolutions: 50, lastEventTime: 1))
-        await server.waitUntilAcceptedMeasurementCount(1)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
 
         await fake.emitSubscription(
             .subscribed(
@@ -419,7 +419,7 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.controlPointUUID,
             ),
         )
-        await server.waitForControlPointSubscribers([writer])
+        await server.waitUntil(.controlPointSubscribers([writer]))
 
         await fake.setNextUpdateValueAccepted(false)
 
@@ -477,7 +477,7 @@ struct ServerWheelTests {
 
         await fake.setNextUpdateValueAccepted(true)
         await fake.emitReadyToUpdateSubscribers()
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await fake.waitForRecordedCall { call in
             if case let .updateValue(value, _, characteristicUUID, _) = call,
@@ -509,7 +509,7 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([writer])
+        await server.waitUntil(.measurementSubscribers([writer]))
 
         await fake.emitSubscription(
             .subscribed(
@@ -518,7 +518,7 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.controlPointUUID,
             ),
         )
-        await server.waitForControlPointSubscribers([writer])
+        await server.waitUntil(.controlPointSubscribers([writer]))
 
         await fake.emitWriteTransaction(
             PeripheralWriteTransaction(
@@ -545,7 +545,7 @@ struct ServerWheelTests {
         }
 
         await delegate.release()
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         let calls = await fake.recordedCalls
         let measurementIndex = calls.firstIndex { call in
@@ -584,12 +584,12 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         let samples: [(UInt32, UInt16)] = [(0, 100), (UInt32.max, 200), (9, 300)]
         for (index, sample) in samples.enumerated() {
             await yield(WheelRevolution(cumulativeRevolutions: sample.0, lastEventTime: sample.1))
-            await server.waitUntilAcceptedMeasurementCount(index + 1)
+            await server.waitUntil(.acceptedMeasurementCount(atLeast: index + 1))
         }
 
         let expected = samples.map { sample in
@@ -630,7 +630,7 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         await yieldCrank(CrankRevolution(cumulativeRevolutions: 3, lastEventTime: 4))
         let expected = CSCMeasurement(
@@ -663,7 +663,7 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         await yield(WheelRevolution(cumulativeRevolutions: 9, lastEventTime: 10))
         let expected = CSCMeasurement(
@@ -708,7 +708,7 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
         await sequence.releaseSample()
 
         await sequence.waitForNextRequest(count: 1)
@@ -745,7 +745,7 @@ struct ServerWheelTests {
             }
             return false
         }
-        #expect(await fake.read(characteristicUUID: CSCS.featureUUID) == server.feature.encode())
+        #expect(await fake.read(characteristicUUID: CSCS.featureUUID) == server.configuration.feature.encode())
     }
 
     @Test func stopDuringAcceptedUpdateValueReturns() async throws {
@@ -763,7 +763,7 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         await yield(WheelRevolution(cumulativeRevolutions: 1, lastEventTime: 2))
         await fake.waitForRecordedCall { call in
@@ -828,7 +828,7 @@ struct ServerWheelTests {
             return false
         }
 
-        #expect(server.service.characteristics.contains { $0.uuid == CSCS.controlPointUUID })
+        #expect(server.configuration.service.characteristics.contains { $0.uuid == CSCS.controlPointUUID })
     }
 
     @Test func wheelCrankStaticStarts() async throws {
@@ -876,13 +876,13 @@ struct ServerWheelTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         await yieldWheel(WheelRevolution(cumulativeRevolutions: 100, lastEventTime: 1024))
-        await server.waitUntilAcceptedMeasurementCount(1)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
 
         await yieldCrank(CrankRevolution(cumulativeRevolutions: 0xFFFF, lastEventTime: 100))
-        await server.waitUntilAcceptedMeasurementCount(2)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 2))
         let rollover = CSCMeasurement(
             cumulativeWheelRevolutions: 100,
             lastWheelEventTime: 1024,
@@ -897,7 +897,7 @@ struct ServerWheelTests {
         }
 
         await yieldCrank(CrankRevolution(cumulativeRevolutions: 0x0000, lastEventTime: 200))
-        await server.waitUntilAcceptedMeasurementCount(3)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 3))
         let wrapped = CSCMeasurement(
             cumulativeWheelRevolutions: 100,
             lastWheelEventTime: 1024,

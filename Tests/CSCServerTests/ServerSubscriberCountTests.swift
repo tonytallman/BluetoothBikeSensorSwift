@@ -27,7 +27,7 @@ struct ServerSubscriberCountTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([first, second])
+        await server.waitUntil(.measurementSubscribers([first, second]))
         #expect(await iterator.next() == 2)
 
         await fake.emitSubscription(
@@ -40,7 +40,7 @@ struct ServerSubscriberCountTests {
         #expect(await iterator.next() == 1)
 
         await fake.setState(.poweredOff)
-        await server.waitForMeasurementSubscribers([])
+        await server.waitUntil(.measurementSubscribers([]))
         #expect(await iterator.next() == 0)
 
         await server.stop()
@@ -53,7 +53,7 @@ struct ServerSubscriberCountTests {
         try await server.start(peripheral: fake)
         let central = UUID()
         await fake.subscribeMeasurement(server: server, centralID: central)
-        await server.waitForMeasurementSubscribers([central])
+        await server.waitUntil(.measurementSubscribers([central]))
 
         let stream = await server.measurementSubscriberCount
         var iterator = stream.makeAsyncIterator()
@@ -110,7 +110,7 @@ struct ServerSubscriberCountTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([central])
+        await server.waitUntil(.measurementSubscribers([central]))
 
         let lateStream = await server.measurementSubscriberCount
         var lateIterator = lateStream.makeAsyncIterator()

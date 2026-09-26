@@ -55,17 +55,6 @@ actor StreamBroadcaster<Element: Sendable> {
         }
     }
 
-    func finish() {
-        latest = nil
-        let active = Array(continuations.values)
-        continuations.removeAll()
-        subscriberCount = 0
-        resumeSubscriberCountWaiters()
-        for continuation in active {
-            continuation.finish()
-        }
-    }
-
     private func remove(_ id: UUID) {
         guard continuations.removeValue(forKey: id) != nil else {
             return

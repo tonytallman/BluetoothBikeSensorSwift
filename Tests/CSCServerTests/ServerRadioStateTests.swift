@@ -35,20 +35,20 @@ struct ServerRadioStateTests {
     @Test func powerLossDuringAdvertiseThrowsNotPoweredOn() async throws {
         let fake = FakeBluetoothPeripheral()
         let server = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
-        await fake.holdNextAdvertise()
+        await fake.hold(.advertise)
 
         let startTask = Task {
             try await server.start(peripheral: fake)
         }
-        await fake.waitUntilAdvertiseHeld()
+        await fake.waitUntilHeld(.advertise)
         await fake.setState(.poweredOff)
-        await fake.releaseAdvertise()
+        await fake.release(.advertise)
 
         await #expect(throws: ServerError.notPoweredOn) {
             try await startTask.value
         }
         #expect(await fake.recordedCalls == [
-            .add(server.service),
+            .add(server.configuration.service),
             .removeService(uuid: CSCS.serviceUUID),
         ])
         #expect(await fake.isAdvertising == false)
@@ -57,14 +57,14 @@ struct ServerRadioStateTests {
     @Test func powerLossDuringAddThrowsNotPoweredOn() async throws {
         let fake = FakeBluetoothPeripheral()
         let server = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
-        await fake.holdNextAdd()
+        await fake.hold(.add)
 
         let startTask = Task {
             try await server.start(peripheral: fake)
         }
-        await fake.waitUntilAddHeld()
+        await fake.waitUntilHeld(.add)
         await fake.setState(.poweredOff)
-        await fake.releaseAdd()
+        await fake.release(.add)
 
         await #expect(throws: ServerError.notPoweredOn) {
             try await startTask.value
@@ -86,10 +86,10 @@ struct ServerRadioStateTests {
         let sample2 = WheelRevolution(cumulativeRevolutions: 2, lastEventTime: 20)
         let sample3 = WheelRevolution(cumulativeRevolutions: 3, lastEventTime: 30)
         await wheel.yield(sample1)
-        await server.waitUntilAcceptedMeasurementCount(1)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
 
         await fake.setState(.poweredOff)
-        await server.waitForMeasurementSubscribers([])
+        await server.waitUntil(.measurementSubscribers([]))
 
         await wheel.yield(sample2)
         await wheel.waitUntilNextEntered(count: 3)
@@ -117,13 +117,13 @@ struct ServerRadioStateTests {
         let central = UUID()
         await fake.subscribeMeasurement(server: server, centralID: central)
 
-        await fake.holdNextUpdateValue()
+        await fake.hold(.updateValue)
         await wheel.yield(WheelRevolution(cumulativeRevolutions: 100, lastEventTime: 1))
-        await fake.waitUntilUpdateValueHeld()
+        await fake.waitUntilHeld(.updateValue)
 
         await fake.setState(.poweredOff)
-        await server.waitForMeasurementSubscribers([])
-        await fake.releaseUpdateValue()
+        await server.waitUntil(.measurementSubscribers([]))
+        await fake.release(.updateValue)
         await wheel.waitUntilNextEntered(count: 2)
 
         await fake.setState(.poweredOn)
@@ -167,7 +167,7 @@ struct ServerRadioStateTests {
         await fake.subscribeMeasurement(server: server, centralID: central)
 
         await fake.setState(state)
-        await server.waitForMeasurementSubscribers([])
+        await server.waitUntil(.measurementSubscribers([]))
         #expect(await fake.isAdvertising == false)
 
         await fake.setState(.poweredOn)
@@ -177,8 +177,8 @@ struct ServerRadioStateTests {
         #expect(Array(await fake.recordedCalls.dropFirst(2)) == [
             .stopAdvertising,
             .removeService(uuid: CSCS.serviceUUID),
-            .add(server.service),
-            .startAdvertising(cscAdvertisement),
+            .add(server.configuration.service),
+            .startAdvertising(serviceUUIDs: cscAdvertiseServiceUUIDs),
         ])
 
         #expect(await fake.read(characteristicUUID: CSCS.featureUUID) == Data([0x02, 0x00]))
@@ -200,7 +200,7 @@ struct ServerRadioStateTests {
         await fake.waitUntilUpdateValueCount(1, characteristic: CSCS.controlPointUUID, matching: { $0 == success })
 
         await fake.setState(.poweredOff)
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         await fake.setState(.poweredOn)
         await fake.waitUntilCallCount(2, matching: isStartAdvertising)
@@ -209,7 +209,7 @@ struct ServerRadioStateTests {
 
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: setCumulativeValue(2))) == .success)
         await fake.waitUntilUpdateValueCount(2, characteristic: CSCS.controlPointUUID, matching: { $0 == success })
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
         #expect(await fake.countUpdateValues(characteristic: CSCS.controlPointUUID, matching: { $0 == success }) == 2)
     }
 
@@ -227,9 +227,9 @@ struct ServerRadioStateTests {
         await delegate.waitUntilRecordedCount(1)
 
         await fake.setState(.poweredOff)
-        await server.waitForControlPointSubscribers([])
+        await server.waitUntil(.controlPointSubscribers([]))
         await delegate.release()
-        await server.waitUntilControlPointProcedureIdle()
+        await server.waitUntil(.controlPointProcedureIdle)
 
         #expect(await fake.countUpdateValues(characteristic: CSCS.controlPointUUID) == 0)
     }
@@ -243,14 +243,14 @@ struct ServerRadioStateTests {
         await fake.failNextAdd()
 
         await fake.setState(.poweredOff)
-        await server.waitForMeasurementSubscribers([])
+        await server.waitUntil(.measurementSubscribers([]))
         await fake.setState(.poweredOn)
         await fake.waitUntilCallCount(2, matching: isAdd)
 
         #expect(await server.isRadioSuspended)
         #expect(await fake.recordedCalls.filter(isStartAdvertising).count == 1)
         #expect(await fake.isAdvertising == false)
-        await server.waitForMeasurementSubscribers([])
+        await server.waitUntil(.measurementSubscribers([]))
 
         await fake.setState(.poweredOff)
         await fake.setState(.poweredOn)
@@ -263,10 +263,10 @@ struct ServerRadioStateTests {
         #expect(Array(await fake.recordedCalls.dropFirst(2)) == [
             .stopAdvertising,
             .removeService(uuid: CSCS.serviceUUID),
-            .add(server.service),
+            .add(server.configuration.service),
             .stopAdvertising,
-            .add(server.service),
-            .startAdvertising(cscAdvertisement),
+            .add(server.configuration.service),
+            .startAdvertising(serviceUUIDs: cscAdvertiseServiceUUIDs),
         ])
     }
 
@@ -278,7 +278,7 @@ struct ServerRadioStateTests {
         await fake.subscribeMeasurement(server: server, centralID: central)
 
         await fake.setState(.poweredOff)
-        await server.waitForMeasurementSubscribers([])
+        await server.waitUntil(.measurementSubscribers([]))
         await server.stop()
 
         await fake.setState(.poweredOn)
@@ -292,27 +292,27 @@ struct ServerRadioStateTests {
         let fake = FakeBluetoothPeripheral()
         let server = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
         try await server.start(peripheral: fake)
-        await fake.holdNextAdvertise()
+        await fake.hold(.advertise)
 
         await fake.setState(.poweredOff)
         await fake.setState(.poweredOn)
-        await fake.waitUntilAdvertiseHeld()
+        await fake.waitUntilHeld(.advertise)
 
         let stopTask = Task {
             await server.stop()
         }
         await fake.waitUntilCallCount(2, matching: isRemoveService)
-        await fake.releaseAdvertise()
+        await fake.release(.advertise)
         await stopTask.value
 
         #expect(await fake.isAdvertising == false)
         #expect(Array(await fake.recordedCalls.dropFirst(2)) == [
             .stopAdvertising,
             .removeService(uuid: CSCS.serviceUUID),
-            .add(server.service),
+            .add(server.configuration.service),
             .stopAdvertising,
             .removeService(uuid: CSCS.serviceUUID),
-            .startAdvertising(cscAdvertisement),
+            .startAdvertising(serviceUUIDs: cscAdvertiseServiceUUIDs),
             .stopAdvertising,
         ])
     }
@@ -346,22 +346,22 @@ struct ServerRadioStateTests {
     @Test func lossAndReturnDuringStartupFailsStart() async throws {
         let fake = FakeBluetoothPeripheral()
         let server = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
-        await fake.holdNextAdvertise()
+        await fake.hold(.advertise)
 
         let startTask = Task {
             try await server.start(peripheral: fake)
         }
-        await fake.waitUntilAdvertiseHeld()
+        await fake.waitUntilHeld(.advertise)
         await fake.setState(.poweredOff)
         await fake.setState(.poweredOn)
-        await fake.releaseAdvertise()
+        await fake.release(.advertise)
 
         await #expect(throws: ServerError.notPoweredOn) {
             try await startTask.value
         }
         #expect(await fake.recordedCalls == [
-            .add(server.service),
-            .startAdvertising(cscAdvertisement),
+            .add(server.configuration.service),
+            .startAdvertising(serviceUUIDs: cscAdvertiseServiceUUIDs),
             .stopAdvertising,
             .removeService(uuid: CSCS.serviceUUID),
         ])
