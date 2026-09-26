@@ -383,8 +383,7 @@ struct ServerBuilderTests {
 
         return PeripheralService(
             uuid: CSCS.serviceUUID,
-            isPrimary: true,
-            characteristics: characteristics,
+                        characteristics: characteristics,
         )
     }
 

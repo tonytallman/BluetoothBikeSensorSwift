@@ -178,7 +178,7 @@ struct ServerRadioStateTests {
             .stopAdvertising,
             .removeService(uuid: CSCS.serviceUUID),
             .add(server.configuration.service),
-            .startAdvertising(cscAdvertisement),
+            .startAdvertising(serviceUUIDs: cscAdvertiseServiceUUIDs),
         ])
 
         #expect(await fake.read(characteristicUUID: CSCS.featureUUID) == Data([0x02, 0x00]))
@@ -266,7 +266,7 @@ struct ServerRadioStateTests {
             .add(server.configuration.service),
             .stopAdvertising,
             .add(server.configuration.service),
-            .startAdvertising(cscAdvertisement),
+            .startAdvertising(serviceUUIDs: cscAdvertiseServiceUUIDs),
         ])
     }
 
@@ -312,7 +312,7 @@ struct ServerRadioStateTests {
             .add(server.configuration.service),
             .stopAdvertising,
             .removeService(uuid: CSCS.serviceUUID),
-            .startAdvertising(cscAdvertisement),
+            .startAdvertising(serviceUUIDs: cscAdvertiseServiceUUIDs),
             .stopAdvertising,
         ])
     }
@@ -361,7 +361,7 @@ struct ServerRadioStateTests {
         }
         #expect(await fake.recordedCalls == [
             .add(server.configuration.service),
-            .startAdvertising(cscAdvertisement),
+            .startAdvertising(serviceUUIDs: cscAdvertiseServiceUUIDs),
             .stopAdvertising,
             .removeService(uuid: CSCS.serviceUUID),
         ])

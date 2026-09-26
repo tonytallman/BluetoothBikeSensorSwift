@@ -7,12 +7,8 @@ package enum BluetoothPeripheralError: Error, Sendable, Equatable {
     case unknownRequest
     case addServiceFailed(serviceUUID: UUID, reason: String)
     case advertisingFailed(reason: String)
-    case conflictingProperties
-    case cachedValueNotReadOnly
     case addInProgress
     case advertisingInProgress
-    case missingReadValue
-    case unexpectedResponseValue
     case peripheralInvalidated
 }
 
@@ -28,12 +24,11 @@ package protocol BluetoothPeripheral: Sendable {
     /// Incremented each time the state becomes something other than `.poweredOn`, in the same
     /// step that publishes the `.stateUpdated` event.
     var powerLossCount: Int { get async }
-    var isAdvertising: Bool { get async }
 
     func add(_ service: PeripheralService) async throws
     func removeService(uuid: UUID) async throws
 
-    func startAdvertising(_ advertisement: Advertisement) async throws
+    func startAdvertising(serviceUUIDs: [UUID]) async throws
     func stopAdvertising() async
 
     /// Inbound state changes, reads, writes, CCCD changes, and ready signals in arrival order.

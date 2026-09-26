@@ -254,7 +254,7 @@ actor ServerSession {
         }
 
         do {
-            try await peripheral.startAdvertising(advertisement)
+            try await peripheral.startAdvertising(serviceUUIDs: [configuration.service.uuid])
             advertisingActive = true
         } catch {
             try? await peripheral.removeService(uuid: configuration.service.uuid)
@@ -321,10 +321,6 @@ actor ServerSession {
         await onMeasurementSubscriberCountChange?(measurementSubscribers.count)
     }
 
-    private var advertisement: Advertisement {
-        Advertisement(localName: nil, serviceUUIDs: [configuration.service.uuid])
-    }
-
     /// Settles any recovery already in progress before answering.
     func isRadioSuspended() async -> Bool {
         await waitUntil(.bluetoothRecoveryIdle)
@@ -389,7 +385,7 @@ actor ServerSession {
         }
 
         do {
-            try await peripheral.startAdvertising(advertisement)
+            try await peripheral.startAdvertising(serviceUUIDs: [configuration.service.uuid])
         } catch {
             try? await peripheral.removeService(uuid: configuration.service.uuid)
             publishStage = .none

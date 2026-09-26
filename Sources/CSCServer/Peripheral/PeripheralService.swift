@@ -9,9 +9,8 @@ package struct CharacteristicProperties: OptionSet, Sendable, Equatable {
 
     package static let read = CharacteristicProperties(rawValue: 1 << 0)
     package static let write = CharacteristicProperties(rawValue: 1 << 1)
-    package static let writeWithoutResponse = CharacteristicProperties(rawValue: 1 << 2)
-    package static let notify = CharacteristicProperties(rawValue: 1 << 3)
-    package static let indicate = CharacteristicProperties(rawValue: 1 << 4)
+    package static let notify = CharacteristicProperties(rawValue: 1 << 2)
+    package static let indicate = CharacteristicProperties(rawValue: 1 << 3)
 }
 
 package struct CharacteristicPermissions: OptionSet, Sendable, Equatable {
@@ -46,40 +45,13 @@ package struct PeripheralCharacteristic: Sendable, Equatable {
 
 package struct PeripheralService: Sendable, Equatable {
     package let uuid: UUID
-    package let isPrimary: Bool
     package let characteristics: [PeripheralCharacteristic]
 
     package init(
         uuid: UUID,
-        isPrimary: Bool,
         characteristics: [PeripheralCharacteristic],
     ) {
         self.uuid = uuid
-        self.isPrimary = isPrimary
         self.characteristics = characteristics
-    }
-}
-
-package enum PeripheralServiceValidation {
-    package static func validate(_ service: PeripheralService) throws {
-        for characteristic in service.characteristics {
-            if characteristic.properties.contains(.write),
-               characteristic.properties.contains(.writeWithoutResponse)
-            {
-                throw BluetoothPeripheralError.conflictingProperties
-            }
-            if characteristic.properties.contains(.notify),
-               characteristic.properties.contains(.indicate)
-            {
-                throw BluetoothPeripheralError.conflictingProperties
-            }
-            if characteristic.value != nil {
-                let isReadOnlyReadable = characteristic.properties == [.read]
-                    && characteristic.permissions == [.readable]
-                if !isReadOnlyReadable {
-                    throw BluetoothPeripheralError.cachedValueNotReadOnly
-                }
-            }
-        }
     }
 }

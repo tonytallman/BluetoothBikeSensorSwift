@@ -107,7 +107,6 @@ package struct ServerConfiguration: Sendable {
         self.feature = feature
         self.service = PeripheralService(
             uuid: CSCS.serviceUUID,
-            isPrimary: true,
             characteristics: characteristics,
         )
     }

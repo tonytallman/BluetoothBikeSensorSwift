@@ -172,4 +172,4 @@ func isRemoveService(_ call: FakeBluetoothPeripheral.RecordedCall) -> Bool {
     return false
 }
 
-let cscAdvertisement = Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID])
+let cscAdvertiseServiceUUIDs = [CSCS.serviceUUID]

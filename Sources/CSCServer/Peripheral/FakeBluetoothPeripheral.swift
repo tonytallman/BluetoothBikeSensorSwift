@@ -15,8 +15,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     package enum RecordedCall: Sendable, Equatable {
         case add(PeripheralService)
         case removeService(uuid: UUID)
-        case removeAllServices
-        case startAdvertising(Advertisement)
+        case startAdvertising(serviceUUIDs: [UUID])
         case stopAdvertising
         case updateValue(
             value: Data,
@@ -62,8 +61,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     private var advertising = false
     private var lossCount = 0
     private var services: [UUID: PeripheralService] = [:]
-    private var outstandingReadRequestIDs: Set<UUID> = []
-    private var outstandingWriteTransactionIDs: Set<UUID> = []
+    private var outstandingRequestIDs: Set<UUID> = []
 
     private var shouldFailNextAdd = false
     private var shouldFailNextAdvertise = false
@@ -128,7 +126,6 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     }
 
     package func add(_ service: PeripheralService) async throws {
-        try PeripheralServiceValidation.validate(service)
         try requirePoweredOn()
 
         if holds[.add]!.isHeld {
@@ -158,12 +155,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         services.removeValue(forKey: uuid)
     }
 
-    package func removeAllServices() async {
-        appendRecordedCall(.removeAllServices)
-        services.removeAll()
-    }
-
-    package func startAdvertising(_ advertisement: Advertisement) async throws {
+    package func startAdvertising(serviceUUIDs: [UUID]) async throws {
         try requirePoweredOn()
 
         if hold(.advertise).isHeld {
@@ -171,7 +163,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
             try requirePoweredOn()
         }
 
-        appendRecordedCall(.startAdvertising(advertisement))
+        appendRecordedCall(.startAdvertising(serviceUUIDs: serviceUUIDs))
 
         if shouldFailNextAdvertise {
             shouldFailNextAdvertise = false
@@ -191,24 +183,14 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         with result: ATTResult,
         value: Data?,
     ) async throws {
-        let isRead = outstandingReadRequestIDs.contains(requestID)
-        let isWrite = outstandingWriteTransactionIDs.contains(requestID)
-
-        guard isRead || isWrite else {
+        guard outstandingRequestIDs.contains(requestID) else {
             throw BluetoothPeripheralError.unknownRequest
         }
 
         guard state == .poweredOn else {
-            outstandingReadRequestIDs.remove(requestID)
-            outstandingWriteTransactionIDs.remove(requestID)
+            outstandingRequestIDs.remove(requestID)
             throw BluetoothPeripheralError.notPoweredOn
         }
-
-        try RespondPayloadValidation.validate(
-            requestKind: isRead ? .read : .write,
-            result: result,
-            value: value,
-        )
 
         if hold(.respond).isHeld {
             await park(.respond)
@@ -216,8 +198,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         }
 
         appendRecordedCall(.respond(id: requestID, result: result, value: value))
-        outstandingReadRequestIDs.remove(requestID)
-        outstandingWriteTransactionIDs.remove(requestID)
+        outstandingRequestIDs.remove(requestID)
     }
 
     package func updateValue(
@@ -261,12 +242,12 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     }
 
     package func emitRead(_ request: PeripheralReadRequest) async {
-        outstandingReadRequestIDs.insert(request.id)
+        outstandingRequestIDs.insert(request.id)
         await eventBroadcaster.yield(.read(request))
     }
 
     package func emitWriteTransaction(_ transaction: PeripheralWriteTransaction) async {
-        outstandingWriteTransactionIDs.insert(transaction.id)
+        outstandingRequestIDs.insert(transaction.id)
         await eventBroadcaster.yield(.writeTransaction(transaction))
     }
 

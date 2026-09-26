@@ -75,8 +75,6 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     }
 
     package func add(_ service: PeripheralService) async throws {
-        try PeripheralServiceValidation.validate(service)
-
         guard state == .poweredOn else {
             throw BluetoothPeripheralError.notPoweredOn
         }
@@ -113,7 +111,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
-    package func startAdvertising(_ advertisement: Advertisement) async throws {
+    package func startAdvertising(serviceUUIDs: [UUID]) async throws {
         guard state == .poweredOn else {
             throw BluetoothPeripheralError.notPoweredOn
         }
@@ -125,13 +123,8 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
             inFlightBox.setAdvertisingContinuation(continuation)
             queue.sync {
                 var advertisementData: [String: Any] = [:]
-                if let localName = advertisement.localName {
-                    advertisementData[CBAdvertisementDataLocalNameKey] = localName
-                }
-                if !advertisement.serviceUUIDs.isEmpty {
-                    advertisementData[CBAdvertisementDataServiceUUIDsKey] = advertisement.serviceUUIDs.map {
-                        $0.cbUUID
-                    }
+                if !serviceUUIDs.isEmpty {
+                    advertisementData[CBAdvertisementDataServiceUUIDsKey] = serviceUUIDs.map(\.cbUUID)
                 }
                 peripheralManager.startAdvertising(advertisementData)
             }
@@ -158,20 +151,10 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         with result: ATTResult,
         value: Data?,
     ) async throws {
-        guard let requestKind = delegateBridge.requestKind(for: requestID) else {
-            throw BluetoothPeripheralError.unknownRequest
-        }
-
         guard state == .poweredOn else {
             delegateBridge.removeRequest(for: requestID)
             throw BluetoothPeripheralError.notPoweredOn
         }
-
-        try RespondPayloadValidation.validate(
-            requestKind: requestKind == .read ? .read : .write,
-            result: result,
-            value: value,
-        )
 
         try queue.sync {
             guard let request = delegateBridge.removeRequest(for: requestID) else {
@@ -182,7 +165,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
             switch result {
             case .success:
                 cbResult = .success
-                if case .read = requestKind {
+                if let value {
                     request.value = value
                 }
             case let .error(code):
@@ -279,10 +262,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     private static func makeCBService(
         from service: PeripheralService,
     ) -> (CBMutableService, [(uuid: UUID, characteristic: CBMutableCharacteristic)]) {
-        let cbService = CBMutableService(
-            type: service.uuid.cbUUID,
-            primary: service.isPrimary,
-        )
+        let cbService = CBMutableService(type: service.uuid.cbUUID, primary: true)
         let characteristicPairs = service.characteristics.map { characteristic in
             let cbCharacteristic = makeCBCharacteristic(from: characteristic)
             return (uuid: characteristic.uuid, characteristic: cbCharacteristic)
@@ -292,7 +272,11 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     }
 
     private static func makeCBCharacteristic(from characteristic: PeripheralCharacteristic) -> CBMutableCharacteristic {
-        CBMutableCharacteristic(
+        assert(
+            characteristic.value == nil
+                || (characteristic.properties == [.read] && characteristic.permissions == [.readable]),
+        )
+        return CBMutableCharacteristic(
             type: characteristic.uuid.cbUUID,
             properties: cbProperties(from: characteristic.properties),
             value: characteristic.value,
@@ -302,39 +286,19 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
 
     private static func cbProperties(from properties: CharacteristicProperties) -> CBCharacteristicProperties {
         var result: CBCharacteristicProperties = []
-        if properties.contains(.read) {
-            result.insert(.read)
-        }
-        if properties.contains(.write) {
-            result.insert(.write)
-        }
-        if properties.contains(.writeWithoutResponse) {
-            result.insert(.writeWithoutResponse)
-        }
-        if properties.contains(.notify) {
-            result.insert(.notify)
-        }
-        if properties.contains(.indicate) {
-            result.insert(.indicate)
-        }
+        if properties.contains(.read) { result.insert(.read) }
+        if properties.contains(.write) { result.insert(.write) }
+        if properties.contains(.notify) { result.insert(.notify) }
+        if properties.contains(.indicate) { result.insert(.indicate) }
         return result
     }
 
     private static func cbPermissions(from permissions: CharacteristicPermissions) -> CBAttributePermissions {
         var result: CBAttributePermissions = []
-        if permissions.contains(.readable) {
-            result.insert(.readable)
-        }
-        if permissions.contains(.writeable) {
-            result.insert(.writeable)
-        }
+        if permissions.contains(.readable) { result.insert(.readable) }
+        if permissions.contains(.writeable) { result.insert(.writeable) }
         return result
     }
-}
-
-private enum StoredRequestKind: Sendable {
-    case read
-    case write
 }
 
 private enum PeripheralDelegateEvent: Sendable {
@@ -412,7 +376,6 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
     private var characteristics: [CharacteristicKey: CBMutableCharacteristic] = [:]
     private var centrals: [UUID: CBCentral] = [:]
     private var attRequests: [UUID: CBATTRequest] = [:]
-    private var attRequestKinds: [UUID: StoredRequestKind] = [:]
 
     func bind(handler: @escaping @Sendable (PeripheralDelegateEvent) -> Void) {
         lock.lock()
@@ -450,13 +413,6 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         return services.removeValue(forKey: uuid)
     }
 
-    func removeAllServices() {
-        lock.lock()
-        services.removeAll()
-        characteristics.removeAll()
-        lock.unlock()
-    }
-
     func store(
         characteristic: CBMutableCharacteristic,
         serviceUUID: UUID,
@@ -480,17 +436,10 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         return centrals[id]
     }
 
-    func requestKind(for id: UUID) -> StoredRequestKind? {
-        lock.lock()
-        defer { lock.unlock() }
-        return attRequestKinds[id]
-    }
-
     func removeCentralsAndRequests() {
         lock.lock()
         centrals.removeAll()
         attRequests.removeAll()
-        attRequestKinds.removeAll()
         lock.unlock()
     }
 
@@ -498,21 +447,12 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
     func removeRequest(for id: UUID) -> CBATTRequest? {
         lock.lock()
         defer { lock.unlock() }
-        attRequestKinds.removeValue(forKey: id)
         return attRequests.removeValue(forKey: id)
     }
 
-    private func storeReadRequest(_ request: CBATTRequest, id: UUID) {
+    private func storeRequest(_ request: CBATTRequest, id: UUID) {
         lock.lock()
         attRequests[id] = request
-        attRequestKinds[id] = .read
-        lock.unlock()
-    }
-
-    private func storeWriteRequest(_ request: CBATTRequest, id: UUID) {
-        lock.lock()
-        attRequests[id] = request
-        attRequestKinds[id] = .write
         lock.unlock()
     }
 
@@ -543,25 +483,20 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         centrals[request.central.identifier] = request.central
         lock.unlock()
 
-        let characteristic = request.characteristic
-        guard
-            let service = characteristic.service,
-            let serviceUUID = service.uuid.foundationUUID,
-            let characteristicUUID = characteristic.uuid.foundationUUID
-        else {
+        guard let identity = characteristicIdentity(request.characteristic) else {
             peripheral.respond(to: request, withResult: .invalidHandle)
             return
         }
 
         let requestID = UUID()
-        storeReadRequest(request, id: requestID)
+        storeRequest(request, id: requestID)
         emit(
             .read(
                 PeripheralReadRequest(
                     id: requestID,
                     centralID: request.central.identifier,
-                    serviceUUID: serviceUUID,
-                    characteristicUUID: characteristicUUID,
+                    serviceUUID: identity.serviceUUID,
+                    characteristicUUID: identity.characteristicUUID,
                     offset: request.offset,
                 ),
             ),
@@ -581,12 +516,7 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
 
         var writeRequests: [PeripheralWriteRequest] = []
         for request in requests {
-            let characteristic = request.characteristic
-            guard
-                let service = characteristic.service,
-                let serviceUUID = service.uuid.foundationUUID,
-                let characteristicUUID = characteristic.uuid.foundationUUID
-            else {
+            guard let identity = characteristicIdentity(request.characteristic) else {
                 peripheral.respond(to: firstRequest, withResult: .invalidHandle)
                 return
             }
@@ -594,8 +524,8 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
             writeRequests.append(
                 PeripheralWriteRequest(
                     centralID: request.central.identifier,
-                    serviceUUID: serviceUUID,
-                    characteristicUUID: characteristicUUID,
+                    serviceUUID: identity.serviceUUID,
+                    characteristicUUID: identity.characteristicUUID,
                     offset: request.offset,
                     value: request.value ?? Data(),
                 ),
@@ -603,7 +533,7 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         }
 
         let transactionID = UUID()
-        storeWriteRequest(firstRequest, id: transactionID)
+        storeRequest(firstRequest, id: transactionID)
         emit(
             .writeTransaction(
                 PeripheralWriteTransaction(
