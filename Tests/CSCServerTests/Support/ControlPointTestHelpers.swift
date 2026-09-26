@@ -13,7 +13,7 @@ extension FakeBluetoothPeripheral {
                 characteristicUUID: CSCS.controlPointUUID,
             ),
         )
-        await server.waitForControlPointSubscribers([centralID])
+        await server.waitUntil(.controlPointSubscribers([centralID]))
     }
 
     nonisolated func unsubscribeControlPoint(centralID: UUID) async {
@@ -34,7 +34,7 @@ extension FakeBluetoothPeripheral {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
     }
 
     /// Emits a read and returns the value of its success response.
@@ -172,4 +172,4 @@ func isRemoveService(_ call: FakeBluetoothPeripheral.RecordedCall) -> Bool {
     return false
 }
 
-let cscAdvertisement = Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID])
+let cscAdvertiseServiceUUIDs = [CSCS.serviceUUID]

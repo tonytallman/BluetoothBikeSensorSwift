@@ -1,32 +1,44 @@
-internal import CSCWire
+import Foundation
+package import CSCWire
 
-enum ServerAssembly {
-    private static let maximumMultipleSensorLocations = 17 // 3 + 17 = 20 default-MTU payload bytes
+package struct WheelConfiguration: Sendable {
+    package let revolutions: AnyAsyncSequence<WheelRevolution>
+    package let delegate: any CumulativeWheelRevolutionsDelegate
+}
 
-    static func assemble(
+package struct MultipleSensorLocationsConfiguration: Sendable {
+    package let supported: [SensorLocationKind]
+    package let current: SensorLocationKind
+    package let delegate: any MultipleSensorLocationsDelegate
+}
+
+package enum SensorLocationConfiguration: Sendable {
+    case none
+    case staticLocation(SensorLocationKind)
+    case multiple(MultipleSensorLocationsConfiguration)
+
+    var multipleLocations: MultipleSensorLocationsConfiguration? {
+        if case let .multiple(configuration) = self {
+            return configuration
+        }
+        return nil
+    }
+}
+
+package struct ServerConfiguration: Sendable {
+    package let wheel: WheelConfiguration?
+    package let crankRevolutions: AnyAsyncSequence<CrankRevolution>?
+    package let location: SensorLocationConfiguration
+    package let feature: CSCFeature
+    package let service: PeripheralService
+    let includesControlPoint: Bool
+
+    init(
         wheel: WheelConfiguration?,
         crankRevolutions: AnyAsyncSequence<CrankRevolution>?,
-        location: ServerLocationConfiguration,
-    ) -> Server {
+        location: SensorLocationConfiguration,
+    ) {
         precondition(wheel != nil || crankRevolutions != nil, "At least one revolution source is required")
-
-        if case let .multiple(configuration) = location {
-            let supported = configuration.supported
-            let current = configuration.current
-            precondition(!supported.isEmpty, "Multiple sensor locations require a non-empty supported list")
-            precondition(
-                Set(supported).count == supported.count,
-                "Multiple sensor locations require unique supported entries",
-            )
-            precondition(
-                supported.count <= maximumMultipleSensorLocations,
-                "Multiple sensor locations support at most \(maximumMultipleSensorLocations) entries",
-            )
-            precondition(
-                supported.contains(current),
-                "Multiple sensor locations require current to be in supported",
-            )
-        }
 
         var feature: CSCFeature = []
         if wheel != nil {
@@ -38,6 +50,8 @@ enum ServerAssembly {
         if case .multiple = location {
             feature.insert(.multipleSensorLocations)
         }
+
+        let includesControlPoint = wheel != nil || location.multipleLocations != nil
 
         let encodedFeature = feature.encode()
         var characteristics: [PeripheralCharacteristic] = [
@@ -79,13 +93,6 @@ enum ServerAssembly {
             )
         }
 
-        let includesControlPoint = wheel != nil || {
-            if case .multiple = location {
-                return true
-            }
-            return false
-        }()
-
         if includesControlPoint {
             characteristics.append(
                 PeripheralCharacteristic(
@@ -97,18 +104,14 @@ enum ServerAssembly {
             )
         }
 
-        let service = PeripheralService(
+        self.wheel = wheel
+        self.crankRevolutions = crankRevolutions
+        self.location = location
+        self.feature = feature
+        self.includesControlPoint = includesControlPoint
+        self.service = PeripheralService(
             uuid: CSCS.serviceUUID,
-            isPrimary: true,
             characteristics: characteristics,
-        )
-
-        return Server(
-            feature: feature,
-            service: service,
-            wheel: wheel,
-            crankRevolutions: crankRevolutions,
-            location: location,
         )
     }
 }

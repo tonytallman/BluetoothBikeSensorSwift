@@ -8,7 +8,7 @@ struct ServerReadmeExampleTests {
     /// Mirrors README → CSCServer → "Build and start". Differences: `start(peripheral:)` with a fake,
     /// and a measurement subscription before the yields.
     @Test func readmeServerExampleBuildsAndNotifies() async throws {
-        struct ResetWheelCount: SetCumulativeWheelRevolutions {
+        struct ResetWheelCount: CumulativeWheelRevolutionsDelegate {
             func setCumulativeWheelRevolutions(_ cumulativeRevolutions: UInt32) async throws {
                 // Store the new cumulative wheel count in your model.
             }

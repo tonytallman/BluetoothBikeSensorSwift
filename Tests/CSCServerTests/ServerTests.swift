@@ -13,8 +13,8 @@ struct ServerTests {
 
         let calls = await fake.recordedCalls
         #expect(calls == [
-            .add(server.service),
-            .startAdvertising(Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID])),
+            .add(server.configuration.service),
+            .startAdvertising(serviceUUIDs: [CSCS.serviceUUID]),
         ])
         #expect(await fake.isAdvertising)
     }
@@ -93,8 +93,8 @@ struct ServerTests {
 
         let calls = await fake.recordedCalls
         #expect(calls == [
-            .add(server.service),
-            .startAdvertising(Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID])),
+            .add(server.configuration.service),
+            .startAdvertising(serviceUUIDs: [CSCS.serviceUUID]),
         ])
         #expect(await fake.isAdvertising)
     }
@@ -109,8 +109,8 @@ struct ServerTests {
         try await server.start(peripheral: fake)
 
         let calls = await fake.recordedCalls
-        #expect(calls.first == .add(server.service))
-        #expect(calls.contains(.startAdvertising(Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID]))))
+        #expect(calls.first == .add(server.configuration.service))
+        #expect(calls.contains(.startAdvertising(serviceUUIDs: [CSCS.serviceUUID])))
         #expect(await fake.isAdvertising)
     }
 
@@ -125,8 +125,8 @@ struct ServerTests {
         try await server.start(peripheral: fake)
 
         let calls = await fake.recordedCalls
-        #expect(calls.first == .add(server.service))
-        #expect(calls.contains(.startAdvertising(Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID]))))
+        #expect(calls.first == .add(server.configuration.service))
+        #expect(calls.contains(.startAdvertising(serviceUUIDs: [CSCS.serviceUUID])))
         #expect(await fake.isAdvertising)
     }
 
@@ -142,8 +142,8 @@ struct ServerTests {
         try await server.start(peripheral: fake)
 
         let calls = await fake.recordedCalls
-        #expect(calls.first == .add(server.service))
-        #expect(calls.contains(.startAdvertising(Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID]))))
+        #expect(calls.first == .add(server.configuration.service))
+        #expect(calls.contains(.startAdvertising(serviceUUIDs: [CSCS.serviceUUID])))
         #expect(await fake.isAdvertising)
     }
 
@@ -463,7 +463,7 @@ struct ServerTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         let revolution = CrankRevolution(cumulativeRevolutions: 0x1234, lastEventTime: 0xABCD)
         await yield(revolution)
@@ -474,7 +474,7 @@ struct ServerTests {
         ).encode()!
 
         await fake.waitForRecordedCall { call in
-            if case let .updateValue(value, serviceUUID, characteristicUUID, .all) = call {
+            if case let .updateValue(value, serviceUUID, characteristicUUID, nil) = call {
                 return value == expected
                     && serviceUUID == CSCS.serviceUUID
                     && characteristicUUID == CSCS.measurementUUID
@@ -498,7 +498,7 @@ struct ServerTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         await yield(CrankRevolution(cumulativeRevolutions: 0xFFFF, lastEventTime: 100))
 
@@ -533,7 +533,7 @@ struct ServerTests {
             CrankRevolution(cumulativeRevolutions: 1, lastEventTime: 2),
         ])
         let fake = FakeBluetoothPeripheral()
-        await fake.holdNextAdvertise()
+        await fake.hold(.advertise)
         let server = Server.crankRevolutions(sequence).build()
 
         let startTask = Task {
@@ -554,7 +554,7 @@ struct ServerTests {
             ),
         )
 
-        await fake.releaseAdvertise()
+        await fake.release(.advertise)
         try await startTask.value
 
         await sequence.waitForNextRequest(count: 1)
@@ -617,7 +617,7 @@ struct ServerTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         await yield(CrankRevolution(cumulativeRevolutions: 1, lastEventTime: 2))
 
@@ -633,7 +633,7 @@ struct ServerTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([])
+        await server.waitUntil(.measurementSubscribers([]))
 
         await yield(CrankRevolution(cumulativeRevolutions: 3, lastEventTime: 4))
 
@@ -659,7 +659,7 @@ struct ServerTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         let revolution = CrankRevolution(cumulativeRevolutions: 9, lastEventTime: 10)
         await yield(revolution)
@@ -703,7 +703,7 @@ struct ServerTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         await yield(CrankRevolution(cumulativeRevolutions: 1, lastEventTime: 2))
 
@@ -719,14 +719,14 @@ struct ServerTests {
 
     @Test func stopDuringAdvertiseHoldCleansUpAndLaterStartSucceeds() async throws {
         let fake = FakeBluetoothPeripheral()
-        await fake.holdNextAdvertise()
+        await fake.hold(.advertise)
         let server = Server.crankRevolutions(EmptyCrankSequence()).build()
 
         let startTask = Task {
             try await server.start(peripheral: fake)
         }
 
-        await fake.waitUntilAdvertiseHeld()
+        await fake.waitUntilHeld(.advertise)
 
         let stopTask = Task {
             await server.stop()
@@ -736,7 +736,7 @@ struct ServerTests {
             if case .removeService = call { return true }
             return false
         }
-        await fake.releaseAdvertise()
+        await fake.release(.advertise)
 
         await stopTask.value
 
@@ -757,10 +757,10 @@ struct ServerTests {
 
         let missingID = UUID()
         let waiterTask = Task {
-            await server.waitForMeasurementSubscribers([missingID])
+            await server.waitUntil(.measurementSubscribers([missingID]))
         }
 
-        await server.waitUntilMeasurementSubscriberWaiterParked()
+        await server.waitUntil(.measurementSubscriberWaiterParked)
 
         await server.stop()
         await waiterTask.value
@@ -857,7 +857,7 @@ struct ServerTests {
                 characteristicUUID: CSCS.measurementUUID,
             ),
         )
-        await server.waitForMeasurementSubscribers([centralID])
+        await server.waitUntil(.measurementSubscribers([centralID]))
 
         await yield(CrankRevolution(cumulativeRevolutions: 7, lastEventTime: 8))
 
@@ -893,7 +893,7 @@ struct ServerTests {
             lastCrankEventTime: 0xABCD,
         ).encode()!
         await fake.waitUntilUpdateValueCount(1, characteristic: CSCS.measurementUUID, matching: { $0 == expected })
-        await server.waitUntilAcceptedMeasurementCount(1)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
         await server.stop()
     }
 
@@ -951,7 +951,7 @@ private func makeYieldingCrankSequence() -> (
     })
 }
 
-private final class CumulativeSpy: SetCumulativeWheelRevolutions, @unchecked Sendable {
+private final class CumulativeSpy: CumulativeWheelRevolutionsDelegate, @unchecked Sendable {
     func setCumulativeWheelRevolutions(_ cumulativeRevolutions: UInt32) async throws {}
 }
 

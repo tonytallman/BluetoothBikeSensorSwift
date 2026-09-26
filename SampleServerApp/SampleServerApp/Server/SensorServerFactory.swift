@@ -2,11 +2,11 @@ import CSCServer
 import Foundation
 
 enum RevolutionInputs {
-    case wheel(AsyncStream<WheelRevolution>, setCumulative: any SetCumulativeWheelRevolutions)
+    case wheel(AsyncStream<WheelRevolution>, setCumulative: any CumulativeWheelRevolutionsDelegate)
     case crank(AsyncStream<CrankRevolution>)
     case wheelAndCrank(
         AsyncStream<WheelRevolution>,
-        setCumulative: any SetCumulativeWheelRevolutions,
+        setCumulative: any CumulativeWheelRevolutionsDelegate,
         AsyncStream<CrankRevolution>,
     )
 }
