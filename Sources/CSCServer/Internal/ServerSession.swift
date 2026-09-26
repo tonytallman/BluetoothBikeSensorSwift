@@ -42,6 +42,7 @@ actor ServerSession {
     private let onMeasurementSubscriberCountChange: (@Sendable (Int) async -> Void)?
 
     private var publishStage: PublishStage = .none
+    private var advertisingActive = false
     private var closed = false
     private var measurementSubscribers: Set<UUID> = []
     private var controlPointSubscribers: Set<UUID> = []
@@ -195,19 +196,7 @@ actor ServerSession {
     func close() async {
         beginShutdown()
         await stopTasks()
-
-        await peripheral.stopAdvertising()
-
-        if publishStage != .none {
-            try? await peripheral.removeService(uuid: configuration.service.uuid)
-        }
-        publishStage = .none
-
-        await stopInboundTask()
-
-        measurementSubscribers.removeAll()
-        controlPointSubscribers.removeAll()
-        await notifyMeasurementSubscriberCount()
+        await tearDown(stoppingAdvertising: true)
     }
 
     private func beginShutdown() {
@@ -257,7 +246,7 @@ actor ServerSession {
             try await peripheral.add(configuration.service)
             publishStage = .serviceAdded
         } catch {
-            throw mapPublishError(error)
+            throw serverError(from: error, during: .addService)
         }
 
         if closed || Task.isCancelled {
@@ -266,22 +255,22 @@ actor ServerSession {
 
         do {
             try await peripheral.startAdvertising(advertisement)
+            advertisingActive = true
         } catch {
             try? await peripheral.removeService(uuid: configuration.service.uuid)
             publishStage = .none
-            throw mapAdvertisingError(error)
+            throw serverError(from: error, during: .startAdvertising)
         }
 
         if closed || Task.isCancelled {
-            await peripheral.stopAdvertising()
             throw CancellationError()
         }
-        publishStage = .advertising
 
         // A loss during startup fails start() even if power came back before the calls finished.
         if await peripheral.powerLossCount != startLossCount {
             throw ServerError.notPoweredOn
         }
+        publishStage = .advertising
 
         senderTask = spawnSenderTask()
         await drainPendingInboundEvents()
@@ -307,9 +296,13 @@ actor ServerSession {
     private func rollbackStartup() async {
         beginShutdown()
         await stopTasks()
+        await tearDown(stoppingAdvertising: advertisingActive)
+    }
 
-        if publishStage == .advertising {
+    private func tearDown(stoppingAdvertising: Bool) async {
+        if stoppingAdvertising {
             await peripheral.stopAdvertising()
+            advertisingActive = false
         }
 
         if publishStage != .none {
@@ -1329,7 +1322,12 @@ actor ServerSession {
         }
     }
 
-    private func mapPublishError(_ error: Error) -> ServerError {
+    private enum StartupStage {
+        case addService
+        case startAdvertising
+    }
+
+    private func serverError(from error: Error, during stage: StartupStage) -> ServerError {
         if let serverError = error as? ServerError {
             return serverError
         }
@@ -1342,26 +1340,19 @@ actor ServerSession {
             case .advertisingFailed(let reason):
                 return .advertisingFailed(reason: reason)
             default:
-                return .publishFailed(reason: String(describing: peripheralError))
+                switch stage {
+                case .addService:
+                    return .publishFailed(reason: String(describing: peripheralError))
+                case .startAdvertising:
+                    return .advertisingFailed(reason: String(describing: peripheralError))
+                }
             }
         }
-        return .publishFailed(reason: String(describing: error))
-    }
-
-    private func mapAdvertisingError(_ error: Error) -> ServerError {
-        if let serverError = error as? ServerError {
-            return serverError
+        switch stage {
+        case .addService:
+            return .publishFailed(reason: String(describing: error))
+        case .startAdvertising:
+            return .advertisingFailed(reason: String(describing: error))
         }
-        if let peripheralError = error as? BluetoothPeripheralError {
-            switch peripheralError {
-            case .notPoweredOn:
-                return .notPoweredOn
-            case .advertisingFailed(let reason):
-                return .advertisingFailed(reason: reason)
-            default:
-                return .advertisingFailed(reason: String(describing: peripheralError))
-            }
-        }
-        return .advertisingFailed(reason: String(describing: error))
     }
 }
