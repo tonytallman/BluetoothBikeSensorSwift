@@ -1,35 +1,15 @@
 import Foundation
 package import CSCWire
 
-/// CSC sensor server configuration built from revolution sequences and optional location settings.
+/// CSC sensor server built from revolution sequences and optional location settings.
 public final class Server: Sendable {
-    package let feature: CSCFeature
-    package let service: PeripheralService
-    package let wheel: WheelConfiguration?
-    package let crankRevolutions: AnyAsyncSequence<CrankRevolution>?
-    /// Build-time location configuration. For `.multiple`, the byte on `0x2A5D` while serving is not this snapshot after a successful Update.
-    package let location: ServerLocationConfiguration
+    package let configuration: ServerConfiguration
 
     private let runtime: ServerRuntime
 
-    internal init(
-        feature: CSCFeature,
-        service: PeripheralService,
-        wheel: WheelConfiguration?,
-        crankRevolutions: AnyAsyncSequence<CrankRevolution>?,
-        location: ServerLocationConfiguration,
-    ) {
-        self.feature = feature
-        self.service = service
-        self.wheel = wheel
-        self.crankRevolutions = crankRevolutions
-        self.location = location
-        runtime = ServerRuntime(
-            service: service,
-            wheel: wheel,
-            crankRevolutions: crankRevolutions,
-            location: location,
-        )
+    internal init(configuration: ServerConfiguration) {
+        self.configuration = configuration
+        runtime = ServerRuntime(configuration: configuration)
     }
 
     deinit {

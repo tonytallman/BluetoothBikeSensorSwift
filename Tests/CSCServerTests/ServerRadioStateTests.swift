@@ -48,7 +48,7 @@ struct ServerRadioStateTests {
             try await startTask.value
         }
         #expect(await fake.recordedCalls == [
-            .add(server.service),
+            .add(server.configuration.service),
             .removeService(uuid: CSCS.serviceUUID),
         ])
         #expect(await fake.isAdvertising == false)
@@ -177,7 +177,7 @@ struct ServerRadioStateTests {
         #expect(Array(await fake.recordedCalls.dropFirst(2)) == [
             .stopAdvertising,
             .removeService(uuid: CSCS.serviceUUID),
-            .add(server.service),
+            .add(server.configuration.service),
             .startAdvertising(cscAdvertisement),
         ])
 
@@ -263,9 +263,9 @@ struct ServerRadioStateTests {
         #expect(Array(await fake.recordedCalls.dropFirst(2)) == [
             .stopAdvertising,
             .removeService(uuid: CSCS.serviceUUID),
-            .add(server.service),
+            .add(server.configuration.service),
             .stopAdvertising,
-            .add(server.service),
+            .add(server.configuration.service),
             .startAdvertising(cscAdvertisement),
         ])
     }
@@ -309,7 +309,7 @@ struct ServerRadioStateTests {
         #expect(Array(await fake.recordedCalls.dropFirst(2)) == [
             .stopAdvertising,
             .removeService(uuid: CSCS.serviceUUID),
-            .add(server.service),
+            .add(server.configuration.service),
             .stopAdvertising,
             .removeService(uuid: CSCS.serviceUUID),
             .startAdvertising(cscAdvertisement),
@@ -360,7 +360,7 @@ struct ServerRadioStateTests {
             try await startTask.value
         }
         #expect(await fake.recordedCalls == [
-            .add(server.service),
+            .add(server.configuration.service),
             .startAdvertising(cscAdvertisement),
             .stopAdvertising,
             .removeService(uuid: CSCS.serviceUUID),

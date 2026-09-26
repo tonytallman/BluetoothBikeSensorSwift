@@ -37,9 +37,7 @@ actor ServerSession {
         case indication(IndicationItem)
     }
 
-    private let service: PeripheralService
-    private let wheel: WheelConfiguration?
-    private let crankRevolutions: AnyAsyncSequence<CrankRevolution>?
+    private let configuration: ServerConfiguration
     private let peripheral: any BluetoothPeripheral
     private let clock: any ServerClock
     private let onMeasurementSubscriberCountChange: (@Sendable (Int) async -> Void)?
@@ -87,7 +85,6 @@ actor ServerSession {
 
     private var outboundCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
-    private let location: ServerLocationConfiguration
     private let servedSensorLocation: ServedSensorLocationBox?
 
     private var inboundTask: Task<Void, Never>?
@@ -97,19 +94,13 @@ actor ServerSession {
     private var procedureTask: Task<Void, Never>?
 
     private init(
-        service: PeripheralService,
-        wheel: WheelConfiguration?,
-        crankRevolutions: AnyAsyncSequence<CrankRevolution>?,
-        location: ServerLocationConfiguration,
+        configuration: ServerConfiguration,
         servedSensorLocation: ServedSensorLocationBox?,
         peripheral: any BluetoothPeripheral,
         clock: any ServerClock,
         onMeasurementSubscriberCountChange: (@Sendable (Int) async -> Void)? = nil,
     ) {
-        self.service = service
-        self.wheel = wheel
-        self.crankRevolutions = crankRevolutions
-        self.location = location
+        self.configuration = configuration
         self.servedSensorLocation = servedSensorLocation
         self.peripheral = peripheral
         self.clock = clock
@@ -117,20 +108,14 @@ actor ServerSession {
     }
 
     static func open(
-        service: PeripheralService,
-        wheel: WheelConfiguration?,
-        crankRevolutions: AnyAsyncSequence<CrankRevolution>?,
-        location: ServerLocationConfiguration,
+        configuration: ServerConfiguration,
         servedSensorLocation: ServedSensorLocationBox?,
         peripheral: any BluetoothPeripheral,
         clock: any ServerClock,
         onMeasurementSubscriberCountChange: (@Sendable (Int) async -> Void)? = nil,
     ) async throws -> ServerSession {
         let session = ServerSession(
-            service: service,
-            wheel: wheel,
-            crankRevolutions: crankRevolutions,
-            location: location,
+            configuration: configuration,
             servedSensorLocation: servedSensorLocation,
             peripheral: peripheral,
             clock: clock,
@@ -231,7 +216,7 @@ actor ServerSession {
         await peripheral.stopAdvertising()
 
         if publishStage != .none {
-            try? await peripheral.removeService(uuid: service.uuid)
+            try? await peripheral.removeService(uuid: configuration.service.uuid)
         }
         publishStage = .none
 
@@ -291,7 +276,7 @@ actor ServerSession {
         inboundTask = spawnInboundTask(stream: eventStream)
 
         do {
-            try await peripheral.add(service)
+            try await peripheral.add(configuration.service)
             publishStage = .serviceAdded
         } catch {
             throw mapPublishError(error)
@@ -304,7 +289,7 @@ actor ServerSession {
         do {
             try await peripheral.startAdvertising(advertisement)
         } catch {
-            try? await peripheral.removeService(uuid: service.uuid)
+            try? await peripheral.removeService(uuid: configuration.service.uuid)
             publishStage = .none
             throw mapAdvertisingError(error)
         }
@@ -350,7 +335,7 @@ actor ServerSession {
         }
 
         if publishStage != .none {
-            try? await peripheral.removeService(uuid: service.uuid)
+            try? await peripheral.removeService(uuid: configuration.service.uuid)
         }
         publishStage = .none
 
@@ -366,7 +351,7 @@ actor ServerSession {
     }
 
     private var advertisement: Advertisement {
-        Advertisement(localName: nil, serviceUUIDs: [service.uuid])
+        Advertisement(localName: nil, serviceUUIDs: [configuration.service.uuid])
     }
 
     /// Settles any recovery already in progress before answering.
@@ -426,7 +411,7 @@ actor ServerSession {
             return
         }
         if publishStage != .none {
-            try? await peripheral.removeService(uuid: service.uuid)
+            try? await peripheral.removeService(uuid: configuration.service.uuid)
             publishStage = .none
         }
         if closed {
@@ -434,13 +419,13 @@ actor ServerSession {
         }
 
         do {
-            try await peripheral.add(service)
+            try await peripheral.add(configuration.service)
         } catch {
             return
         }
         publishStage = .serviceAdded
         if closed {
-            try? await peripheral.removeService(uuid: service.uuid)
+            try? await peripheral.removeService(uuid: configuration.service.uuid)
             publishStage = .none
             return
         }
@@ -448,14 +433,14 @@ actor ServerSession {
         do {
             try await peripheral.startAdvertising(advertisement)
         } catch {
-            try? await peripheral.removeService(uuid: service.uuid)
+            try? await peripheral.removeService(uuid: configuration.service.uuid)
             publishStage = .none
             return
         }
         if closed {
             await peripheral.stopAdvertising()
             if publishStage != .none {
-                try? await peripheral.removeService(uuid: service.uuid)
+                try? await peripheral.removeService(uuid: configuration.service.uuid)
                 publishStage = .none
             }
             return
@@ -464,10 +449,6 @@ actor ServerSession {
         publishStage = .advertising
         notifyReady = false
         radioLost = false
-    }
-
-    private var hasControlPointCharacteristic: Bool {
-        service.characteristics.contains { $0.uuid == CSCS.controlPointUUID }
     }
 
     private func isStaleWheelPayload(_ item: MeasurementItem) -> Bool {
@@ -641,7 +622,7 @@ actor ServerSession {
             do {
                 accepted = try await peripheral.updateValue(
                     item.payload,
-                    serviceUUID: service.uuid,
+                    serviceUUID: configuration.service.uuid,
                     characteristicUUID: CSCS.measurementUUID,
                     onSubscribedCentrals: nil,
                 )
@@ -734,7 +715,7 @@ actor ServerSession {
             do {
                 accepted = try await peripheral.updateValue(
                     indication.payload,
-                    serviceUUID: service.uuid,
+                    serviceUUID: configuration.service.uuid,
                     characteristicUUID: CSCS.controlPointUUID,
                     onSubscribedCentrals: [indication.centralID],
                 )
@@ -1140,15 +1121,15 @@ actor ServerSession {
     }
 
     private func readResponse(for request: PeripheralReadRequest) -> ReadResponse {
-        guard request.serviceUUID == service.uuid else {
+        guard request.serviceUUID == configuration.service.uuid else {
             return ReadResponse(result: .error(code: 0x0A), value: nil)
         }
-        guard let characteristic = service.characteristics.first(where: { $0.uuid == request.characteristicUUID }) else {
+        guard let characteristic = configuration.service.characteristics.first(where: { $0.uuid == request.characteristicUUID }) else {
             return ReadResponse(result: .error(code: 0x0A), value: nil)
         }
 
         if request.characteristicUUID == CSCS.sensorLocationUUID,
-           case .multiple = location,
+           case .multiple = configuration.location,
            let servedSensorLocation
         {
             let value = CSCSensorLocation(
@@ -1180,7 +1161,7 @@ actor ServerSession {
 
     private func handleWrite(_ transaction: PeripheralWriteTransaction) async {
         guard transaction.requests.count == 1,
-              transaction.requests[0].serviceUUID == service.uuid
+              transaction.requests[0].serviceUUID == configuration.service.uuid
         else {
             await respondWriteError(transaction.id, code: 0x03)
             return
@@ -1188,7 +1169,7 @@ actor ServerSession {
 
         let request = transaction.requests[0]
 
-        guard hasControlPointCharacteristic else {
+        guard configuration.includesControlPoint else {
             await respondWriteError(transaction.id, code: 0x03)
             return
         }
@@ -1264,7 +1245,7 @@ actor ServerSession {
         case let .setCumulativeValue(value):
             await runSetCumulativeProcedure(value: value, centralID: centralID)
         case let .invalidParameter(opcode, _) where opcode == CSCControlPointOpCode.setCumulativeValue.rawValue:
-            if wheel == nil {
+            if configuration.wheel == nil {
                 indicate(
                     opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
                     value: .opCodeNotSupported,
@@ -1285,7 +1266,7 @@ actor ServerSession {
             )
         case let .invalidParameter(opcode, _)
             where opcode == CSCControlPointOpCode.updateSensorLocation.rawValue:
-            if isMultipleSensorLocations {
+            if configuration.multipleLocations != nil {
                 indicate(
                     opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
                     value: .invalidParameter,
@@ -1300,7 +1281,7 @@ actor ServerSession {
             }
         case let .invalidParameter(opcode, _)
             where opcode == CSCControlPointOpCode.requestSupportedSensorLocations.rawValue:
-            if isMultipleSensorLocations {
+            if configuration.multipleLocations != nil {
                 indicate(
                     opcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
                     value: .invalidParameter,
@@ -1314,7 +1295,7 @@ actor ServerSession {
                 )
             }
         case let .updateSensorLocation(assignedNumber):
-            if isMultipleSensorLocations {
+            if configuration.multipleLocations != nil {
                 await runUpdateSensorLocationProcedure(
                     assignedNumber: assignedNumber,
                     centralID: centralID,
@@ -1327,7 +1308,7 @@ actor ServerSession {
                 )
             }
         case .requestSupportedSensorLocations:
-            if isMultipleSensorLocations {
+            if configuration.multipleLocations != nil {
                 await runRequestSupportedSensorLocationsProcedure(centralID: centralID)
             } else {
                 indicate(
@@ -1344,7 +1325,7 @@ actor ServerSession {
     }
 
     private func runSetCumulativeProcedure(value: UInt32, centralID: UUID) async {
-        guard let wheel else {
+        guard let wheel = configuration.wheel else {
             indicate(
                 opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
                 value: .opCodeNotSupported,
@@ -1385,22 +1366,8 @@ actor ServerSession {
         wakeReadyWaiterWithoutLatch()
     }
 
-    private var isMultipleSensorLocations: Bool {
-        if case .multiple = location {
-            return true
-        }
-        return false
-    }
-
-    private var multipleSensorLocationsConfiguration: MultipleSensorLocationsConfiguration? {
-        if case .multiple(let configuration) = location {
-            return configuration
-        }
-        return nil
-    }
-
     private func runUpdateSensorLocationProcedure(assignedNumber: UInt8, centralID: UUID) async {
-        guard let configuration = multipleSensorLocationsConfiguration else {
+        guard let configuration = configuration.multipleLocations else {
             endProcedure()
             return
         }
@@ -1445,7 +1412,7 @@ actor ServerSession {
     }
 
     private func runRequestSupportedSensorLocationsProcedure(centralID: UUID) async {
-        guard let configuration = multipleSensorLocationsConfiguration else {
+        guard let configuration = configuration.multipleLocations else {
             endProcedure()
             return
         }
@@ -1468,7 +1435,7 @@ actor ServerSession {
     private func handleSubscription(_ change: SubscriptionChange) async {
         switch change {
         case let .subscribed(centralID, serviceUUID, characteristicUUID):
-            guard serviceUUID == service.uuid else {
+            guard serviceUUID == configuration.service.uuid else {
                 return
             }
             switch characteristicUUID {
@@ -1485,7 +1452,7 @@ actor ServerSession {
                 return
             }
         case let .unsubscribed(centralID, serviceUUID, characteristicUUID):
-            guard serviceUUID == service.uuid else {
+            guard serviceUUID == configuration.service.uuid else {
                 return
             }
             switch characteristicUUID {
@@ -1579,7 +1546,7 @@ actor ServerSession {
     }
 
     private func startCrankLoopIfNeeded() {
-        guard let crankRevolutions else {
+        guard let crankRevolutions = configuration.crankRevolutions else {
             return
         }
 
@@ -1606,7 +1573,7 @@ actor ServerSession {
     }
 
     private func startWheelLoopIfNeeded() {
-        guard let wheel else {
+        guard let wheel = configuration.wheel else {
             return
         }
 

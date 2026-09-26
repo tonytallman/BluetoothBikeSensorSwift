@@ -32,12 +32,12 @@ public struct ServerBuilder<
 >: Sendable {
     private var wheel: WheelConfiguration?
     private var crankRevolutions: AnyAsyncSequence<CrankRevolution>?
-    private var location: ServerLocationConfiguration
+    private var location: SensorLocationConfiguration
 
     internal init(
         wheel: WheelConfiguration? = nil,
         crankRevolutions: AnyAsyncSequence<CrankRevolution>? = nil,
-        location: ServerLocationConfiguration = .none,
+        location: SensorLocationConfiguration = .none,
     ) {
         self.wheel = wheel
         self.crankRevolutions = crankRevolutions
@@ -182,10 +182,12 @@ extension ServerBuilder where Location == ServerLocation.Unselected {
 extension ServerBuilder {
     /// Builds the server from the configured revolution sources and location settings.
     public consuming func build() -> Server {
-        ServerAssembly.assemble(
-            wheel: wheel,
-            crankRevolutions: crankRevolutions,
-            location: location,
+        Server(
+            configuration: ServerConfiguration(
+                wheel: wheel,
+                crankRevolutions: crankRevolutions,
+                location: location,
+            ),
         )
     }
 }

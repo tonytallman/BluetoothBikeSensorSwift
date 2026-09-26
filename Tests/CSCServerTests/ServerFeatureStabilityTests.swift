@@ -32,13 +32,13 @@ struct ServerFeatureStabilityTests {
             }
             return nil
         }
-        #expect(added == [server.service, server.service])
+        #expect(added == [server.configuration.service, server.configuration.service])
 
-        let feature = try #require(server.service.characteristics.first { $0.uuid == CSCS.featureUUID })
-        #expect(feature.value == server.feature.encode())
+        let feature = try #require(server.configuration.service.characteristics.first { $0.uuid == CSCS.featureUUID })
+        #expect(feature.value == server.configuration.feature.encode())
         #expect(feature.properties == [.read])
         #expect(feature.permissions == [.readable])
-        #expect(await fake.read(characteristicUUID: CSCS.featureUUID) == server.feature.encode())
+        #expect(await fake.read(characteristicUUID: CSCS.featureUUID) == server.configuration.feature.encode())
 
         await server.stop()
     }
@@ -71,7 +71,7 @@ struct ServerFeatureStabilityTests {
         await server.waitUntilControlPointProcedureIdle()
 
         #expect(await fake.read(characteristicUUID: CSCS.featureUUID) == Data([0x05, 0x00]))
-        #expect(server.feature.encode() == Data([0x05, 0x00]))
+        #expect(server.configuration.feature.encode() == Data([0x05, 0x00]))
         await server.stop()
     }
 
@@ -82,8 +82,8 @@ struct ServerFeatureStabilityTests {
         let second = builder.build()
 
         #expect(first !== second)
-        #expect(first.feature == second.feature)
-        #expect(first.service == second.service)
+        #expect(first.configuration.feature == second.configuration.feature)
+        #expect(first.configuration.service == second.configuration.service)
 
         let firstFake = FakeBluetoothPeripheral()
         let secondFake = FakeBluetoothPeripheral()

@@ -11,10 +11,7 @@ actor ServerRuntime {
         case stopping(Task<Void, Never>)
     }
 
-    private let service: PeripheralService
-    private let wheel: WheelConfiguration?
-    private let crankRevolutions: AnyAsyncSequence<CrankRevolution>?
-    private let location: ServerLocationConfiguration
+    private let configuration: ServerConfiguration
     private let servedSensorLocation: ServedSensorLocationBox?
 
     private var phase: Phase = .idle
@@ -47,17 +44,9 @@ actor ServerRuntime {
         await publishMeasurementSubscriberCountIfChanged(measurementSubscriberCountLatest)
     }
 
-    init(
-        service: PeripheralService,
-        wheel: WheelConfiguration?,
-        crankRevolutions: AnyAsyncSequence<CrankRevolution>?,
-        location: ServerLocationConfiguration,
-    ) {
-        self.service = service
-        self.wheel = wheel
-        self.crankRevolutions = crankRevolutions
-        self.location = location
-        switch location {
+    init(configuration: ServerConfiguration) {
+        self.configuration = configuration
+        switch configuration.location {
         case .multiple(let configuration):
             servedSensorLocation = ServedSensorLocationBox(initial: configuration.current)
         case .none, .staticLocation:
@@ -215,10 +204,7 @@ actor ServerRuntime {
         let startupTask = Task {
             let resolvedPeripheral = try self.resolvePeripheral(peripheral)
             return try await ServerSession.open(
-                service: service,
-                wheel: wheel,
-                crankRevolutions: crankRevolutions,
-                location: location,
+                configuration: configuration,
                 servedSensorLocation: servedSensorLocation,
                 peripheral: resolvedPeripheral,
                 clock: clock,

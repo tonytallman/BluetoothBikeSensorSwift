@@ -13,7 +13,7 @@ struct ServerTests {
 
         let calls = await fake.recordedCalls
         #expect(calls == [
-            .add(server.service),
+            .add(server.configuration.service),
             .startAdvertising(Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID])),
         ])
         #expect(await fake.isAdvertising)
@@ -93,7 +93,7 @@ struct ServerTests {
 
         let calls = await fake.recordedCalls
         #expect(calls == [
-            .add(server.service),
+            .add(server.configuration.service),
             .startAdvertising(Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID])),
         ])
         #expect(await fake.isAdvertising)
@@ -109,7 +109,7 @@ struct ServerTests {
         try await server.start(peripheral: fake)
 
         let calls = await fake.recordedCalls
-        #expect(calls.first == .add(server.service))
+        #expect(calls.first == .add(server.configuration.service))
         #expect(calls.contains(.startAdvertising(Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID]))))
         #expect(await fake.isAdvertising)
     }
@@ -125,7 +125,7 @@ struct ServerTests {
         try await server.start(peripheral: fake)
 
         let calls = await fake.recordedCalls
-        #expect(calls.first == .add(server.service))
+        #expect(calls.first == .add(server.configuration.service))
         #expect(calls.contains(.startAdvertising(Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID]))))
         #expect(await fake.isAdvertising)
     }
@@ -142,7 +142,7 @@ struct ServerTests {
         try await server.start(peripheral: fake)
 
         let calls = await fake.recordedCalls
-        #expect(calls.first == .add(server.service))
+        #expect(calls.first == .add(server.configuration.service))
         #expect(calls.contains(.startAdvertising(Advertisement(localName: nil, serviceUUIDs: [CSCS.serviceUUID]))))
         #expect(await fake.isAdvertising)
     }

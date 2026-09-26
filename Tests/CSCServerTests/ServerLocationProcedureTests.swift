@@ -69,7 +69,7 @@ struct ServerLocationProcedureTests {
             return false
         }
 
-        if case .multiple(let configuration) = server.location {
+        if case .multiple(let configuration) = server.configuration.location {
             #expect(configuration.current == .leftCrank)
         } else {
             Issue.record("Expected multiple location configuration")

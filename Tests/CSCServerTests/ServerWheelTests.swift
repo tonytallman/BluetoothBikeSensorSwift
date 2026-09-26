@@ -58,7 +58,7 @@ struct ServerWheelTests {
 
         let calls = await fake.recordedCalls
         #expect(calls.contains { call in
-            if case .add(server.service) = call { return true }
+            if case .add(server.configuration.service) = call { return true }
             return false
         })
     }
@@ -745,7 +745,7 @@ struct ServerWheelTests {
             }
             return false
         }
-        #expect(await fake.read(characteristicUUID: CSCS.featureUUID) == server.feature.encode())
+        #expect(await fake.read(characteristicUUID: CSCS.featureUUID) == server.configuration.feature.encode())
     }
 
     @Test func stopDuringAcceptedUpdateValueReturns() async throws {
@@ -828,7 +828,7 @@ struct ServerWheelTests {
             return false
         }
 
-        #expect(server.service.characteristics.contains { $0.uuid == CSCS.controlPointUUID })
+        #expect(server.configuration.service.characteristics.contains { $0.uuid == CSCS.controlPointUUID })
     }
 
     @Test func wheelCrankStaticStarts() async throws {
