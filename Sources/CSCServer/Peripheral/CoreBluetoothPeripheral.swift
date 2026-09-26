@@ -10,14 +10,12 @@ import Foundation
 /// calls are skipped: `stopAdvertising` does nothing, service removal updates bookkeeping only,
 /// and `respond` drops the request and throws.
 ///
-/// Queue crossing and actor isolation are documented in `project.md` (CSC Server).
 /// Manager queue: `com.bluetoothbikesensor.peripheral`.
 package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     private let queue = DispatchQueue(label: "com.bluetoothbikesensor.peripheral")
     private let peripheralManager: CBPeripheralManager
     private let delegateBridge: PeripheralDelegateBridge
-    nonisolated(unsafe) private var addContinuation: CheckedContinuation<Void, Error>?
-    nonisolated(unsafe) private var advertisingContinuation: CheckedContinuation<Void, Error>?
+    private let startupContinuations = StartupAsyncContinuations()
     private let delegateEvents: AsyncStream<PeripheralDelegateEvent>.Continuation
 
     private var state: BluetoothState = .unknown
@@ -48,7 +46,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     deinit {
         delegateBridge.clearHandler()
         delegateEvents.finish()
-        failInFlightContinuations(with: BluetoothPeripheralError.peripheralInvalidated)
+        startupContinuations.failAll(with: BluetoothPeripheralError.peripheralInvalidated)
     }
 
     package var currentState: BluetoothState {
@@ -65,24 +63,16 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         get async { lossCount }
     }
 
-    package var isAdvertising: Bool {
-        get async {
-            queue.sync {
-                peripheralManager.isAdvertising
-            }
-        }
-    }
-
     package func add(_ service: PeripheralService) async throws {
         guard state == .poweredOn else {
             throw BluetoothPeripheralError.notPoweredOn
         }
-        guard addContinuation == nil else {
+        guard !startupContinuations.hasAddInProgress else {
             throw BluetoothPeripheralError.addInProgress
         }
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            addContinuation = continuation
+            startupContinuations.setAddContinuation(continuation)
             queue.sync {
                 let (cbService, characteristicPairs) = Self.makeCBService(from: service)
                 delegateBridge.store(service: cbService, for: service.uuid)
@@ -114,12 +104,12 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         guard state == .poweredOn else {
             throw BluetoothPeripheralError.notPoweredOn
         }
-        guard advertisingContinuation == nil else {
+        guard !startupContinuations.hasAdvertisingInProgress else {
             throw BluetoothPeripheralError.advertisingInProgress
         }
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            advertisingContinuation = continuation
+            startupContinuations.setAdvertisingContinuation(continuation)
             queue.sync {
                 var advertisementData: [String: Any] = [:]
                 if !serviceUUIDs.isEmpty {
@@ -214,14 +204,14 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
             state = newState
             if newState != .poweredOn {
                 lossCount += 1
-                failInFlightContinuations(with: BluetoothPeripheralError.notPoweredOn)
+                startupContinuations.failAll(with: BluetoothPeripheralError.notPoweredOn)
                 delegateBridge.removeCentralsAndRequests()
             }
             await eventBroadcaster.yield(.stateUpdated(newState))
             await stateBroadcaster.yield(newState)
 
         case let .serviceAdded(serviceUUID, errorReason):
-            let continuation = takeAddContinuation()
+            let continuation = startupContinuations.takeAddContinuation()
             if let errorReason {
                 delegateBridge.removeService(for: serviceUUID)
                 continuation?.resume(
@@ -235,7 +225,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
             }
 
         case let .advertisingStarted(errorReason):
-            let continuation = takeAdvertisingContinuation()
+            let continuation = startupContinuations.takeAdvertisingContinuation()
             if let errorReason {
                 continuation?.resume(
                     throwing: BluetoothPeripheralError.advertisingFailed(reason: errorReason),
@@ -256,27 +246,6 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         case .readyToUpdateSubscribers:
             await eventBroadcaster.yield(.readyToUpdateSubscribers)
         }
-    }
-
-    nonisolated private func takeAddContinuation() -> CheckedContinuation<Void, Error>? {
-        let continuation = addContinuation
-        addContinuation = nil
-        return continuation
-    }
-
-    nonisolated private func takeAdvertisingContinuation() -> CheckedContinuation<Void, Error>? {
-        let continuation = advertisingContinuation
-        advertisingContinuation = nil
-        return continuation
-    }
-
-    nonisolated private func failInFlightContinuations(with error: Error) {
-        let add = addContinuation
-        let advertising = advertisingContinuation
-        addContinuation = nil
-        advertisingContinuation = nil
-        add?.resume(throwing: error)
-        advertising?.resume(throwing: error)
     }
 
     private static func makeCBService(
@@ -318,6 +287,59 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         if permissions.contains(.readable) { result.insert(.readable) }
         if permissions.contains(.writeable) { result.insert(.writeable) }
         return result
+    }
+}
+
+private final class StartupAsyncContinuations: @unchecked Sendable {
+    private let lock = NSLock()
+    private var addContinuation: CheckedContinuation<Void, Error>?
+    private var advertisingContinuation: CheckedContinuation<Void, Error>?
+
+    var hasAddInProgress: Bool {
+        lock.withLock { addContinuation != nil }
+    }
+
+    var hasAdvertisingInProgress: Bool {
+        lock.withLock { advertisingContinuation != nil }
+    }
+
+    func setAddContinuation(_ continuation: CheckedContinuation<Void, Error>) {
+        lock.withLock { addContinuation = continuation }
+    }
+
+    func setAdvertisingContinuation(_ continuation: CheckedContinuation<Void, Error>) {
+        lock.withLock { advertisingContinuation = continuation }
+    }
+
+    func takeAddContinuation() -> CheckedContinuation<Void, Error>? {
+        lock.withLock {
+            let continuation = addContinuation
+            addContinuation = nil
+            return continuation
+        }
+    }
+
+    func takeAdvertisingContinuation() -> CheckedContinuation<Void, Error>? {
+        lock.withLock {
+            let continuation = advertisingContinuation
+            advertisingContinuation = nil
+            return continuation
+        }
+    }
+
+    func failAll(with error: Error) {
+        let add = lock.withLock {
+            let continuation = addContinuation
+            addContinuation = nil
+            return continuation
+        }
+        let advertising = lock.withLock {
+            let continuation = advertisingContinuation
+            advertisingContinuation = nil
+            return continuation
+        }
+        add?.resume(throwing: error)
+        advertising?.resume(throwing: error)
     }
 }
 

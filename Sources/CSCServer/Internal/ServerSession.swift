@@ -79,6 +79,8 @@ actor ServerSession {
 
     private let servedSensorLocation: ServedSensorLocationBox?
 
+    // MARK: - State
+
     private var inboundTask: Task<Void, Never>?
     private var outboundPumpTask: Task<Void, Never>?
     private var wheelTask: Task<Void, Never>?
@@ -129,71 +131,7 @@ actor ServerSession {
         }
     }
 
-    // MARK: - Opening and closing
-
-    func waitUntil(_ condition: ServerTestCondition) async {
-        guard !isSatisfied(condition) else { return }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            testWaiters.append((condition, continuation))
-            resumeSatisfiedTestWaiters()
-        }
-    }
-
-    private func isSatisfied(_ condition: ServerTestCondition) -> Bool {
-        (closed && condition.isSatisfiedByClose) || isMet(condition)
-    }
-
-    private func isMet(_ condition: ServerTestCondition) -> Bool {
-        switch condition {
-        case let .measurementSubscribers(ids):
-            return !isPublishingSubscriberCount && measurementSubscribers == ids
-        case let .controlPointSubscribers(ids):
-            return controlPointSubscribers == ids
-        case let .acceptedMeasurementCount(atLeast: count):
-            return acceptedMeasurementCount >= count
-        case let .outboundCount(atLeast: count):
-            return outboundQueue.count >= count
-        case .readyToUpdateWaiterParked:
-            return readyToUpdateWaiter != nil
-        case .controlPointProcedureIdle:
-            return !procedureInProgress
-        case .measurementSubscriberWaiterParked:
-            return testWaiters.contains { entry in
-                if case .measurementSubscribers = entry.condition {
-                    return true
-                }
-                return false
-            }
-        case .bluetoothRecoveryIdle:
-            return !recoveryInProgress
-        }
-    }
-
-    private func resumeSatisfiedTestWaiters() {
-        var remaining: [(condition: ServerTestCondition, continuation: CheckedContinuation<Void, Never>)] = []
-        for entry in testWaiters {
-            if case .measurementSubscriberWaiterParked = entry.condition {
-                remaining.append(entry)
-                continue
-            }
-            if isSatisfied(entry.condition) {
-                entry.continuation.resume()
-            } else {
-                remaining.append(entry)
-            }
-        }
-        testWaiters = remaining
-
-        var afterSecondPass: [(condition: ServerTestCondition, continuation: CheckedContinuation<Void, Never>)] = []
-        for entry in testWaiters {
-            if isSatisfied(entry.condition) {
-                entry.continuation.resume()
-            } else {
-                afterSecondPass.append(entry)
-            }
-        }
-        testWaiters = afterSecondPass
-    }
+    // MARK: - Lifecycle
 
     func close() async {
         beginShutdown()
@@ -236,8 +174,6 @@ actor ServerSession {
         inboundTask = nil
         pendingInboundEvents.removeAll()
     }
-
-    // MARK: - Startup and teardown
 
     private func startup() async throws {
         try await waitForPoweredOn()
@@ -329,7 +265,7 @@ actor ServerSession {
         return isSuspended
     }
 
-    // MARK: - Radio recovery
+    // MARK: - Bluetooth loss and recovery
 
     private func handleBluetoothState(_ state: BluetoothState) async {
         let previous = lastBluetoothState
@@ -593,8 +529,7 @@ actor ServerSession {
                 return
             }
 
-            if closed {
-                drainOutboundQueueOnShutdown()
+            guard prepareHead(&item) else {
                 return
             }
 
@@ -734,6 +669,8 @@ actor ServerSession {
         procedureGeneration &+= 1
         resumeSatisfiedTestWaiters()
     }
+
+    // MARK: - Procedure timeout
 
     private func armProcedureTimeout() {
         procedureGeneration &+= 1
@@ -939,6 +876,8 @@ actor ServerSession {
         }
     }
 
+    // MARK: - Reads
+
     private func handleRead(_ request: PeripheralReadRequest) async {
         let (result, value) = readResponse(for: request)
         try? await peripheral.respond(
@@ -983,7 +922,7 @@ actor ServerSession {
         return (.success, Data(value.dropFirst(offset)))
     }
 
-    // MARK: - Control point
+    // MARK: - Control-point writes and procedures
 
     private func handleWrite(_ transaction: PeripheralWriteTransaction) async {
         guard transaction.requests.count == 1,
@@ -1088,19 +1027,11 @@ actor ServerSession {
             do {
                 try await wheel.delegate.setCumulativeWheelRevolutions(value)
             } catch {
-                if closed {
-                    endProcedure()
-                    return
-                }
                 indicate(
                     opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
                     value: .operationFailed,
                     to: centralID,
                 )
-                return
-            }
-            if closed {
-                endProcedure()
                 return
             }
             wheelGeneration &+= 1
@@ -1124,10 +1055,6 @@ actor ServerSession {
             do {
                 try await locations.delegate.update(kind)
             } catch {
-                if closed {
-                    endProcedure()
-                    return
-                }
                 indicate(
                     opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
                     value: .operationFailed,
@@ -1136,10 +1063,6 @@ actor ServerSession {
                 return
             }
             servedSensorLocation?.store(kind)
-            if closed {
-                endProcedure()
-                return
-            }
             indicate(
                 opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
                 value: .success,
@@ -1147,10 +1070,6 @@ actor ServerSession {
             )
 
         case (.requestSupportedSensorLocations, _, let locations?):
-            if closed {
-                endProcedure()
-                return
-            }
             indicate(
                 opcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
                 value: .success,
@@ -1165,6 +1084,8 @@ actor ServerSession {
             indicate(opcode: opcode(of: request), value: .opCodeNotSupported, to: centralID)
         }
     }
+
+    // MARK: - Subscriptions
 
     private func handleSubscription(_ change: SubscriptionChange) async {
         switch change {
@@ -1206,7 +1127,7 @@ actor ServerSession {
         }
     }
 
-    /// At most one control-point indication is queued per central.
+    /// At most one indication is queued, because `procedureInProgress` stays set until that indication is removed.
     private func dropQueuedIndications(for centralID: UUID) {
         guard let index = outboundQueue.firstIndex(where: { item in
             if case .indication(let indication) = item {
@@ -1227,7 +1148,7 @@ actor ServerSession {
         }
     }
 
-    // MARK: - Revolution loops
+    // MARK: - Measurement sources
 
     private func startRevolutionLoop<Element: Sendable>(
         _ sequence: AnyAsyncSequence<Element>?,
@@ -1245,6 +1166,73 @@ actor ServerSession {
             }
         }
     }
+
+    // MARK: - Test hooks
+
+    func waitUntil(_ condition: ServerTestCondition) async {
+        guard !isSatisfied(condition) else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            testWaiters.append((condition, continuation))
+            resumeSatisfiedTestWaiters()
+        }
+    }
+
+    private func isSatisfied(_ condition: ServerTestCondition) -> Bool {
+        (closed && condition.isSatisfiedByClose) || isMet(condition)
+    }
+
+    private func isMet(_ condition: ServerTestCondition) -> Bool {
+        switch condition {
+        case let .measurementSubscribers(ids):
+            return !isPublishingSubscriberCount && measurementSubscribers == ids
+        case let .controlPointSubscribers(ids):
+            return controlPointSubscribers == ids
+        case let .acceptedMeasurementCount(atLeast: count):
+            return acceptedMeasurementCount >= count
+        case let .outboundCount(atLeast: count):
+            return outboundQueue.count >= count
+        case .readyToUpdateWaiterParked:
+            return readyToUpdateWaiter != nil
+        case .controlPointProcedureIdle:
+            return !procedureInProgress
+        case .measurementSubscriberWaiterParked:
+            return testWaiters.contains { entry in
+                if case .measurementSubscribers = entry.condition {
+                    return true
+                }
+                return false
+            }
+        case .bluetoothRecoveryIdle:
+            return !recoveryInProgress
+        }
+    }
+
+    private func resumeSatisfiedTestWaiters() {
+        var remaining: [(condition: ServerTestCondition, continuation: CheckedContinuation<Void, Never>)] = []
+        for entry in testWaiters {
+            if case .measurementSubscriberWaiterParked = entry.condition {
+                remaining.append(entry)
+                continue
+            }
+            if isSatisfied(entry.condition) {
+                entry.continuation.resume()
+            } else {
+                remaining.append(entry)
+            }
+        }
+        testWaiters = remaining
+
+        var afterSecondPass: [(condition: ServerTestCondition, continuation: CheckedContinuation<Void, Never>)] = []
+        for entry in testWaiters {
+            if isSatisfied(entry.condition) {
+                entry.continuation.resume()
+            } else {
+                afterSecondPass.append(entry)
+            }
+        }
+        testWaiters = afterSecondPass
+    }
+
 
     private enum StartupStage {
         case addService

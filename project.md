@@ -104,7 +104,7 @@ BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and rea
 
 #### CSC Server (Phase 2–6)
 
-Phase 2 adds a type-state builder on `Server` that records CSCS feature bits, the GATT characteristic inventory, revolution sequences, and delegates. Phase 3 added crank `start()` / `stop()`. Phase 4 serves wheel configurations and Set Cumulative Value. Phase 5 serves multiple sensor locations. Phase 6 adds Bluetooth loss recovery, the 30-second procedure timeout, and the one-live-server rule.
+Phase 2 adds a type-state builder on `Server` that records CSCS feature bits, the GATT characteristic inventory, revolution sequences, and delegates. Phase 3 added crank `start()` / `stop()`. Phase 4 serves wheel configurations and Set Cumulative Value. Phase 5 serves multiple sensor locations. Phase 6 adds Bluetooth loss recovery and the 30-second procedure timeout.
 
 Characteristic order when present: CSC Measurement (`0x2A5B`), CSC Feature (`0x2A5C`), Sensor Location (`0x2A5D`), SC Control Point (`0x2A55`).
 

@@ -22,6 +22,7 @@ actor ServerLifecycle {
         initialLatest: 0,
     )
     private var sessionSubscriberCount = 0
+    private var publishedSubscriberCount: Int?
 
     func measurementSubscriberCount() async -> AsyncStream<Int> {
         await measurementSubscriberCountBroadcaster.makeStream()
@@ -30,6 +31,8 @@ actor ServerLifecycle {
     private func setMeasurementSubscriberCount(_ count: Int) async {
         sessionSubscriberCount = count
         guard case .running = phase else { return }
+        guard publishedSubscriberCount != count else { return }
+        publishedSubscriberCount = count
         await measurementSubscriberCountBroadcaster.yield(count)
     }
 
@@ -97,6 +100,7 @@ actor ServerLifecycle {
         }
         phase = .idle
         sessionSubscriberCount = 0
+        publishedSubscriberCount = nil
         await measurementSubscriberCountBroadcaster.yield(0)
     }
 
@@ -171,6 +175,7 @@ actor ServerLifecycle {
                 throw CancellationError()
             }
             phase = .running(session)
+            publishedSubscriberCount = nil
             await setMeasurementSubscriberCount(sessionSubscriberCount)
         } catch {
             if case .starting(let currentTask) = phase, currentTask == startupTask {

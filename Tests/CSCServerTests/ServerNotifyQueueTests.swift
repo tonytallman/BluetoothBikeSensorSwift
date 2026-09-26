@@ -165,6 +165,43 @@ struct ServerNotifyQueueTests {
         #expect(await delegate.recordedValues == [1, 2])
     }
 
+    @Test func unsubscribeDuringHeldFalseUpdateValueDropsHeadWithoutReady() async throws {
+        let wheel = YieldingWheelSequence()
+        let fake = FakeBluetoothPeripheral()
+        let server = Server.wheelRevolutions(wheel, setCumulativeWheelRevolutions: ScriptedCumulativeDelegate())
+            .build()
+        try await server.start(peripheral: fake)
+        let central = UUID()
+        await fake.subscribeMeasurement(server: server, centralID: central)
+
+        await fake.hold(.updateValue)
+        await wheel.yield(WheelRevolution(cumulativeRevolutions: 1, lastEventTime: 1))
+        await fake.waitUntilHeld(.updateValue)
+
+        await fake.emitSubscription(
+            .unsubscribed(
+                centralID: central,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.measurementUUID,
+            ),
+        )
+        await server.waitUntil(.measurementSubscribers([]))
+
+        await fake.setNextUpdateValueAccepted(false)
+        await fake.release(.updateValue)
+        await wheel.waitUntilNextEntered(count: 2)
+
+        await fake.subscribeMeasurement(server: server, centralID: central)
+        await fake.setNextUpdateValueAccepted(true)
+        let sample = WheelRevolution(cumulativeRevolutions: 2, lastEventTime: 2)
+        await wheel.yield(sample)
+        await fake.waitUntilUpdateValueCount(
+            1,
+            characteristic: CSCS.measurementUUID,
+            matching: { $0 == Self.wheelPayload(sample) },
+        )
+    }
+
     @Test func otherCentralUnsubscribeKeepsQueuedIndication() async throws {
         let (server, fake, wheel) = try await Self.startWheelMultipleServer()
         let writer = UUID()

@@ -31,7 +31,7 @@ package struct ServerConfiguration: Sendable {
     package let location: SensorLocationConfiguration
     package let feature: CSCFeature
     package let service: PeripheralService
-    package let includesControlPoint: Bool
+    let includesControlPoint: Bool
 
     init(
         wheel: WheelConfiguration?,

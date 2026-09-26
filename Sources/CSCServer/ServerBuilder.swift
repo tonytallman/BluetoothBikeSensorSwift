@@ -53,7 +53,7 @@ extension Server {
     ) -> ServerBuilder<
         ServerWheel.Selected,
         ServerCrank.Unselected,
-        ServerLocation.Unselected
+        ServerLocation.Unselected,
     >
     where Revolutions: AsyncSequence & Sendable,
           Revolutions.Element == WheelRevolution
@@ -72,7 +72,7 @@ extension Server {
     ) -> ServerBuilder<
         ServerWheel.Unselected,
         ServerCrank.Selected,
-        ServerLocation.Unselected
+        ServerLocation.Unselected,
     >
     where Revolutions: AsyncSequence & Sendable,
           Revolutions.Element == CrankRevolution
@@ -89,7 +89,7 @@ extension ServerBuilder where Wheel == ServerWheel.Unselected {
     ) -> ServerBuilder<
         ServerWheel.Selected,
         Crank,
-        Location
+        Location,
     >
     where Revolutions: AsyncSequence & Sendable,
           Revolutions.Element == WheelRevolution
@@ -112,7 +112,7 @@ extension ServerBuilder where Crank == ServerCrank.Unselected {
     ) -> ServerBuilder<
         Wheel,
         ServerCrank.Selected,
-        Location
+        Location,
     >
     where Revolutions: AsyncSequence & Sendable,
           Revolutions.Element == CrankRevolution
@@ -132,7 +132,7 @@ extension ServerBuilder where Location == ServerLocation.Unselected {
     ) -> ServerBuilder<
         Wheel,
         Crank,
-        ServerLocation.Static
+        ServerLocation.Static,
     > {
         ServerBuilder<Wheel, Crank, ServerLocation.Static>(
             wheel: wheel,
@@ -147,7 +147,7 @@ extension ServerBuilder where Location == ServerLocation.Unselected {
     ) -> ServerBuilder<
         Wheel,
         Crank,
-        ServerLocation.Multiple
+        ServerLocation.Multiple,
     > {
         let supported = delegate.supported
         let current = delegate.current
