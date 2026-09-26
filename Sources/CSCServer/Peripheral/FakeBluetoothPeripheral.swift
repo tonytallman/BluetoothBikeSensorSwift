@@ -26,6 +26,9 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         case respond(id: UUID, result: ATTResult, value: Data?)
     }
 
+    /// A one-shot arm/release gate: while `isHeld`, every matching call parks here instead of
+    /// completing. `release()` flips `isHeld` false and resumes every parked call at once, so
+    /// arming again requires a fresh `hold(_:)` call.
     private struct Hold {
         var isHeld = false
         var parked: [CheckedContinuation<Void, Never>] = []
@@ -223,11 +226,15 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         await stateBroadcaster.yield(newState)
     }
 
+    /// Tracks the request as outstanding so a later ``respond(to:with:value:)`` call for its id
+    /// is accepted, mirroring the production peripheral's request bookkeeping.
     package func emitRead(_ request: PeripheralReadRequest) async {
         outstandingRequestIDs.insert(request.id)
         await eventBroadcaster.yield(.read(request))
     }
 
+    /// Tracks the transaction as outstanding so a later ``respond(to:with:value:)`` call for its
+    /// id is accepted.
     package func emitWriteTransaction(_ transaction: PeripheralWriteTransaction) async {
         outstandingRequestIDs.insert(transaction.id)
         await eventBroadcaster.yield(.writeTransaction(transaction))
@@ -261,6 +268,10 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         mutateHold(call) { $0.release() }
     }
 
+    /// General-purpose test wait: parks until `isMet` returns `true`, re-evaluating every
+    /// predicate in `conditionWaiters` after each state-changing call. `isMet` runs on this
+    /// actor, so it may read actor-isolated state (e.g. `recordedCalls`) directly without
+    /// capturing `Sendable` data across the boundary.
     package func waitUntil(_ isMet: @escaping () -> Bool) async {
         if isMet() {
             return
@@ -285,6 +296,8 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         await waitUntil { self.recordedCalls.contains(where: predicate) }
     }
 
+    /// Lets a test block until the startup power wait has subscribed to ``stateUpdates`` before
+    /// calling ``setState(_:)``, so the injected state is not emitted before anyone is listening.
     package func waitForStateUpdatesSubscriber() async {
         await waitUntil { self.stateUpdatesSubscriberCount > 0 }
     }

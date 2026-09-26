@@ -1,3 +1,6 @@
+/// Type-erased `AsyncSequence` that boxes a base sequence whose iterator need not be `Sendable`
+/// (e.g. `AsyncStream`'s), so the builder can accept any `AsyncSequence & Sendable` source
+/// without requiring its iterator to cross actor boundaries on its own.
 package struct AnyAsyncSequence<Element: Sendable>: Sendable, AsyncSequence {
     package typealias AsyncIterator = Iterator
     private let makeIterator: @Sendable () -> Iterator

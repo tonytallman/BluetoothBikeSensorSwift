@@ -2,15 +2,21 @@ import Foundation
 
 /// CSC sensor server built from revolution sequences and optional location settings.
 public final class Server: Sendable {
+    /// GATT layout and revolution sources fixed at `build()` time; the same configuration is
+    /// (re-)published on every `start()` and Bluetooth-recovery cycle for this `Server`'s
+    /// lifetime.
     package let configuration: ServerConfiguration
 
     private let lifecycle: ServerLifecycle
 
+    /// Called only by `ServerBuilder.build()`; nothing else constructs a `Server` directly.
     internal init(configuration: ServerConfiguration) {
         self.configuration = configuration
         lifecycle = ServerLifecycle(configuration: configuration)
     }
 
+    /// Schedules teardown in the background so a released `Server` still stops advertising, even
+    /// though nothing awaits this task.
     deinit {
         let lifecycle = lifecycle
         Task {
