@@ -3,7 +3,7 @@ import CoreBluetooth
 #endif
 import Foundation
 
-actor ServerRuntime {
+actor ServerLifecycle {
     private enum Phase {
         case idle
         case starting(Task<ServerSession, Error>)
