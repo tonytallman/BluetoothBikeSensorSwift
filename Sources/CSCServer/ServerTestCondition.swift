@@ -1,6 +1,6 @@
 import Foundation
 
-package enum ServerTestCondition: Sendable, Equatable {
+package enum ServerTestCondition: Sendable {
     case measurementSubscribers(Set<UUID>)
     case controlPointSubscribers(Set<UUID>)
     case acceptedMeasurementCount(atLeast: Int)
@@ -10,7 +10,7 @@ package enum ServerTestCondition: Sendable, Equatable {
     case measurementSubscriberWaiterParked
     case bluetoothRecoveryIdle
 
-    package var isSatisfiedByClose: Bool {
+    var isSatisfiedByClose: Bool {
         switch self {
         case .measurementSubscribers,
              .controlPointSubscribers,

@@ -16,6 +16,13 @@ package enum SensorLocationConfiguration: Sendable {
     case none
     case staticLocation(SensorLocationKind)
     case multiple(MultipleSensorLocationsConfiguration)
+
+    var multipleLocations: MultipleSensorLocationsConfiguration? {
+        if case let .multiple(configuration) = self {
+            return configuration
+        }
+        return nil
+    }
 }
 
 package struct ServerConfiguration: Sendable {
@@ -24,8 +31,9 @@ package struct ServerConfiguration: Sendable {
     package let location: SensorLocationConfiguration
     package let feature: CSCFeature
     package let service: PeripheralService
+    package let includesControlPoint: Bool
 
-    package init(
+    init(
         wheel: WheelConfiguration?,
         crankRevolutions: AnyAsyncSequence<CrankRevolution>?,
         location: SensorLocationConfiguration,
@@ -42,6 +50,8 @@ package struct ServerConfiguration: Sendable {
         if case .multiple = location {
             feature.insert(.multipleSensorLocations)
         }
+
+        let includesControlPoint = wheel != nil || location.multipleLocations != nil
 
         let encodedFeature = feature.encode()
         var characteristics: [PeripheralCharacteristic] = [
@@ -83,13 +93,6 @@ package struct ServerConfiguration: Sendable {
             )
         }
 
-        let includesControlPoint = wheel != nil || {
-            if case .multiple = location {
-                return true
-            }
-            return false
-        }()
-
         if includesControlPoint {
             characteristics.append(
                 PeripheralCharacteristic(
@@ -105,20 +108,10 @@ package struct ServerConfiguration: Sendable {
         self.crankRevolutions = crankRevolutions
         self.location = location
         self.feature = feature
+        self.includesControlPoint = includesControlPoint
         self.service = PeripheralService(
             uuid: CSCS.serviceUUID,
             characteristics: characteristics,
         )
-    }
-
-    package var multipleLocations: MultipleSensorLocationsConfiguration? {
-        if case let .multiple(configuration) = location {
-            return configuration
-        }
-        return nil
-    }
-
-    package var includesControlPoint: Bool {
-        wheel != nil || multipleLocations != nil
     }
 }
