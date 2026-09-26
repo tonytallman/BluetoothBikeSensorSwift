@@ -179,33 +179,8 @@ extension ServerBuilder where Location == ServerLocation.Unselected {
     }
 }
 
-extension ServerBuilder
-where Wheel == ServerWheel.Selected, Crank == ServerCrank.Unselected {
-    /// Builds the server from a wheel-only configuration.
-    public consuming func build() -> Server {
-        ServerAssembly.assemble(
-            wheel: wheel,
-            crankRevolutions: crankRevolutions,
-            location: location,
-        )
-    }
-}
-
-extension ServerBuilder
-where Wheel == ServerWheel.Unselected, Crank == ServerCrank.Selected {
-    /// Builds the server from a crank-only configuration.
-    public consuming func build() -> Server {
-        ServerAssembly.assemble(
-            wheel: wheel,
-            crankRevolutions: crankRevolutions,
-            location: location,
-        )
-    }
-}
-
-extension ServerBuilder
-where Wheel == ServerWheel.Selected, Crank == ServerCrank.Selected {
-    /// Builds the server from a wheel-and-crank configuration.
+extension ServerBuilder {
+    /// Builds the server from the configured revolution sources and location settings.
     public consuming func build() -> Server {
         ServerAssembly.assemble(
             wheel: wheel,

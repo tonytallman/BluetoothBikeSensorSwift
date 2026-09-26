@@ -140,7 +140,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
                 }
                 if !advertisement.serviceUUIDs.isEmpty {
                     advertisementData[CBAdvertisementDataServiceUUIDsKey] = advertisement.serviceUUIDs.map {
-                        CBUUIDBridge(uuid: $0).cbUUID
+                        $0.cbUUID
                     }
                 }
                 peripheralManager.startAdvertising(advertisementData)
@@ -295,7 +295,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         from service: PeripheralService,
     ) -> (CBMutableService, [(uuid: UUID, characteristic: CBMutableCharacteristic)]) {
         let cbService = CBMutableService(
-            type: CBUUIDBridge(uuid: service.uuid).cbUUID,
+            type: service.uuid.cbUUID,
             primary: service.isPrimary,
         )
         let characteristicPairs = service.characteristics.map { characteristic in
@@ -308,7 +308,7 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
 
     private static func makeCBCharacteristic(from characteristic: PeripheralCharacteristic) -> CBMutableCharacteristic {
         CBMutableCharacteristic(
-            type: CBUUIDBridge(uuid: characteristic.uuid).cbUUID,
+            type: characteristic.uuid.cbUUID,
             properties: cbProperties(from: characteristic.properties),
             value: characteristic.value,
             permissions: cbPermissions(from: characteristic.permissions),
@@ -543,7 +543,7 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
-        guard let serviceUUID = CBUUIDBridge.foundationUUID(from: service.uuid) else {
+        guard let serviceUUID = service.uuid.foundationUUID else {
             return
         }
         emit(.serviceAdded(serviceUUID: serviceUUID, errorReason: error?.localizedDescription))
@@ -561,8 +561,8 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         let characteristic = request.characteristic
         guard
             let service = characteristic.service,
-            let serviceUUID = CBUUIDBridge.foundationUUID(from: service.uuid),
-            let characteristicUUID = CBUUIDBridge.foundationUUID(from: characteristic.uuid)
+            let serviceUUID = service.uuid.foundationUUID,
+            let characteristicUUID = characteristic.uuid.foundationUUID
         else {
             peripheral.respond(to: request, withResult: .invalidHandle)
             return
@@ -599,8 +599,8 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
             let characteristic = request.characteristic
             guard
                 let service = characteristic.service,
-                let serviceUUID = CBUUIDBridge.foundationUUID(from: service.uuid),
-                let characteristicUUID = CBUUIDBridge.foundationUUID(from: characteristic.uuid)
+                let serviceUUID = service.uuid.foundationUUID,
+                let characteristicUUID = characteristic.uuid.foundationUUID
             else {
                 peripheral.respond(to: firstRequest, withResult: .invalidHandle)
                 return
@@ -640,8 +640,8 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
 
         guard
             let service = characteristic.service,
-            let serviceUUID = CBUUIDBridge.foundationUUID(from: service.uuid),
-            let characteristicUUID = CBUUIDBridge.foundationUUID(from: characteristic.uuid)
+            let serviceUUID = service.uuid.foundationUUID,
+            let characteristicUUID = characteristic.uuid.foundationUUID
         else {
             return
         }
@@ -668,8 +668,8 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
 
         guard
             let service = characteristic.service,
-            let serviceUUID = CBUUIDBridge.foundationUUID(from: service.uuid),
-            let characteristicUUID = CBUUIDBridge.foundationUUID(from: characteristic.uuid)
+            let serviceUUID = service.uuid.foundationUUID,
+            let characteristicUUID = characteristic.uuid.foundationUUID
         else {
             return
         }
@@ -713,6 +713,25 @@ private extension BluetoothState {
         @unknown default:
             self = .unknown
         }
+    }
+}
+
+private extension UUID {
+    var cbUUID: CBUUID {
+        CBUUID(nsuuid: self)
+    }
+}
+
+private extension CBUUID {
+    var foundationUUID: UUID? {
+        let uuidString = uuidString
+        if uuidString.count == 4 {
+            return UUID(uuidString: "0000\(uuidString)-0000-1000-8000-00805F9B34FB")
+        }
+        if uuidString.count == 8 {
+            return UUID(uuidString: "\(uuidString)-0000-1000-8000-00805F9B34FB")
+        }
+        return UUID(uuidString: uuidString)
     }
 }
 #endif
