@@ -435,38 +435,38 @@ struct FakeBluetoothPeripheralTests {
         let service = Self.sampleService()
         let serviceUUIDs = [service.uuid]
 
-        await fake.holdNextAdd()
+        await fake.hold(.add)
         let offAdd = Task { try await fake.add(service) }
-        await fake.waitUntilAddHeld()
+        await fake.waitUntilHeld(.add)
         await fake.setState(.poweredOff)
-        await fake.releaseAdd()
+        await fake.release(.add)
         await #expect(throws: BluetoothPeripheralError.notPoweredOn) {
             try await offAdd.value
         }
 
         await fake.setState(.poweredOn)
-        await fake.holdNextAdvertise()
+        await fake.hold(.advertise)
         let offAdvertise = Task { try await fake.startAdvertising(serviceUUIDs: serviceUUIDs) }
-        await fake.waitUntilAdvertiseHeld()
+        await fake.waitUntilHeld(.advertise)
         await fake.setState(.poweredOff)
-        await fake.releaseAdvertise()
+        await fake.release(.advertise)
         await #expect(throws: BluetoothPeripheralError.notPoweredOn) {
             try await offAdvertise.value
         }
         #expect(await fake.recordedCalls.isEmpty)
 
         await fake.setState(.poweredOn)
-        await fake.holdNextAdd()
+        await fake.hold(.add)
         let onAdd = Task { try await fake.add(service) }
-        await fake.waitUntilAddHeld()
+        await fake.waitUntilHeld(.add)
         #expect(await fake.recordedCalls.isEmpty)
-        await fake.releaseAdd()
+        await fake.release(.add)
         try await onAdd.value
 
-        await fake.holdNextAdvertise()
+        await fake.hold(.advertise)
         let onAdvertise = Task { try await fake.startAdvertising(serviceUUIDs: serviceUUIDs) }
-        await fake.waitUntilAdvertiseHeld()
-        await fake.releaseAdvertise()
+        await fake.waitUntilHeld(.advertise)
+        await fake.release(.advertise)
         try await onAdvertise.value
 
         #expect(await fake.recordedCalls == [.add(service), .startAdvertising(serviceUUIDs: serviceUUIDs)])
@@ -480,7 +480,7 @@ struct FakeBluetoothPeripheralTests {
         let characteristicUUID = service.characteristics[0].uuid
         let value = Data([0x10])
 
-        await fake.holdNextUpdateValue()
+        await fake.hold(.updateValue)
         let update = Task {
             try await fake.updateValue(
                 value,
@@ -489,7 +489,7 @@ struct FakeBluetoothPeripheralTests {
                 onSubscribedCentrals: nil,
             )
         }
-        await fake.waitUntilUpdateValueHeld()
+        await fake.waitUntilHeld(.updateValue)
         let expectedCall = FakeBluetoothPeripheral.RecordedCall.updateValue(
             value: value,
             serviceUUID: service.uuid,
@@ -499,7 +499,7 @@ struct FakeBluetoothPeripheralTests {
         #expect(await fake.recordedCalls == [.add(service), expectedCall])
 
         await fake.setNextUpdateValueAccepted(false)
-        await fake.releaseUpdateValue()
+        await fake.release(.updateValue)
         #expect(try await update.value == false)
     }
 

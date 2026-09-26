@@ -35,14 +35,14 @@ struct ServerRadioStateTests {
     @Test func powerLossDuringAdvertiseThrowsNotPoweredOn() async throws {
         let fake = FakeBluetoothPeripheral()
         let server = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
-        await fake.holdNextAdvertise()
+        await fake.hold(.advertise)
 
         let startTask = Task {
             try await server.start(peripheral: fake)
         }
-        await fake.waitUntilAdvertiseHeld()
+        await fake.waitUntilHeld(.advertise)
         await fake.setState(.poweredOff)
-        await fake.releaseAdvertise()
+        await fake.release(.advertise)
 
         await #expect(throws: ServerError.notPoweredOn) {
             try await startTask.value
@@ -57,14 +57,14 @@ struct ServerRadioStateTests {
     @Test func powerLossDuringAddThrowsNotPoweredOn() async throws {
         let fake = FakeBluetoothPeripheral()
         let server = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
-        await fake.holdNextAdd()
+        await fake.hold(.add)
 
         let startTask = Task {
             try await server.start(peripheral: fake)
         }
-        await fake.waitUntilAddHeld()
+        await fake.waitUntilHeld(.add)
         await fake.setState(.poweredOff)
-        await fake.releaseAdd()
+        await fake.release(.add)
 
         await #expect(throws: ServerError.notPoweredOn) {
             try await startTask.value
@@ -117,13 +117,13 @@ struct ServerRadioStateTests {
         let central = UUID()
         await fake.subscribeMeasurement(server: server, centralID: central)
 
-        await fake.holdNextUpdateValue()
+        await fake.hold(.updateValue)
         await wheel.yield(WheelRevolution(cumulativeRevolutions: 100, lastEventTime: 1))
-        await fake.waitUntilUpdateValueHeld()
+        await fake.waitUntilHeld(.updateValue)
 
         await fake.setState(.poweredOff)
         await server.waitUntil(.measurementSubscribers([]))
-        await fake.releaseUpdateValue()
+        await fake.release(.updateValue)
         await wheel.waitUntilNextEntered(count: 2)
 
         await fake.setState(.poweredOn)
@@ -292,17 +292,17 @@ struct ServerRadioStateTests {
         let fake = FakeBluetoothPeripheral()
         let server = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
         try await server.start(peripheral: fake)
-        await fake.holdNextAdvertise()
+        await fake.hold(.advertise)
 
         await fake.setState(.poweredOff)
         await fake.setState(.poweredOn)
-        await fake.waitUntilAdvertiseHeld()
+        await fake.waitUntilHeld(.advertise)
 
         let stopTask = Task {
             await server.stop()
         }
         await fake.waitUntilCallCount(2, matching: isRemoveService)
-        await fake.releaseAdvertise()
+        await fake.release(.advertise)
         await stopTask.value
 
         #expect(await fake.isAdvertising == false)
@@ -346,15 +346,15 @@ struct ServerRadioStateTests {
     @Test func lossAndReturnDuringStartupFailsStart() async throws {
         let fake = FakeBluetoothPeripheral()
         let server = Server.crankRevolutions(NeverYieldingCrankSequence()).build()
-        await fake.holdNextAdvertise()
+        await fake.hold(.advertise)
 
         let startTask = Task {
             try await server.start(peripheral: fake)
         }
-        await fake.waitUntilAdvertiseHeld()
+        await fake.waitUntilHeld(.advertise)
         await fake.setState(.poweredOff)
         await fake.setState(.poweredOn)
-        await fake.releaseAdvertise()
+        await fake.release(.advertise)
 
         await #expect(throws: ServerError.notPoweredOn) {
             try await startTask.value

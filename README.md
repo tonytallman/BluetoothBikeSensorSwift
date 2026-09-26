@@ -236,7 +236,7 @@ Revolution sources are any `AsyncSequence & Sendable` of `WheelRevolution` or `C
 - Entry points: `Server.wheelRevolutions(_:setCumulativeWheelRevolutions:)` and `Server.crankRevolutions(_:)`.
 - Chain methods: `wheelRevolutions(_:setCumulativeWheelRevolutions:)`, `crankRevolutions(_:)`, `staticSensorLocation(_:)`, `multipleSensorLocations(_:)`, then `build()`.
 - Static and multiple sensor locations are mutually exclusive; the type-state builder rejects both at compile time.
-- Wheel data always requires a `CumulativeWheelRevolutionsDelegate` delegate.
+- Wheel data always requires a `CumulativeWheelRevolutionsDelegate`.
 - Start Sensor Calibration is not supported.
 - `Server` has no public initializer.
 
@@ -320,7 +320,7 @@ If Bluetooth leaves the powered-on state after `start()` returns, the server sus
 
 Servers with wheel data or multiple sensor locations include SC Control Point (`0x2A55`) and handle three procedures:
 
-- Set Cumulative Value (`0x01`) calls your `CumulativeWheelRevolutionsDelegate` delegate.
+- Set Cumulative Value (`0x01`) calls your `CumulativeWheelRevolutionsDelegate`.
 - Update Sensor Location (`0x03`) calls your `MultipleSensorLocationsDelegate`.
 - Request Supported Sensor Locations (`0x04`) answers from the list captured at `build()`.
 

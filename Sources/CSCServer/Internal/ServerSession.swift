@@ -25,7 +25,7 @@ actor ServerSession {
         var producerContinuation: CheckedContinuation<Void, Never>?
     }
 
-    private struct IndicationItem {
+    private struct QueuedIndication {
         let id: UUID
         let payload: Data
         let centralID: UUID
@@ -33,31 +33,31 @@ actor ServerSession {
 
     private enum OutboundItem {
         case measurement(QueuedMeasurement)
-        case indication(IndicationItem)
+        case indication(QueuedIndication)
     }
 
     private let configuration: ServerConfiguration
     private let peripheral: any BluetoothPeripheral
     private let clock: any ServerClock
-    private let onMeasurementSubscriberCountChange: (@Sendable (Int) async -> Void)?
+    private let onMeasurementSubscriberCountChange: @Sendable (Int) async -> Void
 
     private var publishStage: PublishStage = .none
-    private var advertisingActive = false
     private var closed = false
     private var measurementSubscribers: Set<UUID> = []
     private var controlPointSubscribers: Set<UUID> = []
     private var testWaiters: [(condition: ServerTestCondition, continuation: CheckedContinuation<Void, Never>)] = []
 
-    private var startLossCount = 0
+    private var powerLossCountAtStartup = 0
     private var isSuspended = false
-    private var radioLossEpoch: UInt64 = 0
-    private var lastRadioState: BluetoothState = .poweredOn
+    private var suspensionEpoch: UInt64 = 0
+    private var lastBluetoothState: BluetoothState = .poweredOn
+    private var isPublishingSubscriberCount = false
     private var recoveryInProgress = false
 
     private var isReadyToUpdate = false
     private var readyToUpdateWaiter: CheckedContinuation<Void, Never>?
 
-    private var startupGateOpen = false
+    private var isStartupComplete = false
     private var pendingInboundEvents: [PeripheralEvent] = []
 
     private var wheelCache: WheelRevolution?
@@ -90,7 +90,7 @@ actor ServerSession {
         servedSensorLocation: ServedSensorLocationBox?,
         peripheral: any BluetoothPeripheral,
         clock: any ServerClock,
-        onMeasurementSubscriberCountChange: (@Sendable (Int) async -> Void)? = nil,
+        onMeasurementSubscriberCountChange: @escaping @Sendable (Int) async -> Void,
     ) {
         self.configuration = configuration
         self.servedSensorLocation = servedSensorLocation
@@ -104,7 +104,7 @@ actor ServerSession {
         servedSensorLocation: ServedSensorLocationBox?,
         peripheral: any BluetoothPeripheral,
         clock: any ServerClock,
-        onMeasurementSubscriberCountChange: (@Sendable (Int) async -> Void)? = nil,
+        onMeasurementSubscriberCountChange: @escaping @Sendable (Int) async -> Void,
     ) async throws -> ServerSession {
         let session = ServerSession(
             configuration: configuration,
@@ -129,6 +129,8 @@ actor ServerSession {
         }
     }
 
+    // MARK: - Opening and closing
+
     func waitUntil(_ condition: ServerTestCondition) async {
         guard !isSatisfied(condition) else { return }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -144,7 +146,7 @@ actor ServerSession {
     private func isMet(_ condition: ServerTestCondition) -> Bool {
         switch condition {
         case let .measurementSubscribers(ids):
-            return measurementSubscribers == ids
+            return !isPublishingSubscriberCount && measurementSubscribers == ids
         case let .controlPointSubscribers(ids):
             return controlPointSubscribers == ids
         case let .acceptedMeasurementCount(atLeast: count):
@@ -202,7 +204,7 @@ actor ServerSession {
     private func beginShutdown() {
         closed = true
         pendingInboundEvents.removeAll()
-        wakeReadyToUpdateWaiterWithoutLatch()
+        resumeReadyToUpdateWaiter()
         resumeOutboundQueueWaiter()
         resumeSatisfiedTestWaiters()
     }
@@ -235,9 +237,11 @@ actor ServerSession {
         pendingInboundEvents.removeAll()
     }
 
+    // MARK: - Startup and teardown
+
     private func startup() async throws {
         try await waitForPoweredOn()
-        startLossCount = await peripheral.powerLossCount
+        powerLossCountAtStartup = await peripheral.powerLossCount
 
         let eventStream = await peripheral.events
         inboundTask = spawnInboundTask(stream: eventStream)
@@ -255,31 +259,28 @@ actor ServerSession {
 
         do {
             try await peripheral.startAdvertising(serviceUUIDs: [configuration.service.uuid])
-            advertisingActive = true
         } catch {
-            try? await peripheral.removeService(uuid: configuration.service.uuid)
-            publishStage = .none
             throw serverError(from: error, during: .startAdvertising)
         }
+        publishStage = .advertising
 
         if closed || Task.isCancelled {
             throw CancellationError()
         }
 
         // A loss during startup fails start() even if power came back before the calls finished.
-        if await peripheral.powerLossCount != startLossCount {
+        if await peripheral.powerLossCount != powerLossCountAtStartup {
             throw ServerError.notPoweredOn
         }
-        publishStage = .advertising
 
         outboundPumpTask = spawnOutboundPumpTask()
         await drainPendingInboundEvents()
         if closed || Task.isCancelled {
             throw CancellationError()
         }
-        startCrankLoopIfNeeded()
-        startWheelLoopIfNeeded()
-        startupGateOpen = true
+        crankTask = startRevolutionLoop(configuration.crankRevolutions, as: { .crank($0) })
+        wheelTask = startRevolutionLoop(configuration.wheel?.revolutions, as: { .wheel($0) })
+        isStartupComplete = true
         await notifyMeasurementSubscriberCount()
     }
 
@@ -296,13 +297,12 @@ actor ServerSession {
     private func rollbackStartup() async {
         beginShutdown()
         await stopTasks()
-        await tearDown(stoppingAdvertising: advertisingActive)
+        await tearDown(stoppingAdvertising: publishStage == .advertising)
     }
 
     private func tearDown(stoppingAdvertising: Bool) async {
         if stoppingAdvertising {
             await peripheral.stopAdvertising()
-            advertisingActive = false
         }
 
         if publishStage != .none {
@@ -318,7 +318,9 @@ actor ServerSession {
     }
 
     private func notifyMeasurementSubscriberCount() async {
-        await onMeasurementSubscriberCountChange?(measurementSubscribers.count)
+        isPublishingSubscriberCount = true
+        await onMeasurementSubscriberCountChange(measurementSubscribers.count)
+        isPublishingSubscriberCount = false
     }
 
     /// Settles any recovery already in progress before answering.
@@ -327,9 +329,11 @@ actor ServerSession {
         return isSuspended
     }
 
-    private func handleRadioState(_ state: BluetoothState) async {
-        let previous = lastRadioState
-        lastRadioState = state
+    // MARK: - Radio recovery
+
+    private func handleBluetoothState(_ state: BluetoothState) async {
+        let previous = lastBluetoothState
+        lastBluetoothState = state
         guard state == .poweredOn else {
             if !isSuspended {
                 await suspendForRadioLoss()
@@ -348,11 +352,11 @@ actor ServerSession {
 
     private func suspendForRadioLoss() async {
         isSuspended = true
-        radioLossEpoch &+= 1
+        suspensionEpoch &+= 1
         measurementSubscribers.removeAll()
         controlPointSubscribers.removeAll()
         isReadyToUpdate = false
-        wakeReadyToUpdateWaiterWithoutLatch()
+        resumeReadyToUpdateWaiter()
         await notifyMeasurementSubscriberCount()
         resumeSatisfiedTestWaiters()
     }
@@ -401,7 +405,6 @@ actor ServerSession {
         }
 
         publishStage = .advertising
-        advertisingActive = true
         isReadyToUpdate = false
         isSuspended = false
     }
@@ -412,6 +415,8 @@ actor ServerSession {
         }
         return stamp != wheelGeneration
     }
+
+    // MARK: - Outbound pump
 
     private func spawnOutboundPumpTask() -> Task<Void, Never> {
         Task {
@@ -439,7 +444,7 @@ actor ServerSession {
             case .measurement:
                 await processQueuedMeasurement()
             case .indication:
-                await processIndicationItem()
+                await processQueuedIndication()
             }
         }
         if closed {
@@ -464,19 +469,16 @@ actor ServerSession {
         }
     }
 
-    private func wakeReadyToUpdateWaiterWithoutLatch() {
+    private func resumeReadyToUpdateWaiter() {
         if let waiter = readyToUpdateWaiter {
             readyToUpdateWaiter = nil
             waiter.resume()
         }
     }
 
-    private func prepareHeadForSend(_ item: QueuedMeasurement) -> StaleHeadResolution {
+    private func resolveStaleHead(_ item: QueuedMeasurement) -> StaleHeadResolution {
         guard isStaleWheelPayload(item) else {
             return .send(item)
-        }
-        if case .wheel = item.sample {
-            return .removed
         }
         guard case let .crank(crank) = item.sample,
               let payload = CSCMeasurement(
@@ -493,10 +495,28 @@ actor ServerSession {
         return .send(updated)
     }
 
-    private func finishHeadMeasurement(_ item: inout QueuedMeasurement, recordAcceptance: Bool) {
-        if recordAcceptance {
-            recordAcceptedMeasurement(item)
+    @discardableResult
+    private func prepareHead(_ item: inout QueuedMeasurement) -> Bool {
+        if closed {
+            finishHeadMeasurement(&item)
+            drainOutboundQueueOnShutdown()
+            return false
         }
+        if measurementSubscribers.isEmpty {
+            finishHeadMeasurement(&item)
+            return false
+        }
+        switch resolveStaleHead(item) {
+        case .removed:
+            finishHeadMeasurement(&item)
+            return false
+        case .send(let current):
+            item = current
+            return true
+        }
+    }
+
+    private func finishHeadMeasurement(_ item: inout QueuedMeasurement) {
         outboundQueue.removeFirst()
         resumeProducer(&item)
     }
@@ -532,13 +552,11 @@ actor ServerSession {
     }
 
     /// Returns `true` when the pump should stop processing this indication item.
-    private func dropIndicationIfCentralDeparted(_ indication: IndicationItem) -> Bool {
+    private func dropIndicationIfCentralDeparted(_ indication: QueuedIndication) -> Bool {
         guard !controlPointSubscribers.contains(indication.centralID) else {
             return false
         }
-        if removeHeadIndicationIfOwned(indication.id) {
-            endProcedure()
-        }
+        finishHeadIndication(indication.id)
         return true
     }
 
@@ -548,27 +566,12 @@ actor ServerSession {
         }
 
         while !Task.isCancelled {
-            if closed {
-                finishHeadMeasurement(&item, recordAcceptance: false)
-                drainOutboundQueueOnShutdown()
+            guard prepareHead(&item) else {
                 return
-            }
-
-            if measurementSubscribers.isEmpty {
-                finishHeadMeasurement(&item, recordAcceptance: false)
-                return
-            }
-
-            switch prepareHeadForSend(item) {
-            case .removed:
-                finishHeadMeasurement(&item, recordAcceptance: false)
-                return
-            case .send(let current):
-                item = current
             }
 
             isReadyToUpdate = false
-            let lossEpoch = radioLossEpoch
+            let lossEpoch = suspensionEpoch
             let accepted: Bool
             do {
                 accepted = try await peripheral.updateValue(
@@ -578,34 +581,21 @@ actor ServerSession {
                     onSubscribedCentrals: nil,
                 )
             } catch {
-                finishHeadMeasurement(&item, recordAcceptance: false)
+                finishHeadMeasurement(&item)
                 return
             }
 
             if accepted {
-                // A send that overlapped a radio loss reached no current subscriber.
-                let record = radioLossEpoch == lossEpoch
-                finishHeadMeasurement(&item, recordAcceptance: record)
+                if suspensionEpoch == lossEpoch {
+                    recordAcceptedMeasurement(item)
+                }
+                finishHeadMeasurement(&item)
                 return
             }
 
             if closed {
-                finishHeadMeasurement(&item, recordAcceptance: false)
                 drainOutboundQueueOnShutdown()
                 return
-            }
-
-            if measurementSubscribers.isEmpty {
-                finishHeadMeasurement(&item, recordAcceptance: false)
-                return
-            }
-
-            switch prepareHeadForSend(item) {
-            case .removed:
-                finishHeadMeasurement(&item, recordAcceptance: false)
-                return
-            case .send(let current):
-                item = current
             }
 
             await waitForReadyToUpdate()
@@ -633,7 +623,7 @@ actor ServerSession {
         resumeSatisfiedTestWaiters()
     }
 
-    private func processIndicationItem() async {
+    private func processQueuedIndication() async {
         guard case .indication(let indication) = outboundQueue.first else {
             return
         }
@@ -773,7 +763,7 @@ actor ServerSession {
             return
         }
         if removeIndication(id: indicationID) == true {
-            wakeReadyToUpdateWaiterWithoutLatch()
+            resumeReadyToUpdateWaiter()
         }
         endProcedure()
     }
@@ -789,7 +779,7 @@ actor ServerSession {
             endProcedure()
             return
         }
-        let item = IndicationItem(
+        let item = QueuedIndication(
             id: UUID(),
             payload: response.encode(),
             centralID: centralID,
@@ -803,13 +793,14 @@ actor ServerSession {
     private func indicate(
         opcode: UInt8,
         value: CSCControlPointResponseValue,
+        parameter: Data = Data(),
         to centralID: UUID,
     ) {
         enqueueIndication(
             CSCControlPointResponse(
                 requestOpcode: opcode,
                 value: value.rawValue,
-                parameter: Data(),
+                parameter: parameter,
             ),
             centralID: centralID,
         )
@@ -887,6 +878,8 @@ actor ServerSession {
     }
 
     /// The only consumer of `peripheral.events`. Handlers run one at a time in arrival order.
+    // MARK: - Inbound events
+
     private func spawnInboundTask(stream: AsyncStream<PeripheralEvent>) -> Task<Void, Never> {
         Task {
             for await event in stream {
@@ -902,7 +895,7 @@ actor ServerSession {
         if closed {
             return
         }
-        guard startupGateOpen else {
+        guard isStartupComplete else {
             pendingInboundEvents.append(event)
             return
         }
@@ -912,7 +905,7 @@ actor ServerSession {
     private func handleInbound(_ event: PeripheralEvent) async {
         switch event {
         case let .stateUpdated(state):
-            await handleRadioState(state)
+            await handleBluetoothState(state)
         case let .read(request):
             await handleRead(request)
         case let .writeTransaction(transaction):
@@ -925,9 +918,8 @@ actor ServerSession {
     }
 
     private func signalReadyToUpdate() {
-        if let waiter = readyToUpdateWaiter {
-            readyToUpdateWaiter = nil
-            waiter.resume()
+        if readyToUpdateWaiter != nil {
+            resumeReadyToUpdateWaiter()
         } else {
             isReadyToUpdate = true
         }
@@ -949,25 +941,25 @@ actor ServerSession {
 
     private func handleRead(_ request: PeripheralReadRequest) async {
         let (result, value) = readResponse(for: request)
-        do {
-            try await peripheral.respond(
-                to: request.id,
-                with: result,
-                value: value,
-            )
-        } catch is CancellationError {
-        } catch {
-        }
+        try? await peripheral.respond(
+            to: request.id,
+            with: result,
+            value: value,
+        )
     }
 
     private func readResponse(for request: PeripheralReadRequest) -> (ATTResult, Data?) {
-        guard request.serviceUUID == configuration.service.uuid,
-              configuration.service.characteristics.contains(where: { $0.uuid == request.characteristicUUID })
-        else {
+        guard request.serviceUUID == configuration.service.uuid else {
             return (.error(code: 0x0A), nil)
         }
 
-        if request.characteristicUUID == CSCS.sensorLocationUUID,
+        guard let characteristic = configuration.service.characteristics.first(where: {
+            $0.uuid == request.characteristicUUID
+        }) else {
+            return (.error(code: 0x0A), nil)
+        }
+
+        if characteristic.uuid == CSCS.sensorLocationUUID,
            case .multiple = configuration.location,
            let servedSensorLocation
         {
@@ -977,9 +969,7 @@ actor ServerSession {
             return offsetSlice(of: value, offset: request.offset)
         }
 
-        guard let characteristic = configuration.service.characteristics.first(where: { $0.uuid == request.characteristicUUID }),
-              let value = characteristic.value
-        else {
+        guard let value = characteristic.value else {
             return (.error(code: 0x02), nil)
         }
 
@@ -990,11 +980,10 @@ actor ServerSession {
         if offset < 0 || offset > value.count {
             return (.error(code: 0x07), nil)
         }
-        if offset == value.count {
-            return (.success, Data())
-        }
         return (.success, Data(value.dropFirst(offset)))
     }
+
+    // MARK: - Control point
 
     private func handleWrite(_ transaction: PeripheralWriteTransaction) async {
         guard transaction.requests.count == 1,
@@ -1057,15 +1046,11 @@ actor ServerSession {
     }
 
     private func respondWriteError(_ transactionID: UUID, code: UInt8) async {
-        do {
-            try await peripheral.respond(
-                to: transactionID,
-                with: .error(code: code),
-                value: nil,
-            )
-        } catch is CancellationError {
-        } catch {
-        }
+        try? await peripheral.respond(
+            to: transactionID,
+            with: .error(code: code),
+            value: nil,
+        )
     }
 
     private func opcode(of request: CSCControlPointRequest) -> UInt8 {
@@ -1091,127 +1076,94 @@ actor ServerSession {
             return configuration.wheel != nil
         case CSCControlPointOpCode.updateSensorLocation.rawValue,
              CSCControlPointOpCode.requestSupportedSensorLocations.rawValue:
-            return configuration.multipleLocations != nil
+            return configuration.location.multipleLocations != nil
         default:
             return false
         }
     }
 
     private func runProcedure(_ request: CSCControlPointRequest, centralID: UUID) async {
-        switch request {
-        case let .setCumulativeValue(value) where configuration.wheel != nil:
-            await runSetCumulativeProcedure(value: value, centralID: centralID)
-        case let .updateSensorLocation(assignedNumber) where configuration.multipleLocations != nil:
-            await runUpdateSensorLocationProcedure(
-                assignedNumber: assignedNumber,
-                centralID: centralID,
+        switch (request, configuration.wheel, configuration.location.multipleLocations) {
+        case let (.setCumulativeValue(value), wheel?, _):
+            do {
+                try await wheel.delegate.setCumulativeWheelRevolutions(value)
+            } catch {
+                if closed {
+                    endProcedure()
+                    return
+                }
+                indicate(
+                    opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
+                    value: .operationFailed,
+                    to: centralID,
+                )
+                return
+            }
+            if closed {
+                endProcedure()
+                return
+            }
+            wheelGeneration &+= 1
+            wheelCache = nil
+            indicate(
+                opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
+                value: .success,
+                to: centralID,
             )
-        case .requestSupportedSensorLocations where configuration.multipleLocations != nil:
-            await runRequestSupportedSensorLocationsProcedure(centralID: centralID)
-        case let .invalidParameter(opcode, _) where supportsProcedure(opcode):
+            resumeReadyToUpdateWaiter()
+
+        case let (.updateSensorLocation(assignedNumber), _, locations?):
+            guard let kind = locations.supported.first(where: { $0.assignedNumber == assignedNumber }) else {
+                indicate(
+                    opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
+                    value: .invalidParameter,
+                    to: centralID,
+                )
+                return
+            }
+            do {
+                try await locations.delegate.update(kind)
+            } catch {
+                if closed {
+                    endProcedure()
+                    return
+                }
+                indicate(
+                    opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
+                    value: .operationFailed,
+                    to: centralID,
+                )
+                return
+            }
+            servedSensorLocation?.store(kind)
+            if closed {
+                endProcedure()
+                return
+            }
+            indicate(
+                opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
+                value: .success,
+                to: centralID,
+            )
+
+        case (.requestSupportedSensorLocations, _, let locations?):
+            if closed {
+                endProcedure()
+                return
+            }
+            indicate(
+                opcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
+                value: .success,
+                parameter: Data(locations.supported.map(\.assignedNumber)),
+                to: centralID,
+            )
+
+        case let (.invalidParameter(opcode, _), _, _) where supportsProcedure(opcode):
             indicate(opcode: opcode, value: .invalidParameter, to: centralID)
+
         default:
             indicate(opcode: opcode(of: request), value: .opCodeNotSupported, to: centralID)
         }
-    }
-
-    private func runSetCumulativeProcedure(value: UInt32, centralID: UUID) async {
-        let delegate = configuration.wheel!.delegate
-        do {
-            try await delegate.setCumulativeWheelRevolutions(value)
-        } catch {
-            if closed {
-                endProcedure()
-                return
-            }
-            indicate(
-                opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
-                value: .operationFailed,
-                to: centralID,
-            )
-            return
-        }
-
-        if closed {
-            endProcedure()
-            return
-        }
-
-        // wheelGeneration wraps after UInt64.max; a stamp of 0 can match again.
-        wheelGeneration &+= 1
-        wheelCache = nil
-        indicate(
-            opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
-            value: .success,
-            to: centralID,
-        )
-        wakeReadyToUpdateWaiterWithoutLatch()
-    }
-
-    private func runUpdateSensorLocationProcedure(assignedNumber: UInt8, centralID: UUID) async {
-        guard let configuration = configuration.multipleLocations else {
-            endProcedure()
-            return
-        }
-
-        guard let kind = configuration.supported.first(where: { $0.assignedNumber == assignedNumber }) else {
-            indicate(
-                opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
-                value: .invalidParameter,
-                to: centralID,
-            )
-            return
-        }
-
-        let delegate = configuration.delegate
-        do {
-            try await delegate.update(kind)
-        } catch {
-            if closed {
-                endProcedure()
-                return
-            }
-            indicate(
-                opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
-                value: .operationFailed,
-                to: centralID,
-            )
-            return
-        }
-
-        servedSensorLocation?.store(kind)
-
-        if closed {
-            endProcedure()
-            return
-        }
-
-        indicate(
-            opcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
-            value: .success,
-            to: centralID,
-        )
-    }
-
-    private func runRequestSupportedSensorLocationsProcedure(centralID: UUID) async {
-        guard let configuration = configuration.multipleLocations else {
-            endProcedure()
-            return
-        }
-
-        if closed {
-            endProcedure()
-            return
-        }
-
-        enqueueIndication(
-            CSCControlPointResponse(
-                requestOpcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
-                value: CSCControlPointResponseValue.success.rawValue,
-                parameter: Data(configuration.supported.map(\.assignedNumber)),
-            ),
-            centralID: centralID,
-        )
     }
 
     private func handleSubscription(_ change: SubscriptionChange) async {
@@ -1254,47 +1206,42 @@ actor ServerSession {
         }
     }
 
+    /// At most one control-point indication is queued per central.
     private func dropQueuedIndications(for centralID: UUID) {
-        let ids = outboundQueue.compactMap { item -> UUID? in
-            if case .indication(let indication) = item, indication.centralID == centralID {
-                return indication.id
+        guard let index = outboundQueue.firstIndex(where: { item in
+            if case .indication(let indication) = item {
+                return indication.centralID == centralID
             }
+            return false
+        }), case .indication(let indication) = outboundQueue[index] else {
+            return
+        }
+        let isProcedureIndication = indication.id == procedureIndicationID
+        let wasHead = index == 0
+        outboundQueue.remove(at: index)
+        if wasHead {
+            endProcedure()
+            resumeReadyToUpdateWaiter()
+        } else if isProcedureIndication {
+            endProcedure()
+        }
+    }
+
+    // MARK: - Revolution loops
+
+    private func startRevolutionLoop<Element: Sendable>(
+        _ sequence: AnyAsyncSequence<Element>?,
+        as map: @escaping @Sendable (Element) -> RevolutionSample,
+    ) -> Task<Void, Never>? {
+        guard let sequence else {
             return nil
         }
-        for id in ids {
-            let isProcedureIndication = id == procedureIndicationID
-            guard let wasHead = removeIndication(id: id) else {
-                continue
-            }
-            if wasHead {
-                endProcedure()
-                wakeReadyToUpdateWaiterWithoutLatch()
-            } else if isProcedureIndication {
-                endProcedure()
-            }
-        }
-    }
-
-    private func startCrankLoopIfNeeded() {
-        guard let crankRevolutions = configuration.crankRevolutions else {
-            return
-        }
-        crankTask = Task {
-            var iterator = crankRevolutions.makeAsyncIterator()
-            while !Task.isCancelled, let revolution = try? await iterator.next() {
-                await self.emit(.crank(revolution))
-            }
-        }
-    }
-
-    private func startWheelLoopIfNeeded() {
-        guard let wheel = configuration.wheel else {
-            return
-        }
-        wheelTask = Task {
-            var iterator = wheel.revolutions.makeAsyncIterator()
-            while !Task.isCancelled, let revolution = try? await iterator.next() {
-                await self.emit(.wheel(revolution))
+        return Task {
+            do {
+                for try await element in sequence {
+                    await self.emit(map(element))
+                }
+            } catch {
             }
         }
     }

@@ -1,5 +1,4 @@
 import Foundation
-package import CSCWire
 
 /// CSC sensor server built from revolution sequences and optional location settings.
 public final class Server: Sendable {

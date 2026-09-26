@@ -21,23 +21,16 @@ actor ServerLifecycle {
         replaysLatest: true,
         initialLatest: 0,
     )
-    private var measurementSubscriberCount = 0
-    private var lastYieldedMeasurementSubscriberCount: Int?
+    private var sessionSubscriberCount = 0
 
     func measurementSubscriberCount() async -> AsyncStream<Int> {
         await measurementSubscriberCountBroadcaster.makeStream()
     }
 
     private func setMeasurementSubscriberCount(_ count: Int) async {
-        measurementSubscriberCount = count
+        sessionSubscriberCount = count
         guard case .running = phase else { return }
-        guard lastYieldedMeasurementSubscriberCount != count else { return }
-        lastYieldedMeasurementSubscriberCount = count
         await measurementSubscriberCountBroadcaster.yield(count)
-    }
-
-    private func replayMeasurementSubscriberCount() async {
-        await setMeasurementSubscriberCount(measurementSubscriberCount)
     }
 
     init(configuration: ServerConfiguration) {
@@ -103,8 +96,7 @@ actor ServerLifecycle {
             return
         }
         phase = .idle
-        measurementSubscriberCount = 0
-        lastYieldedMeasurementSubscriberCount = 0
+        sessionSubscriberCount = 0
         await measurementSubscriberCountBroadcaster.yield(0)
     }
 
@@ -113,11 +105,8 @@ actor ServerLifecycle {
             return
         }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            if finishStoppingEntryCount >= count {
-                continuation.resume()
-                return
-            }
             finishStoppingEntryCountWaiters.append((count, continuation))
+            resumeFinishStoppingEntryCountWaiters()
         }
     }
 
@@ -182,16 +171,9 @@ actor ServerLifecycle {
                 throw CancellationError()
             }
             phase = .running(session)
-            lastYieldedMeasurementSubscriberCount = nil
-            await replayMeasurementSubscriberCount()
+            await setMeasurementSubscriberCount(sessionSubscriberCount)
         } catch {
-            let stillOwnsStartup = {
-                if case .starting(let currentTask) = phase, currentTask == startupTask {
-                    return true
-                }
-                return false
-            }()
-            if stillOwnsStartup {
+            if case .starting(let currentTask) = phase, currentTask == startupTask {
                 await beginStopping(Self.teardown(after: startupTask))
             }
             throw error

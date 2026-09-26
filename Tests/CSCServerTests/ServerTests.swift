@@ -533,7 +533,7 @@ struct ServerTests {
             CrankRevolution(cumulativeRevolutions: 1, lastEventTime: 2),
         ])
         let fake = FakeBluetoothPeripheral()
-        await fake.holdNextAdvertise()
+        await fake.hold(.advertise)
         let server = Server.crankRevolutions(sequence).build()
 
         let startTask = Task {
@@ -554,7 +554,7 @@ struct ServerTests {
             ),
         )
 
-        await fake.releaseAdvertise()
+        await fake.release(.advertise)
         try await startTask.value
 
         await sequence.waitForNextRequest(count: 1)
@@ -719,14 +719,14 @@ struct ServerTests {
 
     @Test func stopDuringAdvertiseHoldCleansUpAndLaterStartSucceeds() async throws {
         let fake = FakeBluetoothPeripheral()
-        await fake.holdNextAdvertise()
+        await fake.hold(.advertise)
         let server = Server.crankRevolutions(EmptyCrankSequence()).build()
 
         let startTask = Task {
             try await server.start(peripheral: fake)
         }
 
-        await fake.waitUntilAdvertiseHeld()
+        await fake.waitUntilHeld(.advertise)
 
         let stopTask = Task {
             await server.stop()
@@ -736,7 +736,7 @@ struct ServerTests {
             if case .removeService = call { return true }
             return false
         }
-        await fake.releaseAdvertise()
+        await fake.release(.advertise)
 
         await stopTask.value
 

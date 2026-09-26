@@ -75,14 +75,14 @@ struct ServerProcedureTimeoutTests {
         let writer = UUID()
         await fake.subscribeControlPoint(server: server, centralID: writer)
 
-        await fake.holdNextUpdateValue()
+        await fake.hold(.updateValue)
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: setCumulativeValue(1))) == .success)
-        await fake.waitUntilUpdateValueHeld()
+        await fake.waitUntilHeld(.updateValue)
         await clock.waitUntilSleeperCount(1)
 
         await clock.advance(by: .seconds(30))
         await server.waitUntil(.controlPointProcedureIdle)
-        await fake.releaseUpdateValue()
+        await fake.release(.updateValue)
         await fake.emitReadyToUpdateSubscribers()
 
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: setCumulativeValue(2))) == .success)

@@ -44,11 +44,11 @@ struct ServerNotifyQueueTests {
         let server = Server.wheelRevolutions(NeverYieldingWheelSequence(), setCumulativeWheelRevolutions: delegate)
             .build()
 
-        await fake.holdNextAdvertise()
+        await fake.hold(.advertise)
         let startTask = Task {
             try await server.start(peripheral: fake)
         }
-        await fake.waitUntilAdvertiseHeld()
+        await fake.waitUntilHeld(.advertise)
 
         let writer = UUID()
         let readID = UUID()
@@ -69,14 +69,14 @@ struct ServerNotifyQueueTests {
             ),
         )
 
-        await fake.holdNextRespond()
-        await fake.releaseAdvertise()
-        await fake.waitUntilRespondHeld()
+        await fake.hold(.respond)
+        await fake.release(.advertise)
+        await fake.waitUntilHeld(.respond)
 
         let write = controlPointWrite(centralID: writer, value: setCumulativeValue(9))
         await fake.emitWriteTransaction(write)
 
-        await fake.releaseRespond()
+        await fake.release(.respond)
         try await startTask.value
         await fake.waitForRecordedCall { call in
             if case let .respond(id, _, _) = call {
@@ -148,13 +148,13 @@ struct ServerNotifyQueueTests {
         await fake.subscribeControlPoint(server: server, centralID: writer)
         let success = controlPointResponse(opcode: 0x01, value: 0x01)
 
-        await fake.holdNextUpdateValue()
+        await fake.hold(.updateValue)
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: setCumulativeValue(1))) == .success)
-        await fake.waitUntilUpdateValueHeld()
+        await fake.waitUntilHeld(.updateValue)
 
         await fake.unsubscribeControlPoint(centralID: writer)
         await server.waitUntil(.controlPointProcedureIdle)
-        await fake.releaseUpdateValue()
+        await fake.release(.updateValue)
 
         await fake.subscribeControlPoint(server: server, centralID: writer)
         #expect(await fake.writeControlPoint(controlPointWrite(centralID: writer, value: setCumulativeValue(2))) == .success)

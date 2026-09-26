@@ -50,6 +50,16 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
+    private struct RecordedCallWaiter {
+        let predicate: @Sendable (RecordedCall) -> Bool
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
+    private struct RecordedCallsWaiter {
+        let predicate: @Sendable ([RecordedCall]) -> Bool
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
     package enum HeldCall: Sendable {
         case add
         case advertise
@@ -75,16 +85,6 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
     private let eventBroadcaster = StreamBroadcaster<PeripheralEvent>()
-
-    private struct RecordedCallWaiter {
-        let predicate: @Sendable (RecordedCall) -> Bool
-        let continuation: CheckedContinuation<Void, Never>
-    }
-
-    private struct RecordedCallsWaiter {
-        let predicate: @Sendable ([RecordedCall]) -> Bool
-        let continuation: CheckedContinuation<Void, Never>
-    }
 
     private var recordedCallWaiters: [RecordedCallWaiter] = []
     private var recordedCallsWaiters: [RecordedCallsWaiter] = []
@@ -128,7 +128,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     package func add(_ service: PeripheralService) async throws {
         try requirePoweredOn()
 
-        if holds[.add]!.isHeld {
+        if holdState(.add).isHeld {
             await park(.add)
             try requirePoweredOn()
         }
@@ -158,7 +158,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     package func startAdvertising(serviceUUIDs: [UUID]) async throws {
         try requirePoweredOn()
 
-        if hold(.advertise).isHeld {
+        if holdState(.advertise).isHeld {
             await park(.advertise)
             try requirePoweredOn()
         }
@@ -192,7 +192,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
             throw BluetoothPeripheralError.notPoweredOn
         }
 
-        if hold(.respond).isHeld {
+        if holdState(.respond).isHeld {
             await park(.respond)
             try requirePoweredOn()
         }
@@ -221,7 +221,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
             ),
         )
 
-        if hold(.updateValue).isHeld {
+        if holdState(.updateValue).isHeld {
             await park(.updateValue)
         }
         return nextUpdateValueAccepted
@@ -271,7 +271,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         nextUpdateValueAccepted = accepted
     }
 
-    package func holdNext(_ call: HeldCall) {
+    package func hold(_ call: HeldCall) {
         mutateHold(call) { $0.isHeld = true }
     }
 
@@ -280,24 +280,13 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     }
 
     package func waitUntilHeld(_ call: HeldCall) async {
-        await waitUntilParked(call)
+        if !holdState(call).parked.isEmpty {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            mutateHold(call) { $0.parkedWaiters.append(continuation) }
+        }
     }
-
-    package func holdNextAdd() { holdNext(.add) }
-    package func releaseAdd() { release(.add) }
-    package func waitUntilAddHeld() async { await waitUntilHeld(.add) }
-
-    package func holdNextAdvertise() { holdNext(.advertise) }
-    package func releaseAdvertise() { release(.advertise) }
-    package func waitUntilAdvertiseHeld() async { await waitUntilHeld(.advertise) }
-
-    package func holdNextUpdateValue() { holdNext(.updateValue) }
-    package func releaseUpdateValue() { release(.updateValue) }
-    package func waitUntilUpdateValueHeld() async { await waitUntilHeld(.updateValue) }
-
-    package func holdNextRespond() { holdNext(.respond) }
-    package func releaseRespond() { release(.respond) }
-    package func waitUntilRespondHeld() async { await waitUntilHeld(.respond) }
 
     package func waitUntilEventSubscriberCount(_ count: Int) async {
         await eventBroadcaster.waitUntilSubscriberCount(count)
@@ -346,7 +335,7 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
-    private func hold(_ call: HeldCall) -> Hold {
+    private func holdState(_ call: HeldCall) -> Hold {
         holds[call]!
     }
 
@@ -359,15 +348,6 @@ package actor FakeBluetoothPeripheral: BluetoothPeripheral {
     private func park(_ call: HeldCall) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             mutateHold(call) { $0.park(continuation) }
-        }
-    }
-
-    private func waitUntilParked(_ call: HeldCall) async {
-        if !hold(call).parked.isEmpty {
-            return
-        }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            mutateHold(call) { $0.parkedWaiters.append(continuation) }
         }
     }
 
