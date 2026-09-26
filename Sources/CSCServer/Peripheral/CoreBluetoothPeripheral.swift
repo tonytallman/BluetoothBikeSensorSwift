@@ -113,16 +113,6 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
-    package func removeAllServices() async {
-        let callsManager = state == .poweredOn
-        queue.sync {
-            delegateBridge.removeAllServices()
-            if callsManager {
-                peripheralManager.removeAllServices()
-            }
-        }
-    }
-
     package func startAdvertising(_ advertisement: Advertisement) async throws {
         guard state == .poweredOn else {
             throw BluetoothPeripheralError.notPoweredOn
@@ -177,16 +167,11 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
             throw BluetoothPeripheralError.notPoweredOn
         }
 
-        switch (requestKind, result) {
-        case (.read, .success):
-            guard let value else {
-                throw BluetoothPeripheralError.missingReadValue
-            }
-        case (.read, .error), (.write, _):
-            guard value == nil else {
-                throw BluetoothPeripheralError.unexpectedResponseValue
-            }
-        }
+        try RespondPayloadValidation.validate(
+            requestKind: requestKind == .read ? .read : .write,
+            result: result,
+            value: value,
+        )
 
         try queue.sync {
             guard let request = delegateBridge.removeRequest(for: requestID) else {

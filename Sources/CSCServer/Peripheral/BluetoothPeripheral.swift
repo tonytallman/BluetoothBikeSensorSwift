@@ -32,7 +32,6 @@ package protocol BluetoothPeripheral: Sendable {
 
     func add(_ service: PeripheralService) async throws
     func removeService(uuid: UUID) async throws
-    func removeAllServices() async
 
     func startAdvertising(_ advertisement: Advertisement) async throws
     func stopAdvertising() async
