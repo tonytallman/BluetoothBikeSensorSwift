@@ -18,7 +18,6 @@ actor ServerRuntime {
     private let servedSensorLocation: ServedSensorLocationBox?
 
     private var phase: Phase = .idle
-    private var lease: (registry: LiveServerRegistry, token: UUID)?
     private var finishStoppingEntryCount = 0
     private var finishStoppingEntryCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
     private let measurementSubscriberCountBroadcaster = StreamBroadcaster<Int>(
@@ -69,15 +68,10 @@ actor ServerRuntime {
     func start(
         peripheral: (any BluetoothPeripheral)?,
         clock: any ServerClock,
-        liveServers: LiveServerRegistry,
     ) async throws {
-        guard case .idle = phase, lease == nil else {
+        guard case .idle = phase else {
             throw ServerError.alreadyStarted
         }
-        guard let token = liveServers.claim() else {
-            throw ServerError.alreadyStarted
-        }
-        lease = (registry: liveServers, token: token)
 
         try await withTaskCancellationHandler {
             try await performStart(peripheral: peripheral, clock: clock)
@@ -115,8 +109,7 @@ actor ServerRuntime {
         await finishStopping(task)
     }
 
-    /// Waits for `task`, then returns to idle and releases the live-server slot once, whichever
-    /// caller resumes first.
+    /// Waits for `task`, then returns to idle, whichever caller resumes first.
     private func finishStopping(_ task: Task<Void, Never>) async {
         finishStoppingEntryCount += 1
         resumeFinishStoppingEntryCountWaiters()
@@ -128,7 +121,6 @@ actor ServerRuntime {
         measurementSubscriberCountLatest = 0
         measurementSubscriberCountPublished = nil
         await publishMeasurementSubscriberCountIfChanged(0)
-        releaseLease()
     }
 
     func waitUntilFinishStoppingEntryCount(_ count: Int) async {
@@ -155,13 +147,6 @@ actor ServerRuntime {
             }
         }
         finishStoppingEntryCountWaiters = remaining
-    }
-
-    private func releaseLease() {
-        if let lease {
-            lease.registry.release(lease.token)
-            self.lease = nil
-        }
     }
 
     func waitForMeasurementSubscribers(_ ids: Set<UUID>) async {

@@ -38,7 +38,7 @@ struct ServerAlert: Identifiable, Equatable {
                 )
             case .alreadyStarted:
                 return ServerAlert(
-                    message: "Another server in this app is still running or stopping. Try again in a moment.",
+                    message: "The server is already running or still stopping. Try again in a moment.",
                     offersSettings: false,
                 )
             case let .publishFailed(reason):

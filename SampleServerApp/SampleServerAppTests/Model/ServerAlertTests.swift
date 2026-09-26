@@ -58,7 +58,7 @@ import Testing
             status: .poweredOn,
             authorization: .allowed,
         )
-        #expect(alert?.message.contains("Another server") == true)
+        #expect(alert?.message.contains("already running") == true)
     }
 
     @Test func publishFailedMessage() {
