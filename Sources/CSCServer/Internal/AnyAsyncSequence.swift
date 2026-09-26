@@ -33,7 +33,7 @@ package struct AnyAsyncSequence<Element: Sendable>: Sendable {
 /// Holds a base iterator that need not be `Sendable`, such as `AsyncStream.Iterator`.
 ///
 /// Each `makeAsyncIterator()` creates its own box. `ServerSession` iterates each box from exactly
-/// one task (`startCrankLoopIfNeeded` / `startWheelLoopIfNeeded`), so `next()` calls never overlap.
+/// one task (`startRevolutionLoop`), so `next()` calls never overlap.
 /// The iterator must not cross into a second task.
 private final class IteratorBox<Base: AsyncIteratorProtocol>: @unchecked Sendable where Base.Element: Sendable {
     private var base: Base

@@ -13,12 +13,16 @@ actor ServerSession {
         let value: Data?
     }
 
-    private struct MeasurementItem {
+    private enum RevolutionSample: Sendable {
+        case wheel(WheelRevolution)
+        case crank(CrankRevolution)
+    }
+
+    private struct QueuedMeasurement {
         var payload: Data
         var encodedWheelGeneration: UInt64?
-        let producedWheel: WheelRevolution?
-        let producedCrank: CrankRevolution?
-        var emitContinuation: CheckedContinuation<Void, Never>?
+        let sample: RevolutionSample
+        var producerContinuation: CheckedContinuation<Void, Never>?
     }
 
     private struct IndicationItem {
@@ -28,7 +32,7 @@ actor ServerSession {
     }
 
     private enum OutboundItem {
-        case measurement(MeasurementItem)
+        case measurement(QueuedMeasurement)
         case indication(IndicationItem)
     }
 
@@ -412,7 +416,7 @@ actor ServerSession {
         radioLost = false
     }
 
-    private func isStaleWheelPayload(_ item: MeasurementItem) -> Bool {
+    private func isStaleWheelPayload(_ item: QueuedMeasurement) -> Bool {
         guard let stamp = item.encodedWheelGeneration else {
             return false
         }
@@ -443,7 +447,7 @@ actor ServerSession {
 
             switch outboundQueue[0] {
             case .measurement:
-                await processMeasurementItem()
+                await processQueuedMeasurement()
             case .indication:
                 await processIndicationItem()
             }
@@ -488,23 +492,23 @@ actor ServerSession {
     }
 
     /// Returns `true` when the head was removed and the pump should return.
-    private func resolveStaleWheelHead(_ item: inout MeasurementItem) -> Bool {
+    private func resolveStaleWheelHead(_ item: inout QueuedMeasurement) -> Bool {
         guard isStaleWheelPayload(item) else {
             return false
         }
-        if item.producedWheel != nil {
+        if case .wheel = item.sample {
             outboundQueue.removeFirst()
-            completeEmit(&item)
+            resumeProducer(&item)
             return true
         }
-        guard let crank = item.producedCrank,
+        guard case let .crank(crank) = item.sample,
               let payload = CSCMeasurement(
                   cumulativeCrankRevolutions: crank.cumulativeRevolutions,
                   lastCrankEventTime: crank.lastEventTime,
               ).encode()
         else {
             outboundQueue.removeFirst()
-            completeEmit(&item)
+            resumeProducer(&item)
             return true
         }
         item.payload = payload
@@ -554,7 +558,7 @@ actor ServerSession {
         return true
     }
 
-    private func processMeasurementItem() async {
+    private func processQueuedMeasurement() async {
         guard case var .measurement(item) = outboundQueue.first else {
             return
         }
@@ -562,14 +566,14 @@ actor ServerSession {
         while !Task.isCancelled {
             if closed {
                 outboundQueue.removeFirst()
-                completeEmit(&item)
+                resumeProducer(&item)
                 drainOutboundQueueOnShutdown()
                 return
             }
 
             if measurementSubscribers.isEmpty {
                 outboundQueue.removeFirst()
-                completeEmit(&item)
+                resumeProducer(&item)
                 return
             }
 
@@ -589,7 +593,7 @@ actor ServerSession {
                 )
             } catch {
                 outboundQueue.removeFirst()
-                completeEmit(&item)
+                resumeProducer(&item)
                 return
             }
 
@@ -599,20 +603,20 @@ actor ServerSession {
                     recordAcceptedMeasurement(item)
                 }
                 outboundQueue.removeFirst()
-                completeEmit(&item)
+                resumeProducer(&item)
                 return
             }
 
             if closed {
                 outboundQueue.removeFirst()
-                completeEmit(&item)
+                resumeProducer(&item)
                 drainOutboundQueueOnShutdown()
                 return
             }
 
             if measurementSubscribers.isEmpty {
                 outboundQueue.removeFirst()
-                completeEmit(&item)
+                resumeProducer(&item)
                 return
             }
 
@@ -628,17 +632,17 @@ actor ServerSession {
         }
     }
 
-    private func recordAcceptedMeasurement(_ item: MeasurementItem) {
+    private func recordAcceptedMeasurement(_ item: QueuedMeasurement) {
         if isStaleWheelPayload(item) {
-            if item.producedWheel == nil, let crank = item.producedCrank {
+            if case let .crank(crank) = item.sample {
                 crankCache = crank
             }
             return
         }
-        if let wheel = item.producedWheel {
+        switch item.sample {
+        case let .wheel(wheel):
             wheelCache = wheel
-        }
-        if let crank = item.producedCrank {
+        case let .crank(crank):
             crankCache = crank
         }
         acceptedMeasurementCount += 1
@@ -728,7 +732,7 @@ actor ServerSession {
         while !outboundQueue.isEmpty {
             switch outboundQueue.removeFirst() {
             case var .measurement(item):
-                completeEmit(&item)
+                resumeProducer(&item)
             case .indication:
                 break
             }
@@ -738,9 +742,9 @@ actor ServerSession {
         }
     }
 
-    private func completeEmit(_ item: inout MeasurementItem) {
-        if let continuation = item.emitContinuation {
-            item.emitContinuation = nil
+    private func resumeProducer(_ item: inout QueuedMeasurement) {
+        if let continuation = item.producerContinuation {
+            item.producerContinuation = nil
             continuation.resume()
         }
     }
@@ -790,7 +794,7 @@ actor ServerSession {
         endProcedure()
     }
 
-    private func enqueueMeasurement(_ item: MeasurementItem) {
+    private func enqueueMeasurement(_ item: QueuedMeasurement) {
         outboundQueue.append(.measurement(item))
         resumeOutboundQueueWaiter()
         resumeSatisfiedTestWaiters()
@@ -827,79 +831,49 @@ actor ServerSession {
         )
     }
 
-    private func emitWheel(_ sample: WheelRevolution) async {
+    private func emit(_ sample: RevolutionSample) async {
         if closed {
             return
         }
         if measurementSubscribers.isEmpty {
             return
         }
-        guard let (payload, stamp) = encodeWheelSample(sample) else {
+        guard let (payload, stamp) = encodeSample(sample) else {
             return
         }
 
-        let item = MeasurementItem(
+        let item = QueuedMeasurement(
             payload: payload,
             encodedWheelGeneration: stamp,
-            producedWheel: sample,
-            producedCrank: nil,
-            emitContinuation: nil,
+            sample: sample,
+            producerContinuation: nil,
         )
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             var queuedItem = item
-            queuedItem.emitContinuation = continuation
+            queuedItem.producerContinuation = continuation
             enqueueMeasurement(queuedItem)
         }
     }
 
-    private func emitCrank(_ sample: CrankRevolution) async {
-        if closed {
-            return
+    private func encodeSample(_ sample: RevolutionSample) -> (Data, UInt64?)? {
+        let measurement: CSCMeasurement
+        switch sample {
+        case let .wheel(wheel):
+            measurement = CSCMeasurement(
+                cumulativeWheelRevolutions: wheel.cumulativeRevolutions,
+                lastWheelEventTime: wheel.lastEventTime,
+                cumulativeCrankRevolutions: crankCache?.cumulativeRevolutions,
+                lastCrankEventTime: crankCache?.lastEventTime,
+            )
+        case let .crank(crank):
+            measurement = CSCMeasurement(
+                cumulativeWheelRevolutions: wheelCache?.cumulativeRevolutions,
+                lastWheelEventTime: wheelCache?.lastEventTime,
+                cumulativeCrankRevolutions: crank.cumulativeRevolutions,
+                lastCrankEventTime: crank.lastEventTime,
+            )
         }
-        if measurementSubscribers.isEmpty {
-            return
-        }
-        guard let (payload, stamp) = encodeCrankSample(sample) else {
-            return
-        }
-
-        let item = MeasurementItem(
-            payload: payload,
-            encodedWheelGeneration: stamp,
-            producedWheel: nil,
-            producedCrank: sample,
-            emitContinuation: nil,
-        )
-
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            var queuedItem = item
-            queuedItem.emitContinuation = continuation
-            enqueueMeasurement(queuedItem)
-        }
-    }
-
-    private func encodeWheelSample(_ sample: WheelRevolution) -> (Data, UInt64?)? {
-        let measurement = CSCMeasurement(
-            cumulativeWheelRevolutions: sample.cumulativeRevolutions,
-            lastWheelEventTime: sample.lastEventTime,
-            cumulativeCrankRevolutions: crankCache?.cumulativeRevolutions,
-            lastCrankEventTime: crankCache?.lastEventTime,
-        )
-        guard let payload = measurement.encode() else {
-            return nil
-        }
-        let stamp: UInt64? = measurement.cumulativeWheelRevolutions != nil ? wheelGeneration : nil
-        return (payload, stamp)
-    }
-
-    private func encodeCrankSample(_ sample: CrankRevolution) -> (Data, UInt64?)? {
-        let measurement = CSCMeasurement(
-            cumulativeWheelRevolutions: wheelCache?.cumulativeRevolutions,
-            lastWheelEventTime: wheelCache?.lastEventTime,
-            cumulativeCrankRevolutions: sample.cumulativeRevolutions,
-            lastCrankEventTime: sample.lastEventTime,
-        )
         guard let payload = measurement.encode() else {
             return nil
         }
@@ -1388,25 +1362,10 @@ actor ServerSession {
         guard let crankRevolutions = configuration.crankRevolutions else {
             return
         }
-
-        let sequence = crankRevolutions
         crankTask = Task {
-            let iterator = sequence.makeAsyncIterator()
-            while !Task.isCancelled {
-                let revolution: CrankRevolution?
-                do {
-                    revolution = try await iterator.next()
-                } catch is CancellationError {
-                    return
-                } catch {
-                    return
-                }
-
-                guard let revolution else {
-                    return
-                }
-
-                await self.emitCrank(revolution)
+            var iterator = crankRevolutions.makeAsyncIterator()
+            while !Task.isCancelled, let revolution = try? await iterator.next() {
+                await self.emit(.crank(revolution))
             }
         }
     }
@@ -1415,25 +1374,10 @@ actor ServerSession {
         guard let wheel = configuration.wheel else {
             return
         }
-
-        let sequence = wheel.revolutions
         wheelTask = Task {
-            let iterator = sequence.makeAsyncIterator()
-            while !Task.isCancelled {
-                let revolution: WheelRevolution?
-                do {
-                    revolution = try await iterator.next()
-                } catch is CancellationError {
-                    return
-                } catch {
-                    return
-                }
-
-                guard let revolution else {
-                    return
-                }
-
-                await self.emitWheel(revolution)
+            var iterator = wheel.revolutions.makeAsyncIterator()
+            while !Task.isCancelled, let revolution = try? await iterator.next() {
+                await self.emit(.wheel(revolution))
             }
         }
     }
