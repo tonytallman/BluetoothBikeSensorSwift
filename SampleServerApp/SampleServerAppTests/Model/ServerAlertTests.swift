@@ -79,12 +79,4 @@ import Testing
         #expect(alert?.message.contains("nope") == true)
     }
 
-    @Test func unsupportedConfigurationMessage() {
-        let alert = ServerAlert.startFailure(
-            ServerError.unsupportedConfiguration,
-            status: .poweredOn,
-            authorization: .allowed,
-        )
-        #expect(alert?.message.contains("isn't supported") == true)
-    }
 }

@@ -51,11 +51,6 @@ struct ServerAlert: Identifiable, Equatable {
                     message: "Couldn't start advertising: \(reason)",
                     offersSettings: false,
                 )
-            case .unsupportedConfiguration:
-                return ServerAlert(
-                    message: "This server configuration isn't supported.",
-                    offersSettings: false,
-                )
             }
         }
         return ServerAlert(

@@ -338,7 +338,7 @@ CSC Feature and the characteristic inventory are fixed at `build()` for the life
 - `build()` — returns a configured `Server` (no public `Server` initializer)
 - `Server.start()` / `Server.stop()` — publish and advertise the CSC service, and tear it down
 - `Server.measurementSubscriberCount` — `AsyncStream<Int>` of centrals subscribed to measurement notifications
-- `ServerError` — `unsupportedConfiguration` (reserved), `alreadyStarted` (this `Server` is already starting, running, or stopping), `notPoweredOn` (unavailable, powered off, unauthorized, or unsupported during startup, or lost before `start()` finished), `publishFailed`, `advertisingFailed`
+- `ServerError` — `alreadyStarted` (this `Server` is already starting, running, or stopping), `notPoweredOn` (unavailable, powered off, unauthorized, or unsupported during startup, or lost before `start()` finished), `publishFailed`, `advertisingFailed`
 - `WheelRevolution`, `CrankRevolution` — CSC Measurement wire units for server sequences
 - `SensorLocationKind` — GATT assigned numbers 0...16 for the builder
 - `SetCumulativeWheelRevolutions` — called for Set Cumulative Value
