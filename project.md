@@ -2,7 +2,7 @@
 
 ## Summary
 
-BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and reads Bluetooth CSCS sensors. The Swift package name remains `BluetoothBikeSensorSwift`. Library products are **`CSCClient`** and **`CSCServer`**. `CSCWire` is an internal target, not a product. It includes the library and an iOS-only SwiftUI sample app. It uses SOLID principles and any other best practices as appropriate.
+BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and reads Bluetooth CSCS sensors, and can advertise as a CSCS peripheral. The Swift package name remains `BluetoothBikeSensorSwift`. Library products are **`CSCClient`** and **`CSCServer`**. `CSCWire` is an internal target, not a product. It includes the library, an iOS client sample app, and an iOS server sample app. It uses SOLID principles and any other best practices as appropriate.
 
 ## Decisions
 
@@ -68,7 +68,7 @@ BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and rea
   | Recovery `startAdvertising` fails, or recovery sees `closed` after `add` | `.none`, after its `removeService` |
   | `close()` / `rollbackStartup()` | `.none`, after their `removeService` if the stage was not `.none` |
 
-- **No public status API; unauthorized is `.notPoweredOn` (D2 / D3).** Tests observe suspension through the `package` hook `isRadioSuspended`. A distinct unauthorized error would break exhaustive switches over the public non-frozen `ServerError`, so apps check `CBManager.authorization` instead.
+- **Public status is subscriber count only; unauthorized is `.notPoweredOn` (D2 / D3).** ``Server/measurementSubscriberCount`` is an `AsyncStream<Int>` of centrals subscribed to CSC Measurement notifications (0 while stopped, starting, or when Bluetooth loss suspends the server). There is no public advertising or Bluetooth power API. Tests observe radio suspension through the `package` hook `isRadioSuspended`. A distinct unauthorized error would break exhaustive switches over the public non-frozen `ServerError`, so apps check `CBManager.authorization` instead.
 - **One live server per process (D5).** `LiveServerRegistry.shared` holds a single slot. `start()` claims it on entry, before resolving the peripheral and before the power wait; another `Server`'s `start()` throws `.alreadyStarted` and touches no peripheral. The slot is released only after `stop()` teardown, or after a failed or cancelled startup has rolled back. `ServerRuntime` phases are `idle`, `starting`, `running`, and `stopping`; `stopping` holds the teardown task so a second `stop()` waits on the same teardown. The package `start(peripheral:clock:liveServers:)` overload defaults to a fresh registry so tests stay isolated.
 
   | Event | `phase` | `lease` |
@@ -87,6 +87,14 @@ BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and rea
 - **Feature bits fixed after `build()`.** CSC Feature and the characteristic inventory are fixed at `build()` for the life of the `Server`, including across `stop()`/`start()` and Bluetooth recovery. To change features, stop and build a new `Server`. A new `Server` publishes a new GATT database; centrals may need to reconnect and rediscover. This library does not implement Service Changed.
 - **Outbound queue invariants.** The pump is the only `updateValue` caller. Only the pump removes a measurement at the head of the queue; removals from outside the pump (unsubscribe, timeout, radio loss) remove indications by id only. There is no second pump. A send already inside `updateValue` cannot be recalled; after every await the pump re-checks that its indication is still the head before ending the procedure.
 - **`AsyncStream` sources (D8).** The builder accepts any `AsyncSequence & Sendable` source, including sequences whose iterator is not `Sendable`. `AnyAsyncSequence` boxes each iterator, and `ServerSession` iterates each box from exactly one task.
+
+### Server sample app (Phase 7)
+
+- **Separate Xcode project** `SampleServerApp/SampleServerApp.xcodeproj` depends only on the **`CSCServer`** product; the client sample is unchanged.
+- **Fresh server per Start** — each Start builds a new `Server`, new `AsyncStream` sources, and new control-point delegates (including a new `SensorLocationsHandler` snapshot).
+- **Simulation** — 1 s tick, revolution event times on an active timeline that pauses in the background, yield-only stream sources (no await on emit acceptance).
+- **Server sample connection state (Phase 7).** Connection state is the subscribed-central count from ``Server/measurementSubscriberCount`` (0 while waiting for a client). Advertising is shown as the app's lifecycle phase combined with Bluetooth state. The control-point activity log still shows Set Cumulative Value and Update Sensor Location when a client writes the control point.
+- **View models** — the server sample uses the protocol-based SwiftUI view-model pattern; the client sample predates it.
 
 ## Detailed Design
 
@@ -173,7 +181,11 @@ Characteristic order when present: CSC Measurement (`0x2A5B`), CSC Feature (`0x2
 
 ### Sample App
 
-- iOS-only SwiftUI app.
+- iOS-only SwiftUI client sample (`SampleApp`).
+
+### Server Sample App
+
+- iOS-only SwiftUI server sample (`SampleServerApp`) that advertises CSCS using `CSCServer` and simulates wheel/crank measurements.
 
 #### Scan Screen
 

@@ -53,6 +53,16 @@ public final class Server: Sendable {
         try await runtime.start(peripheral: nil, clock: ContinuousServerClock(), liveServers: .shared)
     }
 
+    /// Yields 0 while stopped or starting, and when Bluetooth loss suspends the server.
+    ///
+    /// New stream consumers receive the latest count immediately. The stream does not finish on
+    /// `stop()`; cancel the consuming task when observation ends.
+    public var measurementSubscriberCount: AsyncStream<Int> {
+        get async {
+            await runtime.measurementSubscriberCount()
+        }
+    }
+
     /// Stops advertising, removes the CSC service, and ends measurement notifications.
     ///
     /// Cancels an in-flight control point delegate call and waits for it to return.

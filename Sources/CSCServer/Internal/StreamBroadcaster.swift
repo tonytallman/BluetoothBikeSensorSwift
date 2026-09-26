@@ -5,9 +5,16 @@ import Foundation
 /// Used by production and fake peripherals. `onTermination` cannot `await`, so unsubscribe
 /// uses `Task { await remove(id) }` — a cancelled stream may receive one more event.
 actor StreamBroadcaster<Element: Sendable> {
+    private let replaysLatest: Bool
     private var continuations: [UUID: AsyncStream<Element>.Continuation] = [:]
     private var subscriberCount = 0
     private var subscriberCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var latest: Element?
+
+    init(replaysLatest: Bool = false, initialLatest: Element? = nil) {
+        self.replaysLatest = replaysLatest
+        self.latest = initialLatest
+    }
 
     func makeStream() -> AsyncStream<Element> {
         let (stream, continuation) = AsyncStream.makeStream(of: Element.self)
@@ -15,6 +22,10 @@ actor StreamBroadcaster<Element: Sendable> {
         continuations[id] = continuation
         subscriberCount += 1
         resumeSubscriberCountWaiters()
+
+        if replaysLatest, let latest {
+            continuation.yield(latest)
+        }
 
         continuation.onTermination = { [weak self] _ in
             guard let self else { return }
@@ -37,6 +48,7 @@ actor StreamBroadcaster<Element: Sendable> {
     }
 
     func yield(_ value: Element) {
+        latest = value
         let active = Array(continuations.values)
         for continuation in active {
             continuation.yield(value)
@@ -44,6 +56,7 @@ actor StreamBroadcaster<Element: Sendable> {
     }
 
     func finish() {
+        latest = nil
         let active = Array(continuations.values)
         continuations.removeAll()
         subscriberCount = 0

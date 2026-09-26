@@ -43,6 +43,7 @@ actor ServerSession {
     private let crankRevolutions: AnyAsyncSequence<CrankRevolution>?
     private let peripheral: any BluetoothPeripheral
     private let clock: any ServerClock
+    private let onMeasurementSubscriberCountChange: (@Sendable (Int) async -> Void)?
 
     private var publishStage: PublishStage = .none
     private var closed = false
@@ -104,6 +105,7 @@ actor ServerSession {
         servedSensorLocation: ServedSensorLocationBox?,
         peripheral: any BluetoothPeripheral,
         clock: any ServerClock,
+        onMeasurementSubscriberCountChange: (@Sendable (Int) async -> Void)? = nil,
     ) {
         self.service = service
         self.wheel = wheel
@@ -112,6 +114,7 @@ actor ServerSession {
         self.servedSensorLocation = servedSensorLocation
         self.peripheral = peripheral
         self.clock = clock
+        self.onMeasurementSubscriberCountChange = onMeasurementSubscriberCountChange
     }
 
     static func open(
@@ -122,6 +125,7 @@ actor ServerSession {
         servedSensorLocation: ServedSensorLocationBox?,
         peripheral: any BluetoothPeripheral,
         clock: any ServerClock,
+        onMeasurementSubscriberCountChange: (@Sendable (Int) async -> Void)? = nil,
     ) async throws -> ServerSession {
         let session = ServerSession(
             service: service,
@@ -131,6 +135,7 @@ actor ServerSession {
             servedSensorLocation: servedSensorLocation,
             peripheral: peripheral,
             clock: clock,
+            onMeasurementSubscriberCountChange: onMeasurementSubscriberCountChange,
         )
         do {
             try await withTaskCancellationHandler {
@@ -235,6 +240,7 @@ actor ServerSession {
 
         measurementSubscribers.removeAll()
         controlPointSubscribers.removeAll()
+        await notifyMeasurementSubscriberCount()
     }
 
     private func beginShutdown() {
@@ -323,6 +329,7 @@ actor ServerSession {
         startCrankLoopIfNeeded()
         startWheelLoopIfNeeded()
         startupGateOpen = true
+        await notifyMeasurementSubscriberCount()
     }
 
     /// Handles events buffered during startup, in arrival order, before the startup gate
@@ -352,6 +359,11 @@ actor ServerSession {
 
         measurementSubscribers.removeAll()
         controlPointSubscribers.removeAll()
+        await notifyMeasurementSubscriberCount()
+    }
+
+    private func notifyMeasurementSubscriberCount() async {
+        await onMeasurementSubscriberCountChange?(measurementSubscribers.count)
     }
 
     private var advertisement: Advertisement {
@@ -377,7 +389,7 @@ actor ServerSession {
         lastRadioState = state
         guard state == .poweredOn else {
             if !radioLost {
-                suspendForRadioLoss()
+                await suspendForRadioLoss()
             }
             return
         }
@@ -395,15 +407,16 @@ actor ServerSession {
         }
     }
 
-    private func suspendForRadioLoss() {
+    private func suspendForRadioLoss() async {
         radioLost = true
         radioLossEpoch &+= 1
         measurementSubscribers.removeAll()
-        resumeMeasurementSubscriberWaiters()
         controlPointSubscribers.removeAll()
-        resumeControlPointSubscriberWaiters()
         notifyReady = false
         wakeReadyWaiterWithoutLatch()
+        await notifyMeasurementSubscriberCount()
+        resumeMeasurementSubscriberWaiters()
+        resumeControlPointSubscriberWaiters()
     }
 
     /// Republishes the build-time service. `close()` may run during any await here and owns
@@ -1486,7 +1499,10 @@ actor ServerSession {
             }
             switch characteristicUUID {
             case CSCS.measurementUUID:
-                measurementSubscribers.insert(centralID)
+                let inserted = measurementSubscribers.insert(centralID).inserted
+                if inserted {
+                    await notifyMeasurementSubscriberCount()
+                }
                 resumeMeasurementSubscriberWaiters()
             case CSCS.controlPointUUID:
                 controlPointSubscribers.insert(centralID)
@@ -1500,7 +1516,10 @@ actor ServerSession {
             }
             switch characteristicUUID {
             case CSCS.measurementUUID:
-                measurementSubscribers.remove(centralID)
+                let removed = measurementSubscribers.remove(centralID) != nil
+                if removed {
+                    await notifyMeasurementSubscriberCount()
+                }
                 resumeMeasurementSubscriberWaiters()
             case CSCS.controlPointUUID:
                 controlPointSubscribers.remove(centralID)

@@ -21,6 +21,32 @@ actor ServerRuntime {
     private var lease: (registry: LiveServerRegistry, token: UUID)?
     private var finishStoppingEntryCount = 0
     private var finishStoppingEntryCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private let measurementSubscriberCountBroadcaster = StreamBroadcaster<Int>(
+        replaysLatest: true,
+        initialLatest: 0,
+    )
+    private var measurementSubscriberCountLatest = 0
+    private var measurementSubscriberCountPublished: Int?
+
+    func measurementSubscriberCount() async -> AsyncStream<Int> {
+        await measurementSubscriberCountBroadcaster.makeStream()
+    }
+
+    private func publishMeasurementSubscriberCount(_ count: Int) async {
+        measurementSubscriberCountLatest = count
+        guard case .running = phase else { return }
+        await publishMeasurementSubscriberCountIfChanged(count)
+    }
+
+    private func publishMeasurementSubscriberCountIfChanged(_ count: Int) async {
+        if measurementSubscriberCountPublished == count { return }
+        measurementSubscriberCountPublished = count
+        await measurementSubscriberCountBroadcaster.yield(count)
+    }
+
+    private func syncMeasurementSubscriberCountPublication() async {
+        await publishMeasurementSubscriberCountIfChanged(measurementSubscriberCountLatest)
+    }
 
     init(
         service: PeripheralService,
@@ -99,6 +125,9 @@ actor ServerRuntime {
             return
         }
         phase = .idle
+        measurementSubscriberCountLatest = 0
+        measurementSubscriberCountPublished = nil
+        await publishMeasurementSubscriberCountIfChanged(0)
         releaseLease()
     }
 
@@ -208,6 +237,9 @@ actor ServerRuntime {
                 servedSensorLocation: servedSensorLocation,
                 peripheral: resolvedPeripheral,
                 clock: clock,
+                onMeasurementSubscriberCountChange: { count in
+                    await self.publishMeasurementSubscriberCount(count)
+                },
             )
         }
         phase = .starting(startupTask)
@@ -219,6 +251,8 @@ actor ServerRuntime {
                 throw CancellationError()
             }
             phase = .running(session)
+            measurementSubscriberCountPublished = nil
+            await syncMeasurementSubscriberCountPublication()
         } catch {
             let stillOwnsStartup = {
                 if case .starting(let currentTask) = phase, currentTask == startupTask {

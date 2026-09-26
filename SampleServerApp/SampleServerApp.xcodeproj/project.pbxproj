@@ -1,0 +1,610 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		B10000000000000000000001 /* SampleServerAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* SampleServerAppApp.swift */; };
+		B10000000000000000000003 /* CSCServer in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000031 /* CSCServer */; };
+		B1000000000000000000000A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001A /* Assets.xcassets */; };
+		B1000000000000000000040B /* Server+SensorServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000040A /* Server+SensorServer.swift */; };
+		B1000000000000000000040D /* BluetoothStateMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000040C /* BluetoothStateMonitor.swift */; };
+		B1000000000000000000040F /* BluetoothStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000040E /* BluetoothStatus.swift */; };
+		B10000000000000000000411 /* CoreBluetoothStateMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000410 /* CoreBluetoothStateMonitor.swift */; };
+		B10000000000000000000413 /* CompositionRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000412 /* CompositionRoot.swift */; };
+		B10000000000000000000415 /* ControlPointLogEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000414 /* ControlPointLogEntry.swift */; };
+		B10000000000000000000417 /* SensorLocationCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000416 /* SensorLocationCatalog.swift */; };
+		B10000000000000000000419 /* ServerAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000418 /* ServerAlert.swift */; };
+		B1000000000000000000041B /* ServerConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000041A /* ServerConfiguration.swift */; };
+		B1000000000000000000041D /* ServerPhase.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000041C /* ServerPhase.swift */; };
+		B1000000000000000000041F /* SampleServerAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000041E /* SampleServerAppApp.swift */; };
+		B10000000000000000000421 /* CSCServerFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000420 /* CSCServerFactory.swift */; };
+		B10000000000000000000423 /* ControlPointEventSink.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000422 /* ControlPointEventSink.swift */; };
+		B10000000000000000000425 /* CumulativeWheelRevolutionsHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000424 /* CumulativeWheelRevolutionsHandler.swift */; };
+		B10000000000000000000427 /* SensorLocationsHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000426 /* SensorLocationsHandler.swift */; };
+		B10000000000000000000429 /* SensorServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000428 /* SensorServer.swift */; };
+		B1000000000000000000042B /* SensorServerFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000042A /* SensorServerFactory.swift */; };
+		B1000000000000000000042D /* ActiveTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000042C /* ActiveTimeline.swift */; };
+		B1000000000000000000042F /* EventTime.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000042E /* EventTime.swift */; };
+		B10000000000000000000431 /* MonotonicTimeSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000430 /* MonotonicTimeSource.swift */; };
+		B10000000000000000000433 /* RevolutionPeriod.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000432 /* RevolutionPeriod.swift */; };
+		B10000000000000000000435 /* RevolutionSchedule.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000434 /* RevolutionSchedule.swift */; };
+		B10000000000000000000437 /* SimulationMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000436 /* SimulationMode.swift */; };
+		B10000000000000000000439 /* SimulationOutputs.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000438 /* SimulationOutputs.swift */; };
+		B1000000000000000000043B /* SimulationTicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000043A /* SimulationTicker.swift */; };
+		B1000000000000000000043D /* PreviewViewModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000043C /* PreviewViewModels.swift */; };
+		B1000000000000000000043F /* ServerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000043E /* ServerViewModel.swift */; };
+		B10000000000000000000441 /* SimulationViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000440 /* SimulationViewModel.swift */; };
+		B10000000000000000000443 /* ConfigurationSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000442 /* ConfigurationSection.swift */; };
+		B10000000000000000000445 /* ServerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000444 /* ServerView.swift */; };
+		B10000000000000000000447 /* SimulationSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000446 /* SimulationSection.swift */; };
+		B10000000000000000000449 /* SensorLocationCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000448 /* SensorLocationCatalogTests.swift */; };
+		B1000000000000000000044B /* ServerAlertTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000044A /* ServerAlertTests.swift */; };
+		B1000000000000000000044D /* ServerConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000044C /* ServerConfigurationTests.swift */; };
+		B1000000000000000000044F /* SampleServerAppSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000044E /* SampleServerAppSmokeTests.swift */; };
+		B10000000000000000000451 /* CumulativeWheelRevolutionsHandlerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000450 /* CumulativeWheelRevolutionsHandlerTests.swift */; };
+		B10000000000000000000453 /* SensorLocationsHandlerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000452 /* SensorLocationsHandlerTests.swift */; };
+		B10000000000000000000455 /* ActiveTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000454 /* ActiveTimelineTests.swift */; };
+		B10000000000000000000457 /* EventTimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000456 /* EventTimeTests.swift */; };
+		B10000000000000000000459 /* RevolutionPeriodTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000458 /* RevolutionPeriodTests.swift */; };
+		B1000000000000000000045B /* RevolutionScheduleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000045A /* RevolutionScheduleTests.swift */; };
+		B1000000000000000000045D /* ClientFormula.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000045C /* ClientFormula.swift */; };
+		B1000000000000000000045F /* FakeBluetoothStateMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000045E /* FakeBluetoothStateMonitor.swift */; };
+		B10000000000000000000461 /* FakeControlPointSink.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000460 /* FakeControlPointSink.swift */; };
+		B10000000000000000000463 /* FakeLiveServerSlot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000462 /* FakeLiveServerSlot.swift */; };
+		B10000000000000000000465 /* FakeSensorServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000464 /* FakeSensorServer.swift */; };
+		B10000000000000000000467 /* FakeSensorServerFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000466 /* FakeSensorServerFactory.swift */; };
+		B10000000000000000000469 /* ManualTicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000468 /* ManualTicker.swift */; };
+		B1000000000000000000046B /* ManualTimeSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000046A /* ManualTimeSource.swift */; };
+		B1000000000000000000046D /* ServerViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000046C /* ServerViewModelTests.swift */; };
+		B1000000000000000000046F /* SimulationViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000046E /* SimulationViewModelTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		B10000000000000000000010 /* SampleServerApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SampleServerApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B10000000000000000000011 /* SampleServerAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleServerAppApp.swift; sourceTree = "<group>"; };
+		B10000000000000000000013 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B1000000000000000000001A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		B10000000000000000000402 /* SampleServerAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SampleServerAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1000000000000000000040A /* Server+SensorServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Adaptors/CSCServer/Server+SensorServer.swift"; sourceTree = "<group>"; };
+		B1000000000000000000040C /* BluetoothStateMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Bluetooth/BluetoothStateMonitor.swift"; sourceTree = "<group>"; };
+		B1000000000000000000040E /* BluetoothStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Bluetooth/BluetoothStatus.swift"; sourceTree = "<group>"; };
+		B10000000000000000000410 /* CoreBluetoothStateMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Bluetooth/CoreBluetoothStateMonitor.swift"; sourceTree = "<group>"; };
+		B10000000000000000000412 /* CompositionRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CompositionRoot.swift"; sourceTree = "<group>"; };
+		B10000000000000000000414 /* ControlPointLogEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Model/ControlPointLogEntry.swift"; sourceTree = "<group>"; };
+		B10000000000000000000416 /* SensorLocationCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Model/SensorLocationCatalog.swift"; sourceTree = "<group>"; };
+		B10000000000000000000418 /* ServerAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Model/ServerAlert.swift"; sourceTree = "<group>"; };
+		B1000000000000000000041A /* ServerConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Model/ServerConfiguration.swift"; sourceTree = "<group>"; };
+		B1000000000000000000041C /* ServerPhase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Model/ServerPhase.swift"; sourceTree = "<group>"; };
+		B1000000000000000000041E /* SampleServerAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SampleServerAppApp.swift"; sourceTree = "<group>"; };
+		B10000000000000000000420 /* CSCServerFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Server/CSCServerFactory.swift"; sourceTree = "<group>"; };
+		B10000000000000000000422 /* ControlPointEventSink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Server/ControlPointEventSink.swift"; sourceTree = "<group>"; };
+		B10000000000000000000424 /* CumulativeWheelRevolutionsHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Server/CumulativeWheelRevolutionsHandler.swift"; sourceTree = "<group>"; };
+		B10000000000000000000426 /* SensorLocationsHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Server/SensorLocationsHandler.swift"; sourceTree = "<group>"; };
+		B10000000000000000000428 /* SensorServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Server/SensorServer.swift"; sourceTree = "<group>"; };
+		B1000000000000000000042A /* SensorServerFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Server/SensorServerFactory.swift"; sourceTree = "<group>"; };
+		B1000000000000000000042C /* ActiveTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Simulation/ActiveTimeline.swift"; sourceTree = "<group>"; };
+		B1000000000000000000042E /* EventTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Simulation/EventTime.swift"; sourceTree = "<group>"; };
+		B10000000000000000000430 /* MonotonicTimeSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Simulation/MonotonicTimeSource.swift"; sourceTree = "<group>"; };
+		B10000000000000000000432 /* RevolutionPeriod.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Simulation/RevolutionPeriod.swift"; sourceTree = "<group>"; };
+		B10000000000000000000434 /* RevolutionSchedule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Simulation/RevolutionSchedule.swift"; sourceTree = "<group>"; };
+		B10000000000000000000436 /* SimulationMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Simulation/SimulationMode.swift"; sourceTree = "<group>"; };
+		B10000000000000000000438 /* SimulationOutputs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Simulation/SimulationOutputs.swift"; sourceTree = "<group>"; };
+		B1000000000000000000043A /* SimulationTicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Simulation/SimulationTicker.swift"; sourceTree = "<group>"; };
+		B1000000000000000000043C /* PreviewViewModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewModels/PreviewViewModels.swift"; sourceTree = "<group>"; };
+		B1000000000000000000043E /* ServerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewModels/ServerViewModel.swift"; sourceTree = "<group>"; };
+		B10000000000000000000440 /* SimulationViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewModels/SimulationViewModel.swift"; sourceTree = "<group>"; };
+		B10000000000000000000442 /* ConfigurationSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Views/ConfigurationSection.swift"; sourceTree = "<group>"; };
+		B10000000000000000000444 /* ServerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Views/ServerView.swift"; sourceTree = "<group>"; };
+		B10000000000000000000446 /* SimulationSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Views/SimulationSection.swift"; sourceTree = "<group>"; };
+		B10000000000000000000448 /* SensorLocationCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Model/SensorLocationCatalogTests.swift"; sourceTree = "<group>"; };
+		B1000000000000000000044A /* ServerAlertTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Model/ServerAlertTests.swift"; sourceTree = "<group>"; };
+		B1000000000000000000044C /* ServerConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Model/ServerConfigurationTests.swift"; sourceTree = "<group>"; };
+		B1000000000000000000044E /* SampleServerAppSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SampleServerAppSmokeTests.swift"; sourceTree = "<group>"; };
+		B10000000000000000000450 /* CumulativeWheelRevolutionsHandlerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Server/CumulativeWheelRevolutionsHandlerTests.swift"; sourceTree = "<group>"; };
+		B10000000000000000000452 /* SensorLocationsHandlerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Server/SensorLocationsHandlerTests.swift"; sourceTree = "<group>"; };
+		B10000000000000000000454 /* ActiveTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Simulation/ActiveTimelineTests.swift"; sourceTree = "<group>"; };
+		B10000000000000000000456 /* EventTimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Simulation/EventTimeTests.swift"; sourceTree = "<group>"; };
+		B10000000000000000000458 /* RevolutionPeriodTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Simulation/RevolutionPeriodTests.swift"; sourceTree = "<group>"; };
+		B1000000000000000000045A /* RevolutionScheduleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Simulation/RevolutionScheduleTests.swift"; sourceTree = "<group>"; };
+		B1000000000000000000045C /* ClientFormula.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Support/ClientFormula.swift"; sourceTree = "<group>"; };
+		B1000000000000000000045E /* FakeBluetoothStateMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Support/FakeBluetoothStateMonitor.swift"; sourceTree = "<group>"; };
+		B10000000000000000000460 /* FakeControlPointSink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Support/FakeControlPointSink.swift"; sourceTree = "<group>"; };
+		B10000000000000000000462 /* FakeLiveServerSlot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Support/FakeLiveServerSlot.swift"; sourceTree = "<group>"; };
+		B10000000000000000000464 /* FakeSensorServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Support/FakeSensorServer.swift"; sourceTree = "<group>"; };
+		B10000000000000000000466 /* FakeSensorServerFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Support/FakeSensorServerFactory.swift"; sourceTree = "<group>"; };
+		B10000000000000000000468 /* ManualTicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Support/ManualTicker.swift"; sourceTree = "<group>"; };
+		B1000000000000000000046A /* ManualTimeSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Support/ManualTimeSource.swift"; sourceTree = "<group>"; };
+		B1000000000000000000046C /* ServerViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewModels/ServerViewModelTests.swift"; sourceTree = "<group>"; };
+		B1000000000000000000046E /* SimulationViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewModels/SimulationViewModelTests.swift"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXContainerItemProxy section */
+		B10000000000000000000407 = {isa = PBXContainerItemProxy; containerPortal = B10000000000000000000060; proxyType = 1; remoteGlobalIDString = B10000000000000000000050; remoteInfo = SampleServerApp; };
+/* End PBXContainerItemProxy section */
+/* Begin PBXFrameworksBuildPhase section */
+		B10000000000000000000020 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000000000000000000003 /* CSCServer in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		B10000000000000000000040 = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000041 /* SampleServerApp */,
+				B10000000000000000000409 /* SampleServerAppTests */,
+				B10000000000000000000042 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		B10000000000000000000041 /* SampleServerApp */ = {
+			isa = PBXGroup;
+			children = (
+				B1000000000000000000040A /* Server+SensorServer.swift */,
+				B1000000000000000000040C /* BluetoothStateMonitor.swift */,
+				B1000000000000000000040E /* BluetoothStatus.swift */,
+				B10000000000000000000410 /* CoreBluetoothStateMonitor.swift */,
+				B10000000000000000000412 /* CompositionRoot.swift */,
+				B10000000000000000000414 /* ControlPointLogEntry.swift */,
+				B10000000000000000000416 /* SensorLocationCatalog.swift */,
+				B10000000000000000000418 /* ServerAlert.swift */,
+				B1000000000000000000041A /* ServerConfiguration.swift */,
+				B1000000000000000000041C /* ServerPhase.swift */,
+				B1000000000000000000041E /* SampleServerAppApp.swift */,
+				B10000000000000000000420 /* CSCServerFactory.swift */,
+				B10000000000000000000422 /* ControlPointEventSink.swift */,
+				B10000000000000000000424 /* CumulativeWheelRevolutionsHandler.swift */,
+				B10000000000000000000426 /* SensorLocationsHandler.swift */,
+				B10000000000000000000428 /* SensorServer.swift */,
+				B1000000000000000000042A /* SensorServerFactory.swift */,
+				B1000000000000000000042C /* ActiveTimeline.swift */,
+				B1000000000000000000042E /* EventTime.swift */,
+				B10000000000000000000430 /* MonotonicTimeSource.swift */,
+				B10000000000000000000432 /* RevolutionPeriod.swift */,
+				B10000000000000000000434 /* RevolutionSchedule.swift */,
+				B10000000000000000000436 /* SimulationMode.swift */,
+				B10000000000000000000438 /* SimulationOutputs.swift */,
+				B1000000000000000000043A /* SimulationTicker.swift */,
+				B1000000000000000000043C /* PreviewViewModels.swift */,
+				B1000000000000000000043E /* ServerViewModel.swift */,
+				B10000000000000000000440 /* SimulationViewModel.swift */,
+				B10000000000000000000442 /* ConfigurationSection.swift */,
+				B10000000000000000000444 /* ServerView.swift */,
+				B10000000000000000000446 /* SimulationSection.swift */,
+				B1000000000000000000001A /* Assets.xcassets */,
+				B10000000000000000000013 /* Info.plist */,
+			);
+			path = SampleServerApp;
+			sourceTree = "<group>";
+		};
+		B10000000000000000000042 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000010 /* SampleServerApp.app */,
+				B10000000000000000000402 /* SampleServerAppTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		B10000000000000000000409 /* SampleServerAppTests */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000448 /* SensorLocationCatalogTests.swift */,
+				B1000000000000000000044A /* ServerAlertTests.swift */,
+				B1000000000000000000044C /* ServerConfigurationTests.swift */,
+				B1000000000000000000044E /* SampleServerAppSmokeTests.swift */,
+				B10000000000000000000450 /* CumulativeWheelRevolutionsHandlerTests.swift */,
+				B10000000000000000000452 /* SensorLocationsHandlerTests.swift */,
+				B10000000000000000000454 /* ActiveTimelineTests.swift */,
+				B10000000000000000000456 /* EventTimeTests.swift */,
+				B10000000000000000000458 /* RevolutionPeriodTests.swift */,
+				B1000000000000000000045A /* RevolutionScheduleTests.swift */,
+				B1000000000000000000045C /* ClientFormula.swift */,
+				B1000000000000000000045E /* FakeBluetoothStateMonitor.swift */,
+				B10000000000000000000460 /* FakeControlPointSink.swift */,
+				B10000000000000000000462 /* FakeLiveServerSlot.swift */,
+				B10000000000000000000464 /* FakeSensorServer.swift */,
+				B10000000000000000000466 /* FakeSensorServerFactory.swift */,
+				B10000000000000000000468 /* ManualTicker.swift */,
+				B1000000000000000000046A /* ManualTimeSource.swift */,
+				B1000000000000000000046C /* ServerViewModelTests.swift */,
+				B1000000000000000000046E /* SimulationViewModelTests.swift */,
+			);
+			path = SampleServerAppTests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		B10000000000000000000050 /* SampleServerApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B10000000000000000000070 /* Build configuration list for PBXNativeTarget "SampleServerApp" */;
+			buildPhases = (
+				B10000000000000000000051 /* Sources */,
+				B10000000000000000000020 /* Frameworks */,
+				B10000000000000000000052 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SampleServerApp;
+			packageProductDependencies = (
+				B10000000000000000000031 /* CSCServer */,
+			);
+			productName = SampleServerApp;
+			productReference = B10000000000000000000010 /* SampleServerApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+		B10000000000000000000401 /* SampleServerAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B10000000000000000000404;
+			buildPhases = (
+				B10000000000000000000403 /* Sources */,
+			);
+			dependencies = (
+				B10000000000000000000408 /* PBXTargetDependency */,
+			);
+			name = SampleServerAppTests;
+			productName = SampleServerAppTests;
+			productReference = B10000000000000000000402;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		B10000000000000000000060 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					B10000000000000000000050 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = B10000000000000000000401;
+					};
+					B10000000000000000000401 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+				};
+			};
+			buildConfigurationList = B10000000000000000000071 /* Build configuration list for PBXProject "SampleServerApp" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = B10000000000000000000040;
+			packageReferences = (
+				B10000000000000000000030 /* XCLocalSwiftPackageReference ".." */,
+			);
+			productRefGroup = B10000000000000000000042 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				B10000000000000000000050 /* SampleServerApp */,
+				B10000000000000000000401 /* SampleServerAppTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		B10000000000000000000052 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B1000000000000000000000A /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		B10000000000000000000051 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B1000000000000000000040B /* Server+SensorServer.swift in Sources */,
+				B1000000000000000000040D /* BluetoothStateMonitor.swift in Sources */,
+				B1000000000000000000040F /* BluetoothStatus.swift in Sources */,
+				B10000000000000000000411 /* CoreBluetoothStateMonitor.swift in Sources */,
+				B10000000000000000000413 /* CompositionRoot.swift in Sources */,
+				B10000000000000000000415 /* ControlPointLogEntry.swift in Sources */,
+				B10000000000000000000417 /* SensorLocationCatalog.swift in Sources */,
+				B10000000000000000000419 /* ServerAlert.swift in Sources */,
+				B1000000000000000000041B /* ServerConfiguration.swift in Sources */,
+				B1000000000000000000041D /* ServerPhase.swift in Sources */,
+				B1000000000000000000041F /* SampleServerAppApp.swift in Sources */,
+				B10000000000000000000421 /* CSCServerFactory.swift in Sources */,
+				B10000000000000000000423 /* ControlPointEventSink.swift in Sources */,
+				B10000000000000000000425 /* CumulativeWheelRevolutionsHandler.swift in Sources */,
+				B10000000000000000000427 /* SensorLocationsHandler.swift in Sources */,
+				B10000000000000000000429 /* SensorServer.swift in Sources */,
+				B1000000000000000000042B /* SensorServerFactory.swift in Sources */,
+				B1000000000000000000042D /* ActiveTimeline.swift in Sources */,
+				B1000000000000000000042F /* EventTime.swift in Sources */,
+				B10000000000000000000431 /* MonotonicTimeSource.swift in Sources */,
+				B10000000000000000000433 /* RevolutionPeriod.swift in Sources */,
+				B10000000000000000000435 /* RevolutionSchedule.swift in Sources */,
+				B10000000000000000000437 /* SimulationMode.swift in Sources */,
+				B10000000000000000000439 /* SimulationOutputs.swift in Sources */,
+				B1000000000000000000043B /* SimulationTicker.swift in Sources */,
+				B1000000000000000000043D /* PreviewViewModels.swift in Sources */,
+				B1000000000000000000043F /* ServerViewModel.swift in Sources */,
+				B10000000000000000000441 /* SimulationViewModel.swift in Sources */,
+				B10000000000000000000443 /* ConfigurationSection.swift in Sources */,
+				B10000000000000000000445 /* ServerView.swift in Sources */,
+				B10000000000000000000447 /* SimulationSection.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B10000000000000000000403 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000000000000000000449 /* SensorLocationCatalogTests.swift in Sources */,
+				B1000000000000000000044B /* ServerAlertTests.swift in Sources */,
+				B1000000000000000000044D /* ServerConfigurationTests.swift in Sources */,
+				B1000000000000000000044F /* SampleServerAppSmokeTests.swift in Sources */,
+				B10000000000000000000451 /* CumulativeWheelRevolutionsHandlerTests.swift in Sources */,
+				B10000000000000000000453 /* SensorLocationsHandlerTests.swift in Sources */,
+				B10000000000000000000455 /* ActiveTimelineTests.swift in Sources */,
+				B10000000000000000000457 /* EventTimeTests.swift in Sources */,
+				B10000000000000000000459 /* RevolutionPeriodTests.swift in Sources */,
+				B1000000000000000000045B /* RevolutionScheduleTests.swift in Sources */,
+				B1000000000000000000045D /* ClientFormula.swift in Sources */,
+				B1000000000000000000045F /* FakeBluetoothStateMonitor.swift in Sources */,
+				B10000000000000000000461 /* FakeControlPointSink.swift in Sources */,
+				B10000000000000000000463 /* FakeLiveServerSlot.swift in Sources */,
+				B10000000000000000000465 /* FakeSensorServer.swift in Sources */,
+				B10000000000000000000467 /* FakeSensorServerFactory.swift in Sources */,
+				B10000000000000000000469 /* ManualTicker.swift in Sources */,
+				B1000000000000000000046B /* ManualTimeSource.swift in Sources */,
+				B1000000000000000000046D /* ServerViewModelTests.swift in Sources */,
+				B1000000000000000000046F /* SimulationViewModelTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B10000000000000000000408 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B10000000000000000000050 /* SampleServerApp */;
+			targetProxy = B10000000000000000000407 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		B10000000000000000000080 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		B10000000000000000000081 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		B10000000000000000000082 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 974LGL82GY;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SampleServerApp/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tallmansoftware.BluetoothBikeSensorSampleServerApp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B10000000000000000000083 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 974LGL82GY;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SampleServerApp/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tallmansoftware.BluetoothBikeSensorSampleServerApp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		B10000000000000000000405 /* Debug */ = {isa = XCBuildConfiguration; name = Debug; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; DEVELOPMENT_TEAM = 974LGL82GY; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.tallmansoftware.BluetoothBikeSensorSampleServerAppTests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SampleServerApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/SampleServerApp"; }; };
+		B10000000000000000000406 /* Release */ = {isa = XCBuildConfiguration; name = Release; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; DEVELOPMENT_TEAM = 974LGL82GY; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.tallmansoftware.BluetoothBikeSensorSampleServerAppTests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SampleServerApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/SampleServerApp"; }; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		B10000000000000000000070 /* Build configuration list for PBXNativeTarget "SampleServerApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B10000000000000000000082 /* Debug */,
+				B10000000000000000000083 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B10000000000000000000071 /* Build configuration list for PBXProject "SampleServerApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B10000000000000000000080 /* Debug */,
+				B10000000000000000000081 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B10000000000000000000404 = {isa = XCConfigurationList; buildConfigurations = (B10000000000000000000405, B10000000000000000000406); defaultConfigurationName = Release; defaultConfigurationIsVisible = 0; };
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		B10000000000000000000030 /* XCLocalSwiftPackageReference ".." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ..;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B10000000000000000000031 /* CSCServer */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B10000000000000000000030 /* XCLocalSwiftPackageReference ".." */;
+			productName = CSCServer;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = B10000000000000000000060 /* Project object */;
+}
