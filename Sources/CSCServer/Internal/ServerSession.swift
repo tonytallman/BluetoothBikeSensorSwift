@@ -1333,20 +1333,17 @@ actor ServerSession {
             return serverError
         }
         if let peripheralError = error as? BluetoothPeripheralError {
-            switch peripheralError {
-            case .notPoweredOn:
+            switch (peripheralError, stage) {
+            case (.notPoweredOn, _):
                 return .notPoweredOn
-            case .addServiceFailed(_, let reason):
-                return .publishFailed(reason: reason)
-            case .advertisingFailed(let reason):
+            case let (.advertisingFailed(reason), _):
                 return .advertisingFailed(reason: reason)
-            default:
-                switch stage {
-                case .addService:
-                    return .publishFailed(reason: String(describing: peripheralError))
-                case .startAdvertising:
-                    return .advertisingFailed(reason: String(describing: peripheralError))
-                }
+            case let (.addServiceFailed(_, reason), .addService):
+                return .publishFailed(reason: reason)
+            case (_, .addService):
+                return .publishFailed(reason: String(describing: peripheralError))
+            case (_, .startAdvertising):
+                return .advertisingFailed(reason: String(describing: peripheralError))
             }
         }
         switch stage {
