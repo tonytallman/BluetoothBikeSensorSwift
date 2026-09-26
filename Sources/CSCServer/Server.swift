@@ -4,6 +4,8 @@ package import CSCWire
 /// CSC sensor server configuration built from revolution sequences and optional location settings.
 public final class Server: Sendable {
     package let feature: CSCFeature
+    /// GATT layout fixed at `build()` time; the same service is (re-)published on every
+    /// `start()` and Bluetooth-recovery cycle for this `Server`'s lifetime.
     package let service: PeripheralService
     package let wheel: WheelConfiguration?
     package let crankRevolutions: AnyAsyncSequence<CrankRevolution>?
@@ -12,6 +14,7 @@ public final class Server: Sendable {
 
     private let runtime: ServerRuntime
 
+    /// Called only by `ServerAssembly.assemble`; the builder never constructs a `Server` directly.
     internal init(
         feature: CSCFeature,
         service: PeripheralService,
@@ -32,6 +35,8 @@ public final class Server: Sendable {
         )
     }
 
+    /// Schedules teardown in the background so a released `Server` still stops advertising and
+    /// frees the one-live-server slot, even though nothing awaits this task.
     deinit {
         let runtime = runtime
         Task {
