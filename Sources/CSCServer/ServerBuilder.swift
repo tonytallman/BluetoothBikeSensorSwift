@@ -49,7 +49,7 @@ extension Server {
     /// Begins building a server with wheel revolution data and a set-cumulative delegate.
     public static func wheelRevolutions<Revolutions>(
         _ revolutions: Revolutions,
-        setCumulativeWheelRevolutions delegate: any SetCumulativeWheelRevolutions,
+        setCumulativeWheelRevolutions delegate: any CumulativeWheelRevolutionsDelegate,
     ) -> ServerBuilder<
         ServerWheel.Selected,
         ServerCrank.Unselected,
@@ -61,7 +61,7 @@ extension Server {
         ServerBuilder(
             wheel: WheelConfiguration(
                 revolutions: AnyAsyncSequence(revolutions),
-                setCumulativeWheelRevolutions: delegate,
+                delegate: delegate,
             ),
         )
     }
@@ -85,7 +85,7 @@ extension ServerBuilder where Wheel == ServerWheel.Unselected {
     /// Adds wheel revolution data and a set-cumulative delegate.
     public func wheelRevolutions<Revolutions>(
         _ revolutions: Revolutions,
-        setCumulativeWheelRevolutions delegate: any SetCumulativeWheelRevolutions,
+        setCumulativeWheelRevolutions delegate: any CumulativeWheelRevolutionsDelegate,
     ) -> ServerBuilder<
         ServerWheel.Selected,
         Crank,
@@ -97,7 +97,7 @@ extension ServerBuilder where Wheel == ServerWheel.Unselected {
         ServerBuilder<ServerWheel.Selected, Crank, Location>(
             wheel: WheelConfiguration(
                 revolutions: AnyAsyncSequence(revolutions),
-                setCumulativeWheelRevolutions: delegate,
+                delegate: delegate,
             ),
             crankRevolutions: crankRevolutions,
             location: location,

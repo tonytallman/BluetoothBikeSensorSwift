@@ -1,7 +1,7 @@
 import CSCServer
 import Foundation
 
-actor ScriptedCumulativeDelegate: SetCumulativeWheelRevolutions {
+actor ScriptedCumulativeDelegate: CumulativeWheelRevolutionsDelegate {
     private(set) var recordedValues: [UInt32] = []
     private var shouldThrow = false
     private var parkArmed = false

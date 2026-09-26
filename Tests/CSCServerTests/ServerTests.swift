@@ -951,7 +951,7 @@ private func makeYieldingCrankSequence() -> (
     })
 }
 
-private final class CumulativeSpy: SetCumulativeWheelRevolutions, @unchecked Sendable {
+private final class CumulativeSpy: CumulativeWheelRevolutionsDelegate, @unchecked Sendable {
     func setCumulativeWheelRevolutions(_ cumulativeRevolutions: UInt32) async throws {}
 }
 

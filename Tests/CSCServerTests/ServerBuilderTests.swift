@@ -1,7 +1,7 @@
 // Unrepresentable — leave commented. These must not type-check:
 // ServerBuilder<ServerWheel.Unselected, ServerCrank.Unselected, ServerLocation.Unselected>().build()
 // Server.wheelRevolutions(wheel).build()
-// Server.crankRevolutions(crank).setCumulativeWheelRevolutions(cumulative)
+// Server.crankRevolutions(crank).delegate(cumulative)
 // Server.crankRevolutions(crank).startSensorCalibration()
 // Server.crankRevolutions(crank).controlPoint()
 // Server.crankRevolutions(crank).staticSensorLocation(.leftCrank).multipleSensorLocations(locations)
@@ -56,7 +56,7 @@ struct ServerBuilderTests {
             sensorLocation: .none,
             includesControlPoint: true,
         ))
-        #expect(delegateIdentity(server.wheel?.setCumulativeWheelRevolutions) == delegateIdentity(cumulative))
+        #expect(delegateIdentity(server.wheel?.delegate) == delegateIdentity(cumulative))
         #expect(isLocationNone(server))
         #expect(hasControlPoint(server))
     }
@@ -73,7 +73,7 @@ struct ServerBuilderTests {
             sensorLocation: .cached(.rearDropout),
             includesControlPoint: true,
         ))
-        #expect(delegateIdentity(server.wheel?.setCumulativeWheelRevolutions) == delegateIdentity(cumulative))
+        #expect(delegateIdentity(server.wheel?.delegate) == delegateIdentity(cumulative))
         #expect(hasControlPoint(server))
     }
 
@@ -89,7 +89,7 @@ struct ServerBuilderTests {
             sensorLocation: .none,
             includesControlPoint: true,
         ))
-        #expect(delegateIdentity(server.wheel?.setCumulativeWheelRevolutions) == delegateIdentity(cumulative))
+        #expect(delegateIdentity(server.wheel?.delegate) == delegateIdentity(cumulative))
         #expect(isLocationNone(server))
         #expect(hasControlPoint(server))
     }
@@ -107,7 +107,7 @@ struct ServerBuilderTests {
             sensorLocation: .cached(.rearWheel),
             includesControlPoint: true,
         ))
-        #expect(delegateIdentity(server.wheel?.setCumulativeWheelRevolutions) == delegateIdentity(cumulative))
+        #expect(delegateIdentity(server.wheel?.delegate) == delegateIdentity(cumulative))
         #expect(hasControlPoint(server))
     }
 
@@ -149,7 +149,7 @@ struct ServerBuilderTests {
             sensorLocation: .multiple,
             includesControlPoint: true,
         ))
-        #expect(delegateIdentity(server.wheel?.setCumulativeWheelRevolutions) == delegateIdentity(cumulative))
+        #expect(delegateIdentity(server.wheel?.delegate) == delegateIdentity(cumulative))
         #expect(multipleConfiguration(server)?.supported == [.rearDropout, .rearWheel])
         #expect(multipleConfiguration(server)?.current == .rearWheel)
         #expect(sensorLocationValue(server) == nil)
@@ -173,7 +173,7 @@ struct ServerBuilderTests {
             sensorLocation: .multiple,
             includesControlPoint: true,
         ))
-        #expect(delegateIdentity(server.wheel?.setCumulativeWheelRevolutions) == delegateIdentity(cumulative))
+        #expect(delegateIdentity(server.wheel?.delegate) == delegateIdentity(cumulative))
         #expect(multipleConfiguration(server)?.supported == [.leftCrank, .rightCrank])
         #expect(multipleConfiguration(server)?.current == .rightCrank)
         #expect(sensorLocationValue(server) == nil)
@@ -313,7 +313,7 @@ struct ServerBuilderTests {
         return false
     }
 
-    private func delegateIdentity(_ delegate: (any SetCumulativeWheelRevolutions)?) -> ObjectIdentifier? {
+    private func delegateIdentity(_ delegate: (any CumulativeWheelRevolutionsDelegate)?) -> ObjectIdentifier? {
         guard let delegate else {
             return nil
         }
@@ -406,7 +406,7 @@ struct ServerBuilderTests {
     }
 }
 
-private final class CumulativeSpy: SetCumulativeWheelRevolutions, @unchecked Sendable {
+private final class CumulativeSpy: CumulativeWheelRevolutionsDelegate, @unchecked Sendable {
     private(set) var setCount = 0
 
     func setCumulativeWheelRevolutions(_ cumulativeRevolutions: UInt32) async throws {

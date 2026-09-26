@@ -1353,7 +1353,7 @@ actor ServerSession {
             return
         }
 
-        let delegate = wheel.setCumulativeWheelRevolutions
+        let delegate = wheel.delegate
         do {
             try await delegate.setCumulativeWheelRevolutions(value)
         } catch {

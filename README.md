@@ -205,7 +205,7 @@ Public types include DocC-style `///` comments in source. Test-only dependency i
 ```swift
 import CSCServer
 
-struct ResetWheelCount: SetCumulativeWheelRevolutions {
+struct ResetWheelCount: CumulativeWheelRevolutionsDelegate {
     func setCumulativeWheelRevolutions(_ cumulativeRevolutions: UInt32) async throws {
         // Store the new cumulative wheel count in your model.
     }
@@ -236,7 +236,7 @@ Revolution sources are any `AsyncSequence & Sendable` of `WheelRevolution` or `C
 - Entry points: `Server.wheelRevolutions(_:setCumulativeWheelRevolutions:)` and `Server.crankRevolutions(_:)`.
 - Chain methods: `wheelRevolutions(_:setCumulativeWheelRevolutions:)`, `crankRevolutions(_:)`, `staticSensorLocation(_:)`, `multipleSensorLocations(_:)`, then `build()`.
 - Static and multiple sensor locations are mutually exclusive; the type-state builder rejects both at compile time.
-- Wheel data always requires a `SetCumulativeWheelRevolutions` delegate.
+- Wheel data always requires a `CumulativeWheelRevolutionsDelegate` delegate.
 - Start Sensor Calibration is not supported.
 - `Server` has no public initializer.
 
@@ -320,7 +320,7 @@ If Bluetooth leaves the powered-on state after `start()` returns, the server sus
 
 Servers with wheel data or multiple sensor locations include SC Control Point (`0x2A55`) and handle three procedures:
 
-- Set Cumulative Value (`0x01`) calls your `SetCumulativeWheelRevolutions` delegate.
+- Set Cumulative Value (`0x01`) calls your `CumulativeWheelRevolutionsDelegate` delegate.
 - Update Sensor Location (`0x03`) calls your `MultipleSensorLocationsDelegate`.
 - Request Supported Sensor Locations (`0x04`) answers from the list captured at `build()`.
 
@@ -341,7 +341,7 @@ CSC Feature and the characteristic inventory are fixed at `build()` for the life
 - `ServerError` — `alreadyStarted` (this `Server` is already starting, running, or stopping), `notPoweredOn` (unavailable, powered off, unauthorized, or unsupported during startup, or lost before `start()` finished), `publishFailed`, `advertisingFailed`
 - `WheelRevolution`, `CrankRevolution` — CSC Measurement wire units for server sequences
 - `SensorLocationKind` — GATT assigned numbers 0...16 for the builder
-- `SetCumulativeWheelRevolutions` — called for Set Cumulative Value
+- `CumulativeWheelRevolutionsDelegate` — called for Set Cumulative Value
 - `MultipleSensorLocationsDelegate` — `supported`, `current`, and `update(_:)` for Update Sensor Location on multiple-location servers
 
 `CSCWire` holds shared CSCS wire codecs as an internal package target. It is not a library product. The peripheral seam stays package-visible inside the package.
