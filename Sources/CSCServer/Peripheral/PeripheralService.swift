@@ -28,6 +28,9 @@ package struct PeripheralCharacteristic: Sendable, Equatable {
     package let uuid: UUID
     package let properties: CharacteristicProperties
     package let permissions: CharacteristicPermissions
+    /// Non-nil (CoreBluetooth cached read) is only valid when `properties == [.read]` and
+    /// `permissions == [.readable]`; `CoreBluetoothPeripheral` asserts this in debug builds but
+    /// does not throw. `nil` means dynamic — reads arrive on `events`.
     package let value: Data?
 
     package init(

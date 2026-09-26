@@ -181,6 +181,11 @@ extension ServerBuilder where Location == ServerLocation.Unselected {
 
 extension ServerBuilder {
     /// Builds the server from the configured revolution sources and location settings.
+    ///
+    /// Unlike the type-state markers for wheel/crank/location, "at least one revolution source"
+    /// is not enforced by the type system: `build()` is callable with neither
+    /// `wheelRevolutions` nor `crankRevolutions` selected, and `ServerConfiguration`'s
+    /// initializer enforces the requirement with a runtime `precondition` instead.
     public consuming func build() -> Server {
         Server(
             configuration: ServerConfiguration(

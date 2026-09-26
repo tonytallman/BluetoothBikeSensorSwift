@@ -54,6 +54,8 @@ package struct PeripheralWriteTransaction: Sendable, Equatable {
     }
 }
 
+/// CCCD (`0x2902`) enable/disable for one characteristic. Delivered as `.subscription` events,
+/// not `.writeTransaction`.
 package enum SubscriptionChange: Sendable, Equatable {
     case subscribed(centralID: UUID, serviceUUID: UUID, characteristicUUID: UUID)
     case unsubscribed(centralID: UUID, serviceUUID: UUID, characteristicUUID: UUID)

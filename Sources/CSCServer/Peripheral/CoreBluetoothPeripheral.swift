@@ -24,6 +24,9 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
     private let eventBroadcaster = StreamBroadcaster<PeripheralEvent>()
 
+    /// Wires the delegate bridge to a FIFO stream drained by one actor-isolated task, so
+    /// callbacks that fire on `queue` are serialized onto the actor in arrival order before
+    /// ``handle(_:)`` touches any state.
     package init() {
         let bridge = PeripheralDelegateBridge()
         let (stream, continuation) = AsyncStream.makeStream(of: PeripheralDelegateEvent.self)
@@ -43,6 +46,9 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
+    /// `deinit` is nonisolated and cannot hop onto the actor, so it fails leftover continuations
+    /// directly through the lock-backed ``StartupAsyncContinuations`` instead of calling
+    /// `handle`. Does not call `queue.sync`, to avoid blocking teardown on the manager queue.
     deinit {
         delegateBridge.clearHandler()
         delegateEvents.finish()
@@ -63,6 +69,9 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         get async { lossCount }
     }
 
+    /// Stores the UUID↔CoreBluetooth mappings before calling `peripheralManager.add`, so the
+    /// `didAdd` callback (and any read/write that races it) can already resolve the new
+    /// characteristics.
     package func add(_ service: PeripheralService) async throws {
         guard state == .poweredOn else {
             throw BluetoothPeripheralError.notPoweredOn
@@ -88,6 +97,9 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
+    /// Removes bookkeeping unconditionally but only calls the manager while powered on, so a
+    /// service dropped during a power loss is not re-removed from a manager that already
+    /// discarded it.
     package func removeService(uuid: UUID) async throws {
         let callsManager = state == .poweredOn
         try queue.sync {
@@ -135,6 +147,9 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
+    /// Assigns `value` to the request whenever it is non-nil, for both reads and writes; the
+    /// caller is trusted not to pass a value for a write or an error response (CoreBluetooth
+    /// ignores `CBATTRequest.value` for those anyway).
     package func respond(
         to requestID: UUID,
         with result: ATTResult,
@@ -198,9 +213,13 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
+    /// Runs one delegate event at a time on the actor, in the order the FIFO channel delivered
+    /// them, so ``events`` subscribers and the power-loss bookkeeping below never interleave.
     private func handle(_ event: PeripheralDelegateEvent) async {
         switch event {
         case let .stateUpdated(newState):
+            // Bookkeeping (loss count, failed continuations, dropped centrals) lands before the
+            // event is broadcast, so anything reacting to `.stateUpdated` sees consistent state.
             state = newState
             if newState != .poweredOn {
                 lossCount += 1
@@ -248,6 +267,8 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         }
     }
 
+    /// Returns the characteristics alongside their UUIDs so the caller can register the
+    /// UUID↔`CBMutableCharacteristic` mapping before calling `peripheralManager.add`.
     private static func makeCBService(
         from service: PeripheralService,
     ) -> (CBMutableService, [(uuid: UUID, characteristic: CBMutableCharacteristic)]) {
@@ -260,6 +281,9 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
         return (cbService, characteristicPairs)
     }
 
+    /// Debug-only guard for the cached-value contract documented on
+    /// ``PeripheralCharacteristic/value``; a violation here reflects a bug in this package's own
+    /// characteristic construction, not caller input, so it asserts rather than throws.
     private static func makeCBCharacteristic(from characteristic: PeripheralCharacteristic) -> CBMutableCharacteristic {
         assert(
             characteristic.value == nil
@@ -290,6 +314,11 @@ package actor CoreBluetoothPeripheral: BluetoothPeripheral {
     }
 }
 
+/// Holds the single in-flight `add`/`startAdvertising` continuation outside the actor.
+///
+/// `deinit` runs nonisolated and cannot await actor isolation to resolve a pending
+/// continuation, so this box uses its own lock and is failed directly from `deinit` and from the
+/// power-loss path in ``CoreBluetoothPeripheral/handle(_:)``.
 private final class StartupAsyncContinuations: @unchecked Sendable {
     private let lock = NSLock()
     private var addContinuation: CheckedContinuation<Void, Error>?
@@ -343,6 +372,10 @@ private final class StartupAsyncContinuations: @unchecked Sendable {
     }
 }
 
+/// Raw vocabulary from ``PeripheralDelegateBridge``, before ``CoreBluetoothPeripheral/handle(_:)``
+/// maps it onto the public ``PeripheralEvent`` stream and resolves `add`/`startAdvertising`
+/// continuations. Kept separate from `PeripheralEvent` because `serviceAdded` and
+/// `advertisingStarted` are consumed internally, not re-broadcast.
 private enum PeripheralDelegateEvent: Sendable {
     case stateUpdated(BluetoothState)
     case serviceAdded(serviceUUID: UUID, errorReason: String?)
@@ -353,6 +386,11 @@ private enum PeripheralDelegateEvent: Sendable {
     case readyToUpdateSubscribers
 }
 
+/// `CBPeripheralManagerDelegate` callbacks land on the manager's dispatch queue, not the actor,
+/// so this bridge is a plain `NSObject` guarded by its own lock. It stores the UUID↔CoreBluetooth
+/// mappings CoreBluetooth needs by reference (`CBMutableService`/`CBMutableCharacteristic`,
+/// `CBCentral`, `CBATTRequest`) and forwards every callback to ``CoreBluetoothPeripheral`` as a
+/// ``PeripheralDelegateEvent`` through `emit`.
 private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var handler: (@Sendable (PeripheralDelegateEvent) -> Void)?
@@ -367,6 +405,10 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         lock.unlock()
     }
 
+    /// Reads the manager's current state synchronously, then re-emits it asynchronously on the
+    /// same serial queue. This guarantees the replayed state is seen even if the real
+    /// `didUpdateState` callback fired during `CBPeripheralManager` construction, before this
+    /// bridge was bound — a callback firing there would otherwise be silently dropped.
     func replayCurrentState(from peripheral: CBPeripheralManager, on queue: DispatchQueue) {
         let state = queue.sync {
             BluetoothState(peripheral.state)
@@ -451,6 +493,9 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         emit(.stateUpdated(BluetoothState(peripheral.state)))
     }
 
+    /// Drops the callback if the UUID cannot be bridged back to a `UUID` — should not happen for
+    /// a service this bridge itself added, but there is no fallback: a dropped callback here
+    /// leaves the caller's `add` continuation unresolved.
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
         guard let serviceUUID = service.uuid.foundationUUID else {
             return
@@ -462,6 +507,8 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         emit(.advertisingStarted(errorReason: error?.localizedDescription))
     }
 
+    /// Caches the central before UUID resolution, so it is available to
+    /// `updateValue(onSubscribedCentrals:)` even on the `invalidHandle` fallback path below.
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveRead request: CBATTRequest) {
         lock.lock()
         centrals[request.central.identifier] = request.central
@@ -487,6 +534,8 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         )
     }
 
+    /// A malformed request anywhere in the transaction answers the whole transaction with
+    /// `invalidHandle` via `firstRequest` — ATT allows only one response per write transaction.
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
         guard let firstRequest = requests.first else {
             return
@@ -571,6 +620,8 @@ private final class PeripheralDelegateBridge: NSObject, CBPeripheralManagerDeleg
         emit(.subscription(change))
     }
 
+    /// Bridges a `CBCharacteristic` back to the `(serviceUUID, characteristicUUID)` pair this
+    /// package identifies it by; shared by the read, write, and subscription callbacks.
     private func characteristicIdentity(
         _ characteristic: CBCharacteristic,
     ) -> (serviceUUID: UUID, characteristicUUID: UUID)? {
@@ -622,6 +673,10 @@ private extension UUID {
 }
 
 private extension CBUUID {
+    /// Reconstructs a full 128-bit `UUID` from a CoreBluetooth `CBUUID`, which prints short
+    /// UUIDs as just their 16-bit or 32-bit assigned-number hex. Short forms are expanded against
+    /// the Bluetooth Base UUID (`0000xxxx-0000-1000-8000-00805F9B34FB`); anything else is already
+    /// a full UUID string.
     var foundationUUID: UUID? {
         let uuidString = uuidString
         if uuidString.count == 4 {

@@ -11,6 +11,8 @@ actor StreamBroadcaster<Element: Sendable> {
     private var subscriberCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
     private var latest: Element?
 
+    /// `replaysLatest` sends `initialLatest` (or the most recent `yield`) to each new subscriber
+    /// immediately, so a late subscriber sees the current value instead of only future changes.
     init(replaysLatest: Bool = false, initialLatest: Element? = nil) {
         self.replaysLatest = replaysLatest
         self.latest = initialLatest
