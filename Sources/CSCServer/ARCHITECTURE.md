@@ -31,11 +31,11 @@ so tests can reach it without `@testable import`, but is not part of the product
 
 ```mermaid
 graph TD
-    Builder["ServerBuilder&lt;Wheel, Crank, Location&gt;"] -->|build()| Config[ServerConfiguration]
+    Builder["ServerBuilder&lt;Wheel, Crank, Location&gt;"] -->|"build()"| Config[ServerConfiguration]
     Config -->|constructs| Server
     Server -->|start / stop| Lifecycle[ServerLifecycle]
     Lifecycle -->|one session per start| Session[ServerSession]
-    Session -->|GATT calls| Peripheral(("BluetoothPeripheral<br/>(protocol)"))
+    Session -->|GATT calls| Peripheral["BluetoothPeripheral (protocol)"]
     Peripheral --- CBP[CoreBluetoothPeripheral]
     Peripheral --- Fake[FakeBluetoothPeripheral]
     Lifecycle -. shared across restarts .-> LocationBox[ServedSensorLocationBox]
@@ -188,17 +188,17 @@ retries on the next loss-then-regain cycle.
 sequenceDiagram
     participant Source as Wheel/crank AsyncSequence
     participant Session as ServerSession
-    participant Pump as Outbound pump (one task)
+    participant Pump as "Outbound pump (one task)"
     participant CB as BluetoothPeripheral
 
     Source->>Session: revolution sample
-    Session->>Session: encode combined CSCMeasurement (cache other half)
+    Session->>Session: "encode combined CSCMeasurement (cache other half)"
     Session->>Pump: enqueue QueuedMeasurement, await producer completion
-    Pump->>CB: updateValue(payload)
-    CB-->>Pump: false (backpressure)
+    Pump->>CB: "updateValue(payload)"
+    CB-->>Pump: "false (backpressure)"
     Pump->>Pump: wait for readyToUpdateSubscribers
     CB-->>Pump: readyToUpdateSubscribers event
-    Pump->>CB: updateValue(payload) retry
+    Pump->>CB: "updateValue(payload) retry"
     CB-->>Pump: true
     Pump->>Session: resume producer continuation
     Session->>Source: pull next sample
