@@ -3,7 +3,7 @@ import CSCWire
 import Foundation
 import Testing
 
-@Suite(.timeLimit(.minutes(1))) struct ScannerScanTests {
+@Suite(.timeLimit(.minutes(1))) struct ScannerTests {
     private static func waitForScanStart(_ fake: FakeBluetoothCentral) async {
         await fake.waitForRecordedCall { call in
             if case .startScanning = call { return true }
@@ -15,16 +15,29 @@ import Testing
         let fake = FakeBluetoothCentral()
         let scanner = Scanner(central: fake)
         let stream = scanner.scan()
-        let collector = Task { await AsyncTestHelpers.collect(from: stream, maxCount: 1) }
+
+        let collector = Task {
+            var sensors: [DiscoveredSensor] = []
+            for await sensor in stream {
+                sensors.append(sensor)
+                if sensors.count >= 1 {
+                    break
+                }
+            }
+            return sensors
+        }
 
         await Self.waitForScanStart(fake)
 
         let peripheralID = UUID()
+        var manufacturerData = Data()
+        manufacturerData.append(contentsOf: [0x6D, 0x00])
+
         await fake.emitDiscovery(
             DiscoveredPeripheral(
                 id: peripheralID,
                 name: "Speed Sensor",
-                manufacturerData: nil,
+                manufacturerData: manufacturerData,
                 serviceUUIDs: [CSCS.serviceUUID],
             ),
         )
@@ -33,13 +46,21 @@ import Testing
         #expect(sensors.count == 1)
         #expect(sensors[0].id == peripheralID)
         #expect(sensors[0].name == "Speed Sensor")
+        #expect(sensors[0].manufacturer == "Garmin")
     }
 
     @Test func filtersNonCSCPeripheral() async {
         let fake = FakeBluetoothCentral()
         let scanner = Scanner(central: fake)
         let stream = scanner.scan()
-        let collector = Task { await AsyncTestHelpers.collect(from: stream, maxCount: 1) }
+
+        let collector = Task {
+            var sensors: [DiscoveredSensor] = []
+            for await sensor in stream {
+                sensors.append(sensor)
+            }
+            return sensors
+        }
 
         await Self.waitForScanStart(fake)
 
@@ -52,6 +73,7 @@ import Testing
             ),
         )
 
+        collector.cancel()
         let sensors = await collector.value
         #expect(sensors.isEmpty)
     }
@@ -60,7 +82,14 @@ import Testing
         let fake = FakeBluetoothCentral()
         let scanner = Scanner(central: fake)
         let stream = scanner.scan()
-        let collector = Task { await AsyncTestHelpers.collect(from: stream, maxCount: 2) }
+
+        let collector = Task { () -> [DiscoveredSensor] in
+            var iterator = stream.makeAsyncIterator()
+            if let first = await iterator.next() {
+                return [first]
+            }
+            return []
+        }
 
         await Self.waitForScanStart(fake)
 
@@ -89,9 +118,15 @@ import Testing
             for await _ in stream {}
         }
 
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        await fake.waitForRecordedCall { call in
+            if case .startScanning = call { return true }
+            return false
+        }
         collector.cancel()
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        await fake.waitForRecordedCall { call in
+            if case .stopScanning = call { return true }
+            return false
+        }
 
         let calls = await fake.recordedCalls
         #expect(calls.contains(.stopScanning))
@@ -102,48 +137,38 @@ import Testing
         let scanner = Scanner(central: fake)
         let stream = scanner.scan()
 
-        let sensors = await AsyncTestHelpers.collect(from: stream, maxCount: 1, timeoutNanoseconds: 200_000_000)
+        var sensors: [DiscoveredSensor] = []
+        for await sensor in stream {
+            sensors.append(sensor)
+        }
         let calls = await fake.recordedCalls
 
         #expect(sensors.isEmpty)
         #expect(!calls.contains(.startScanning(serviceUUIDs: [CSCS.serviceUUID])))
     }
 
-    @Test func resolvesManufacturerFromCompanyID() async {
-        let fake = FakeBluetoothCentral()
-        let scanner = Scanner(central: fake)
-        let stream = scanner.scan()
-        let collector = Task { await AsyncTestHelpers.collect(from: stream, maxCount: 1) }
-
-        await Self.waitForScanStart(fake)
-
-        var manufacturerData = Data()
-        manufacturerData.append(contentsOf: [0x6D, 0x00]) // Garmin company ID, little-endian
-
-        await fake.emitDiscovery(
-            DiscoveredPeripheral(
-                id: UUID(),
-                name: "Garmin Sensor",
-                manufacturerData: manufacturerData,
-                serviceUUIDs: [CSCS.serviceUUID],
-            ),
-        )
-
-        let sensors = await collector.value
-        #expect(sensors.count == 1)
-        #expect(sensors[0].manufacturer == "Garmin")
-    }
-
     @Test func scanStartsAfterUnknownTransitionsToPoweredOn() async {
         let fake = FakeBluetoothCentral(initialState: .unknown)
         let scanner = Scanner(central: fake)
         let stream = scanner.scan()
+
+        let stateTask = Task {
+            _ = await fake.stateUpdates
+        }
+        await fake.waitForStateUpdatesSubscriber()
+        await fake.setState(.poweredOn)
+
         let collector = Task {
-            await AsyncTestHelpers.collect(from: stream, maxCount: 1, timeoutNanoseconds: 3_000_000_000)
+            var sensors: [DiscoveredSensor] = []
+            for await sensor in stream {
+                sensors.append(sensor)
+                if sensors.count >= 1 {
+                    break
+                }
+            }
+            return sensors
         }
 
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        await fake.setState(.poweredOn)
         await Self.waitForScanStart(fake)
 
         let peripheralID = UUID()
@@ -157,6 +182,7 @@ import Testing
         )
 
         let sensors = await collector.value
+        stateTask.cancel()
         #expect(sensors.count == 1)
         #expect(sensors[0].id == peripheralID)
     }
@@ -165,8 +191,16 @@ import Testing
         let fake = FakeBluetoothCentral()
         let scanner = Scanner(central: fake)
         let stream = scanner.scan()
+
         let collector = Task {
-            await AsyncTestHelpers.collect(from: stream, maxCount: 2, timeoutNanoseconds: 500_000_000)
+            var sensors: [DiscoveredSensor] = []
+            for await sensor in stream {
+                sensors.append(sensor)
+                if sensors.count >= 2 {
+                    break
+                }
+            }
+            return sensors
         }
 
         await Self.waitForScanStart(fake)

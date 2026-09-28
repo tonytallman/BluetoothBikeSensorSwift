@@ -3,6 +3,22 @@ import CSCWire
 import Foundation
 import Testing
 
+private enum CSCMeasurementFixtures {
+    static func wheelMeasurement(revolutions: UInt32, eventTime: UInt16) -> Data {
+        CSCMeasurement(
+            cumulativeWheelRevolutions: revolutions,
+            lastWheelEventTime: eventTime,
+        ).encode()!
+    }
+
+    static func crankMeasurement(revolutions: UInt16, eventTime: UInt16) -> Data {
+        CSCMeasurement(
+            cumulativeCrankRevolutions: revolutions,
+            lastCrankEventTime: eventTime,
+        ).encode()!
+    }
+}
+
 @Suite struct CSCMeasurementParserTests {
     private let defaultCircumference = 2.105
 

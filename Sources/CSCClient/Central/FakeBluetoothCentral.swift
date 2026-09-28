@@ -41,14 +41,10 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     private var shouldHangNextConnect = false
     private var shouldHoldNextControlPointIndication = false
     private var heldControlPointIndication: CentralEvent?
-    private var featureData = CSCFeature([.wheelRevolutionData, .crankRevolutionData]).encode()
-    private var discoveredCharacteristicUUIDs: [UUID] = [
-        CSCS.measurementUUID,
-        CSCS.featureUUID,
-        CSCS.controlPointUUID,
-    ]
-    private var sensorLocationData = CSCSensorLocation(assignedNumber: 0x05).encode()
-    private var supportedSensorLocationBytes: [UInt8] = [0x05, 0x06, 0x0A]
+    private var featureData: Data
+    private var discoveredCharacteristicUUIDs: [UUID]
+    private var sensorLocationData: Data
+    private var supportedSensorLocationBytes: [UInt8]
 
     private var conditionWaiters: [(isMet: () -> Bool, continuation: CheckedContinuation<Void, Never>)] = []
     private var stateUpdatesSubscriberCount = 0
@@ -59,8 +55,22 @@ package actor FakeBluetoothCentral: BluetoothCentral {
 
     package private(set) var recordedCalls: [RecordedCall] = []
 
-    package init(initialState: BluetoothState = .poweredOn) {
+    package init(
+        initialState: BluetoothState = .poweredOn,
+        featureData: Data = CSCFeature([.wheelRevolutionData, .crankRevolutionData]).encode(),
+        discoveredCharacteristicUUIDs: [UUID] = [
+            CSCS.measurementUUID,
+            CSCS.featureUUID,
+            CSCS.controlPointUUID,
+        ],
+        sensorLocationData: Data = CSCSensorLocation(assignedNumber: 0x05).encode(),
+        supportedSensorLocationBytes: [UInt8] = [0x05, 0x06, 0x0A],
+    ) {
         state = initialState
+        self.featureData = featureData
+        self.discoveredCharacteristicUUIDs = discoveredCharacteristicUUIDs
+        self.sensorLocationData = sensorLocationData
+        self.supportedSensorLocationBytes = supportedSensorLocationBytes
     }
 
     package var stateUpdates: AsyncStream<BluetoothState> {
@@ -251,21 +261,6 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     package func setState(_ newState: BluetoothState) async {
         state = newState
         await stateBroadcaster.yield(newState)
-        changed()
-    }
-
-    package func setFeatureData(_ data: Data) {
-        featureData = data
-        changed()
-    }
-
-    package func setDiscoveredCharacteristicUUIDs(_ uuids: [UUID]) {
-        discoveredCharacteristicUUIDs = uuids
-        changed()
-    }
-
-    package func setSensorLocationData(_ data: Data) {
-        sensorLocationData = data
         changed()
     }
 
