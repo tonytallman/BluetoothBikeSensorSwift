@@ -59,19 +59,11 @@ public struct Scanner: Sendable {
 
                 var seenIDs: Set<UUID> = []
 
-                for await event in discoveries {
-                    guard !Task.isCancelled else { break }
-                    guard let sensor = DiscoveredSensorMapper.map(
-                        event,
-                        central: central,
-                        timeouts: timeouts,
-                    ) else { continue }
+                for await event in discoveries where event.serviceUUIDs.contains(CSCS.serviceUUID) {
+                    let sensor = DiscoveredSensor(event, central: central, timeouts: timeouts)
                     guard seenIDs.insert(sensor.id).inserted else { continue }
                     continuation.yield(sensor)
                 }
-
-                await central.stopScanning()
-                continuation.finish()
             }
 
             continuation.onTermination = { _ in
@@ -85,14 +77,6 @@ public struct Scanner: Sendable {
 
     private static func waitForPoweredOn(central: any BluetoothCentral, timeouts: Timeouts) async -> Bool {
         let unavailableStates: Set<BluetoothState> = [.unsupported, .unauthorized, .poweredOff]
-
-        let initialState = await central.currentState
-        if initialState == .poweredOn {
-            return true
-        }
-        if unavailableStates.contains(initialState) {
-            return false
-        }
 
         return await withTaskGroup(of: Bool.self) { group in
             group.addTask {
