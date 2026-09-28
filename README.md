@@ -168,7 +168,7 @@ Speed is derived from wheel revolutions and **client-managed wheel circumference
 
 - `Scanner()` — client initializer; wires production dependencies internally
 - `Scanner.scan()` — returns `AsyncStream<DiscoveredSensor>` filtered to CSC service (`0x1816`); cancel the iterating task to stop scanning
-- `DiscoveredSensor` — discovery metadata (`id`, `name`, `manufacturer`, `hasSpeed`, `hasCadence`); capability flags are best-effort hints only
+- `DiscoveredSensor` — discovery metadata (`id`, `name`, `manufacturer`)
 - `DiscoveredSensor.connect()` — connects, reads CSC Feature (`0x2A5C`), resolves wheel/crank/location support, enables notifications; throws `ConnectError`
 - `ConnectedSensor` — `revolutions: RevolutionData` (`.wheel` / `.crank` / `.wheelAndCrank`) and `location: LocationSupport` (`.unavailable` / `.fixed` / `.multiple`); `disconnect() async throws -> DiscoveredSensor`
 - `WheelRevolutions` — client-managed `wheelCircumference` (default 2.105 m); `speed`, `wheelSamples`, and `setCumulativeRevolutions(_:)` (throws `ControlPointError.controlPointUnavailable` when the sensor did not expose SC Control Point)
@@ -189,7 +189,6 @@ Public types include DocC-style `///` comments in source. Test-only dependency i
 
 - **Multi-connection:** Multiple sensors may be connected simultaneously.
 - **Discovery metadata:** `name` and `manufacturer` are best-effort from advertisement data and may be absent.
-- **Capability flags:** `hasSpeed` and `hasCadence` on `DiscoveredSensor` are best-effort at discovery time. After connect, rely on `ConnectedSensor.revolutions` and the streams on `WheelRevolutions` / `CrankRevolutions`.
 - **Feature-driven support:** Wheel, crank, and location support come from CSC Feature (`0x2A5C`) at connect time. Advertisement flags are not used as a fallback.
 - **CSC event-time wrap (64 s):** last-event time is uint16 at 1/1024 s and wraps every 64 seconds. If the sensor is silent for ~65 s, wrapping Δt can compute to ~1 s. One revolution over that wrong Δt is ~2.1 m/s, which passes the implausible-delta guard, so a sample is emitted with a wrong Δt. Downstream accumulators will add that Δt to total time. This is inherent to the protocol; this library does not reconstruct wall-clock intervals as `deltaTime`.
 - **Zero-distance / zero-revolution samples:** when Δt > 0 but revolutions did not change, the library emits a sample with zero quantity (0 m/s / 0 rpm). Spec-compliant firmware rarely advances event time without a revolution; non-compliant firmware can accrue moving time in downstream accumulators until autopause gates it.
