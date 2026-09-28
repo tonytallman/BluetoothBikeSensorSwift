@@ -34,7 +34,6 @@ public final class ConnectedSensor: Sendable {
         central: any BluetoothCentral,
         controlPoint: ControlPoint?,
         controlPointIndicationsEnabled: Bool,
-        stateBox: MeasurementStateBox,
         timeouts: Timeouts,
         centralEvents: AsyncStream<CentralEvent>,
     ) {
@@ -65,7 +64,6 @@ public final class ConnectedSensor: Sendable {
         crankRevolutions = loopCrank
 
         let loopID = id
-        let loopStateBox = stateBox
         let events = centralEvents
         eventLoop = Task {
             await Self.runMeasurementLoop(
@@ -73,7 +71,6 @@ public final class ConnectedSensor: Sendable {
                 id: loopID,
                 wheelRevolutions: loopWheel,
                 crankRevolutions: loopCrank,
-                stateBox: loopStateBox,
             )
         }
     }
@@ -134,7 +131,6 @@ public final class ConnectedSensor: Sendable {
         id: UUID,
         wheelRevolutions: WheelRevolutions?,
         crankRevolutions: CrankRevolutions?,
-        stateBox: MeasurementStateBox,
     ) async {
         for await event in events {
             guard !Task.isCancelled else {
@@ -154,7 +150,6 @@ public final class ConnectedSensor: Sendable {
                     value,
                     wheelRevolutions: wheelRevolutions,
                     crankRevolutions: crankRevolutions,
-                    stateBox: stateBox,
                 )
 
             case let .disconnected(peripheralID):
@@ -177,53 +172,23 @@ public final class ConnectedSensor: Sendable {
         _ data: Data,
         wheelRevolutions: WheelRevolutions?,
         crankRevolutions: CrankRevolutions?,
-        stateBox: MeasurementStateBox,
     ) async {
         guard let sample = CSCMeasurement.decode(data) else {
             return
         }
 
-        let context = stateBox.readMeasurementContext()
-        var state = context.state
-
-        let wheelDelta = wheelRevolutions != nil
-            ? CSCMeasurementParser.wheelDelta(
-                from: sample,
-                previous: &state,
-                circumferenceMeters: context.circumferenceMeters,
-            )
-            : nil
-        let crankDelta = crankRevolutions != nil
-            ? CSCMeasurementParser.crankDelta(from: sample, previous: &state)
-            : nil
-
-        stateBox.writeMeasurementState(state)
-
-        if let wheelDelta, let wheelRevolutions {
-            let speed = CSCMeasurementParser.speed(
-                from: wheelDelta,
-                circumferenceMeters: context.circumferenceMeters,
-            )
-            await wheelRevolutions.yieldSpeed(speed)
-            await wheelRevolutions.yieldWheelSample(
-                WheelSample(
-                    deltaDistance: Measurement(
-                        value: Double(wheelDelta.deltaRevolutions) * context.circumferenceMeters,
-                        unit: .meters,
-                    ),
-                    deltaTime: Measurement(value: wheelDelta.deltaTimeSeconds, unit: .seconds),
-                ),
-            )
+        if let wheelRevolutions,
+           let revolutions = sample.cumulativeWheelRevolutions,
+           let eventTime = sample.lastWheelEventTime
+        {
+            await wheelRevolutions.receive(revolutions: revolutions, eventTime: eventTime)
         }
 
-        if let crankDelta, let crankRevolutions {
-            await crankRevolutions.yieldCadence(CSCMeasurementParser.cadence(from: crankDelta))
-            await crankRevolutions.yieldCrankSample(
-                CrankSample(
-                    deltaRevolutions: Int(crankDelta.deltaRevolutions),
-                    deltaTime: Measurement(value: crankDelta.deltaTimeSeconds, unit: .seconds),
-                ),
-            )
+        if let crankRevolutions,
+           let revolutions = sample.cumulativeCrankRevolutions,
+           let eventTime = sample.lastCrankEventTime
+        {
+            await crankRevolutions.receive(revolutions: revolutions, eventTime: eventTime)
         }
     }
 

@@ -197,6 +197,21 @@ import Testing
         #expect(crankSample?.deltaRevolutions == 1)
     }
 
+    @Test func streamRequestedAfterDisconnectFinishes() async throws {
+        let fake = FakeBluetoothCentral()
+        let connected = try await CSCClientTestSupport.sensor(central: fake).connect()
+        let wheel = try #require(connected.revolutions.wheel)
+
+        _ = try await connected.disconnect()
+
+        let stream = await wheel.speed
+        var finished = false
+        for await _ in stream {
+        }
+        finished = true
+        #expect(finished)
+    }
+
     @Test func combinedPayloadOneSideIdle() async throws {
         let fake = FakeBluetoothCentral()
         let sensorID = UUID()

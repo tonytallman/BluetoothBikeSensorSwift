@@ -6,8 +6,15 @@ import Foundation
 /// uses `Task { await remove(id) }` — a cancelled stream may receive one more event.
 actor StreamBroadcaster<Element: Sendable> {
     private var continuations: [UUID: AsyncStream<Element>.Continuation] = [:]
+    private var finished = false
 
     func makeStream() -> AsyncStream<Element> {
+        if finished {
+            let (stream, continuation) = AsyncStream.makeStream(of: Element.self)
+            continuation.finish()
+            return stream
+        }
+
         let (stream, continuation) = AsyncStream.makeStream(of: Element.self)
         let id = UUID()
         continuations[id] = continuation
@@ -30,6 +37,10 @@ actor StreamBroadcaster<Element: Sendable> {
     }
 
     func finish() {
+        guard !finished else {
+            return
+        }
+        finished = true
         let active = Array(continuations.values)
         continuations.removeAll()
         for continuation in active {

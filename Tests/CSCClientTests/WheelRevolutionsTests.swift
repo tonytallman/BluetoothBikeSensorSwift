@@ -137,6 +137,56 @@ import Testing
         }
     }
 
+    @Test(arguments: [
+        ("wheelDeltaHappyPath", 2, 1.0, 4.21),
+        ("zeroQuantityWithPositiveDeltaTimeEmitsWheel", 0, 1.0, 0.0),
+        ("handlesWheelRevolutionWraparound", 3, 1.0, 6.315),
+        ("wheelEventTimeWrapPlausible", 1, Double(UInt16(100) &- UInt16(65_500)) / 1024.0, 15.85),
+        ("wheelCapExactlyFiftyMetersPerSecondAccepted", 50, 2.105, 50.0),
+    ] as [(String, UInt32, Double, Double)])
+    func wheelSampleMath(
+        caseName: String,
+        deltaRevolutions: UInt32,
+        deltaSeconds: Double,
+        expectedSpeed: Double,
+    ) {
+        let circumference = caseName == "wheelCapExactlyFiftyMetersPerSecondAccepted" ? 2.105 : 2.105
+        let sample = WheelRevolutions.sample(
+            revolutions: deltaRevolutions,
+            seconds: deltaSeconds,
+            circumferenceMeters: circumference,
+        )
+        #expect(sample != nil)
+        if let sample {
+            let speed = sample.deltaDistance.converted(to: .meters).value / sample.deltaTime.converted(to: .seconds).value
+            #expect(abs(speed - expectedSpeed) < (caseName == "wheelEventTimeWrapPlausible" ? 0.1 : 0.01))
+        }
+    }
+
+    @Test(arguments: ["wheelImplausibleDeltaReseeds", "wheelCapJustOverFiftyRejected"])
+    func implausibleWheelDeltaIsDroppedAndReseeds(caseName: String) async throws {
+        let fake = FakeBluetoothCentral()
+        let sensorID = UUID()
+        let connected = try await CSCClientTestSupport.sensor(id: sensorID, central: fake).connect()
+        let wheel = try #require(connected.revolutions.wheel)
+
+        var iterator = (await wheel.wheelSamples).makeAsyncIterator()
+
+        if caseName == "wheelImplausibleDeltaReseeds" {
+            await emitWheel(fake: fake, id: sensorID, revolutions: 100, eventTime: 1_024)
+            await emitWheel(fake: fake, id: sensorID, revolutions: 10_000, eventTime: 2_048)
+            await emitWheel(fake: fake, id: sensorID, revolutions: 10_001, eventTime: 3_072)
+            let sample = await iterator.next()
+            #expect(sample?.deltaTime.converted(to: .seconds).value == 1.0)
+        } else {
+            await emitWheel(fake: fake, id: sensorID, revolutions: 100, eventTime: 1_024)
+            await emitWheel(fake: fake, id: sensorID, revolutions: 26_000, eventTime: 2_048)
+            await emitWheel(fake: fake, id: sensorID, revolutions: 26_001, eventTime: 3_072)
+            let sample = await iterator.next()
+            #expect(sample?.deltaDistance.converted(to: .meters).value == 2.105)
+        }
+    }
+
     private func emitWheel(
         fake: FakeBluetoothCentral,
         id: UUID,

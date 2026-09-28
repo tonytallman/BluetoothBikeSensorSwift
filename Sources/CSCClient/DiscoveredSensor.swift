@@ -103,12 +103,10 @@ public struct DiscoveredSensor: Sendable {
         central: any BluetoothCentral,
         timeouts: Timeouts,
     ) async -> ConnectedSensor {
-        let stateBox = MeasurementStateBox()
         let controlPoint = connectionResult.controlPoint
 
         let revolutions = Self.makeRevolutions(
             resolved: connectionResult.revolutions,
-            stateBox: stateBox,
             controlPoint: controlPoint,
         )
 
@@ -140,7 +138,6 @@ public struct DiscoveredSensor: Sendable {
             central: central,
             controlPoint: controlPoint,
             controlPointIndicationsEnabled: connectionResult.controlPointAvailable,
-            stateBox: stateBox,
             timeouts: timeouts,
             centralEvents: connectionResult.centralEvents,
         )
@@ -148,14 +145,12 @@ public struct DiscoveredSensor: Sendable {
 
     private static func makeRevolutions(
         resolved: ResolvedRevolutions,
-        stateBox: MeasurementStateBox,
         controlPoint: ControlPoint?,
     ) -> RevolutionData {
         switch resolved {
         case .wheel:
             return .wheel(
                 WheelRevolutions(
-                    stateBox: stateBox,
                     controlPoint: controlPoint,
                 ),
             )
@@ -164,7 +159,6 @@ public struct DiscoveredSensor: Sendable {
         case .wheelAndCrank:
             return .wheelAndCrank(
                 WheelRevolutions(
-                    stateBox: stateBox,
                     controlPoint: controlPoint,
                 ),
                 CrankRevolutions(),
