@@ -12,7 +12,7 @@ import Testing
 
     @Test(arguments: Self.assignedNumberCases())
     func mapsAssignedNumbersToKind(_ entry: AssignedNumberCase) {
-        let location = SensorLocation.fromAssignedNumber(entry.value)
+        let location = SensorLocation(assignedNumber: entry.value)
         #expect(location.kind == entry.kind)
         #expect(location.displayName == entry.displayName)
     }
@@ -58,7 +58,7 @@ import Testing
             return
         }
 
-        let frontWheel = SensorLocation.fromAssignedNumber(0x04)
+        let frontWheel = SensorLocation(assignedNumber: 0x04)
         do {
             try await locations.update(frontWheel)
             Issue.record("Expected update to throw")
