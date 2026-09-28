@@ -46,6 +46,7 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     private var hungWriteWaiters: [CheckedContinuation<Void, Never>] = []
     private var hungSetNotifyWaiters: [CheckedContinuation<Void, Never>] = []
     private var connectedPeripheralIDs: Set<UUID> = []
+    private var connectCallbackDrops: [UUID: Int] = [:]
     private var heldControlPointIndication: CentralEvent?
     private var featureData: Data
     private var discoveredCharacteristicUUIDs: [UUID]
@@ -120,6 +121,7 @@ package actor FakeBluetoothCentral: BluetoothCentral {
             do {
                 try await Task.sleep(for: .seconds(3600))
             } catch {
+                connectCallbackDrops[id, default: 0] += 1
                 throw CancellationError()
             }
         }
@@ -348,6 +350,15 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     package func hangNextConnect() {
         shouldHangNextConnect = true
         changed()
+    }
+
+    /// Simulates a CoreBluetooth `didConnect` delivered after a cancelled connect attempt.
+    package func simulateLateConnectSuccessFromCancelledAttempt(id: UUID) {
+        if let drops = connectCallbackDrops[id], drops > 0 {
+            connectCallbackDrops[id] = drops - 1
+            return
+        }
+        connectedPeripheralIDs.insert(id)
     }
 
     package func hangNextWrite() {

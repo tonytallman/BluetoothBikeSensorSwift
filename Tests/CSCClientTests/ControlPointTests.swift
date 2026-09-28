@@ -166,20 +166,12 @@ import Testing
         await fake.hangWriteAfterIndicating()
         try await locations.update(locations.supported[1])
 
+        let writeBaseline = await CSCClientTestSupport.controlPointWrites(on: fake)
         await fake.hangNextWrite()
         let secondUpdate = Task {
             try await locations.update(locations.supported[2])
         }
-        for _ in 0..<1_000 {
-            let writeCount = await fake.recordedCalls.filter {
-                if case .writeValue = $0 { return true }
-                return false
-            }.count
-            if writeCount >= 2 {
-                break
-            }
-            await Task.yield()
-        }
+        await CSCClientTestSupport.waitForControlPointWrite(on: fake, after: writeBaseline)
 
         await fake.releaseHungWrite()
 

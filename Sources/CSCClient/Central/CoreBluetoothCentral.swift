@@ -10,8 +10,8 @@ actor CoreBluetoothCentral: BluetoothCentral {
 
     private var state: BluetoothState = .unknown
     private var pending: [Request: CheckedContinuation<Data, Error>] = [:]
-    private var connectGeneration: [UUID: UInt64] = [:]
-    private var pendingConnectGeneration: [UUID: UInt64] = [:]
+    private var pendingConnect: Set<UUID> = []
+    private var connectCallbackDrops: [UUID: Int] = [:]
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
     private let discoveryBroadcaster = StreamBroadcaster<DiscoveredPeripheral>()
@@ -295,9 +295,7 @@ actor CoreBluetoothCentral: BluetoothCentral {
             complete(request)
             return
         }
-        let generation = (connectGeneration[id] ?? 0) + 1
-        connectGeneration[id] = generation
-        pendingConnectGeneration[id] = generation
+        pendingConnect.insert(id)
         centralManager.connect(peripheral, options: nil)
     }
 
@@ -311,18 +309,16 @@ actor CoreBluetoothCentral: BluetoothCentral {
 
     private func cancelConnect(id: UUID) {
         let request = Request.connect(id)
-        connectGeneration[id] = (connectGeneration[id] ?? 0) + 1
-        pendingConnectGeneration.removeValue(forKey: id)
         guard let continuation = pending.removeValue(forKey: request) else {
-            queue.sync {
-                guard let peripheral = delegateBridge.peripheral(for: id) else { return }
-                centralManager.cancelPeripheralConnection(peripheral)
-            }
             return
         }
+        pendingConnect.remove(id)
         queue.sync {
             guard let peripheral = delegateBridge.peripheral(for: id) else { return }
-            centralManager.cancelPeripheralConnection(peripheral)
+            if peripheral.state != .disconnected {
+                centralManager.cancelPeripheralConnection(peripheral)
+                connectCallbackDrops[id, default: 0] += 1
+            }
         }
         continuation.resume(throwing: CancellationError())
     }
@@ -337,24 +333,41 @@ actor CoreBluetoothCentral: BluetoothCentral {
             if key == .disconnect(id), resolvingDisconnect {
                 complete(key)
             } else {
+                if key == .connect(id) {
+                    pendingConnect.remove(id)
+                }
                 complete(key, throwing: error)
             }
         }
     }
 
+    private func consumeStaleConnectCallback(for id: UUID) -> Bool {
+        guard let drops = connectCallbackDrops[id], drops > 0 else {
+            return false
+        }
+        connectCallbackDrops[id] = drops - 1
+        return true
+    }
+
     private func completeConnectIfCurrent(id: UUID) {
-        guard pendingConnectGeneration[id] == connectGeneration[id] else {
+        guard pendingConnect.contains(id) else {
             return
         }
-        pendingConnectGeneration.removeValue(forKey: id)
+        if consumeStaleConnectCallback(for: id) {
+            return
+        }
+        pendingConnect.remove(id)
         complete(.connect(id))
     }
 
     private func failConnectIfCurrent(id: UUID, reason: String) {
-        guard pendingConnectGeneration[id] == connectGeneration[id] else {
+        guard pendingConnect.contains(id) else {
             return
         }
-        pendingConnectGeneration.removeValue(forKey: id)
+        if consumeStaleConnectCallback(for: id) {
+            return
+        }
+        pendingConnect.remove(id)
         complete(
             .connect(id),
             throwing: BluetoothCentralError.connectionFailed(id, reason: reason),
@@ -382,22 +395,25 @@ actor CoreBluetoothCentral: BluetoothCentral {
             await discoveryBroadcaster.yield(discovery)
 
         case let .connected(id):
+            if consumeStaleConnectCallback(for: id) {
+                return
+            }
             completeConnectIfCurrent(id: id)
 
-        case let .failedToConnect(id, reason):
-            let ignore = queue.sync {
-                delegateBridge.peripheral(for: id)?.state == .connected
+        case let .failedToConnect(id, reason, peripheralState):
+            if peripheralState == .connected {
+                return
             }
-            if ignore {
+            if consumeStaleConnectCallback(for: id) {
                 return
             }
             failConnectIfCurrent(id: id, reason: reason)
 
-        case let .disconnected(id, reason):
-            let ignore = queue.sync {
-                delegateBridge.peripheral(for: id)?.state == .connected
+        case let .disconnected(id, reason, peripheralState):
+            if peripheralState == .connected {
+                return
             }
-            if ignore {
+            if consumeStaleConnectCallback(for: id) {
                 return
             }
             failPendingRequests(
@@ -519,12 +535,34 @@ private enum Request: Hashable {
     }
 }
 
+private enum PeripheralConnectionSnapshot: Sendable {
+    case connected
+    case disconnected
+    case connecting
+    case disconnecting
+
+    init(_ state: CBPeripheralState) {
+        switch state {
+        case .connected:
+            self = .connected
+        case .disconnected:
+            self = .disconnected
+        case .connecting:
+            self = .connecting
+        case .disconnecting:
+            self = .disconnecting
+        @unknown default:
+            self = .disconnected
+        }
+    }
+}
+
 private enum CentralDelegateEvent: Sendable {
     case stateUpdated(BluetoothState)
     case discovered(DiscoveredPeripheral)
     case connected(id: UUID)
-    case failedToConnect(id: UUID, reason: String)
-    case disconnected(id: UUID, reason: String?)
+    case failedToConnect(id: UUID, reason: String, peripheralState: PeripheralConnectionSnapshot)
+    case disconnected(id: UUID, reason: String?, peripheralState: PeripheralConnectionSnapshot)
     case servicesDiscovered(id: UUID, errorReason: String?)
     case characteristicsDiscovered(id: UUID, errorReason: String?)
     case characteristicValueUpdated(
@@ -604,6 +642,7 @@ private final class CentralDelegateBridge: NSObject, CBCentralManagerDelegate, C
             .failedToConnect(
                 id: peripheral.identifier,
                 reason: error?.localizedDescription ?? "Connection failed",
+                peripheralState: PeripheralConnectionSnapshot(peripheral.state),
             ),
         )
     }
@@ -613,7 +652,13 @@ private final class CentralDelegateBridge: NSObject, CBCentralManagerDelegate, C
         didDisconnectPeripheral peripheral: CBPeripheral,
         error: Error?,
     ) {
-        emit(.disconnected(id: peripheral.identifier, reason: error?.localizedDescription))
+        emit(
+            .disconnected(
+                id: peripheral.identifier,
+                reason: error?.localizedDescription,
+                peripheralState: PeripheralConnectionSnapshot(peripheral.state),
+            ),
+        )
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
