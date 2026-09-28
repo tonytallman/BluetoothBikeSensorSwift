@@ -78,7 +78,6 @@ public struct Scanner: Sendable {
     private static func waitForPoweredOn(central: any BluetoothCentral, timeouts: Timeouts) async -> Bool {
         let unavailableStates: Set<BluetoothState> = [.unsupported, .unauthorized, .poweredOff]
 
-        let stateUpdates = await central.stateUpdates
         let initialState = await central.currentState
         if initialState == .poweredOn {
             return true
@@ -87,6 +86,7 @@ public struct Scanner: Sendable {
             return false
         }
 
+        let stateUpdates = await central.stateUpdates
         return await withTaskGroup(of: Bool.self) { group in
             group.addTask {
                 for await state in stateUpdates {
