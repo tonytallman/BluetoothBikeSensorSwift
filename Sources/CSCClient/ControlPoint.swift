@@ -92,65 +92,89 @@ package actor ControlPoint {
         writeInFlight = true
 
         let listener = Task {
-            for await event in events {
-                guard !Task.isCancelled else {
-                    return
-                }
-                switch event {
-                case let .valueUpdated(
-                    peripheralID,
-                    serviceUUID,
-                    characteristicUUID,
-                    value,
-                ):
-                    guard peripheralID == self.peripheralID,
-                        serviceUUID == CSCS.serviceUUID,
-                        characteristicUUID == CSCS.controlPointUUID
-                    else {
-                        continue
-                    }
-                    await resolve(id: id, result: .success(value))
-                    return
-                case let .disconnected(peripheralID):
-                    guard peripheralID == self.peripheralID else {
-                        continue
-                    }
-                    await resolve(id: id, result: .failure(ControlPointError.failed(reason: "Disconnected")))
-                    return
-                }
-            }
+            await self.listenForControlPointEvents(procedureID: id, events: events)
         }
         helpers.append(listener)
 
         let timer = Task {
-            do {
-                try await Task.sleep(for: timeout)
-            } catch {
-                return
-            }
-            guard !Task.isCancelled else {
-                return
-            }
-            await resolve(id: id, result: .failure(ControlPointError.timedOut))
+            await self.waitForControlPointTimeout(procedureID: id)
         }
         helpers.append(timer)
 
         Task {
-            do {
-                try await central.writeValue(
-                    id: peripheralID,
-                    serviceUUID: CSCS.serviceUUID,
-                    characteristicUUID: CSCS.controlPointUUID,
-                    value: requestData,
-                )
-            } catch {
-                await resolve(id: id, result: .failure(error))
-            }
-            await writeFinished(procedureID: id)
+            await self.sendControlPointWrite(procedureID: id, requestData: requestData)
         }
     }
 
-    private func writeFinished(procedureID: UInt) async {
+    private func listenForControlPointEvents(
+        procedureID: UInt,
+        events: AsyncStream<CentralEvent>,
+    ) async {
+        for await event in events {
+            guard !Task.isCancelled else {
+                return
+            }
+            handleControlPointEvent(procedureID: procedureID, event: event)
+        }
+    }
+
+    private func waitForControlPointTimeout(procedureID: UInt) async {
+        do {
+            try await Task.sleep(for: timeout)
+        } catch {
+            return
+        }
+        guard !Task.isCancelled else {
+            return
+        }
+        timeoutProcedure(procedureID: procedureID)
+    }
+
+    private func handleControlPointEvent(procedureID: UInt, event: CentralEvent) {
+        switch event {
+        case let .valueUpdated(
+            peripheralID,
+            serviceUUID,
+            characteristicUUID,
+            value,
+        ):
+            guard peripheralID == self.peripheralID,
+                serviceUUID == CSCS.serviceUUID,
+                characteristicUUID == CSCS.controlPointUUID
+            else {
+                return
+            }
+            resolve(id: procedureID, result: .success(value))
+        case let .disconnected(peripheralID):
+            guard peripheralID == self.peripheralID else {
+                return
+            }
+            resolve(
+                id: procedureID,
+                result: .failure(ControlPointError.failed(reason: "Disconnected")),
+            )
+        }
+    }
+
+    private func timeoutProcedure(procedureID: UInt) {
+        resolve(id: procedureID, result: .failure(ControlPointError.timedOut))
+    }
+
+    private func sendControlPointWrite(procedureID: UInt, requestData: Data) async {
+        do {
+            try await central.writeValue(
+                id: peripheralID,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.controlPointUUID,
+                value: requestData,
+            )
+        } catch {
+            resolve(id: procedureID, result: .failure(error))
+        }
+        writeFinished(procedureID: procedureID)
+    }
+
+    private func writeFinished(procedureID: UInt) {
         guard procedureID == procedure else {
             return
         }

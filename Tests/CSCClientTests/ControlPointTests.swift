@@ -35,7 +35,7 @@ import Testing
             try await locations.update(locations.supported[1])
         }
 
-        try await writeRecorded
+        await writeRecorded
 
         do {
             try await locations.update(locations.supported[2])
@@ -163,16 +163,11 @@ import Testing
             return
         }
 
-        await fake.hangNextWrite()
-        do {
-            try await locations.update(locations.supported[1])
-            Issue.record("Expected timedOut")
-        } catch let error as ControlPointError {
-            #expect(error == .timedOut)
-        }
+        await fake.hangWriteAfterIndicating()
+        try await locations.update(locations.supported[1])
 
         await fake.hangNextWrite()
-        let blockedUpdate = Task {
+        let secondUpdate = Task {
             try await locations.update(locations.supported[2])
         }
         for _ in 0..<1_000 {
@@ -186,23 +181,22 @@ import Testing
             await Task.yield()
         }
 
-        do {
-            try await locations.update(locations.supported[0])
-            Issue.record("Expected procedureInProgress while second procedure is active")
-        } catch let error as ControlPointError {
-            #expect(error == .procedureInProgress)
-        }
-
         await fake.releaseHungWrite()
 
         do {
+            _ = try await secondUpdate.value
+            Issue.record("Expected timedOut")
+        } catch let error as ControlPointError {
+            #expect(error == .timedOut)
+        }
+
+        do {
             try await locations.update(locations.supported[0])
-            Issue.record("Expected procedureInProgress after stale write completion")
+            Issue.record("Expected procedureInProgress after stale writeFinished")
         } catch let error as ControlPointError {
             #expect(error == .procedureInProgress)
         }
 
-        blockedUpdate.cancel()
         await fake.releaseHungWrite()
         await locations.controlPoint.waitUntilIdle()
         _ = try await connected.disconnect()

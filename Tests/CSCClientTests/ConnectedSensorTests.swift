@@ -75,6 +75,20 @@ import Testing
         #expect(await crankTask.value)
     }
 
+    @Test func discoverServicesAfterLinkLossFailsFast() async throws {
+        let fake = FakeBluetoothCentral()
+        let sensorID = UUID()
+        _ = try await CSCClientTestSupport.sensor(id: sensorID, central: fake).connect()
+        await fake.emit(.disconnected(peripheralID: sensorID))
+
+        do {
+            try await fake.discoverServices(id: sensorID, serviceUUIDs: [CSCS.serviceUUID])
+            Issue.record("Expected discoverServices to throw")
+        } catch let error as BluetoothCentralError {
+            #expect(error == .disconnected(sensorID, reason: nil))
+        }
+    }
+
     @Test func disconnectAfterLinkLossDoesNotHangOnSetNotify() async throws {
         let fake = FakeBluetoothCentral()
         let sensorID = UUID()

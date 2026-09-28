@@ -81,6 +81,9 @@ public final class WheelRevolutions: Sendable {
         await wheelSampleBroadcaster.yield(sample)
     }
 
+    /// Sets the sensor's cumulative wheel revolutions via the SC Control Point.
+    ///
+    /// Success clears the local wheel delta baseline so the next measurement establishes a new baseline.
     /// Throws ``ControlPointError/controlPointUnavailable`` when SC Control Point was not discovered.
     public func setCumulativeRevolutions(_ value: UInt32) async throws {
         guard let controlPoint else {

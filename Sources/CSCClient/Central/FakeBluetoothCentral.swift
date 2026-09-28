@@ -150,6 +150,10 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     }
 
     package func discoverServices(id: UUID, serviceUUIDs: [UUID]?) async throws {
+        guard connectedPeripheralIDs.contains(id) else {
+            throw BluetoothCentralError.disconnected(id, reason: nil)
+        }
+
         appendRecordedCall(.discoverServices(id: id, serviceUUIDs: serviceUUIDs))
 
         if let error = nextErrors.removeValue(forKey: .discoverServices) {
@@ -162,6 +166,10 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         serviceUUID: UUID,
         characteristicUUIDs: [UUID]?,
     ) async throws -> [UUID] {
+        guard connectedPeripheralIDs.contains(id) else {
+            throw BluetoothCentralError.disconnected(id, reason: nil)
+        }
+
         appendRecordedCall(
             .discoverCharacteristics(
                 id: id,
@@ -362,13 +370,6 @@ package actor FakeBluetoothCentral: BluetoothCentral {
             return
         }
         hungWriteWaiters.removeFirst().resume()
-        changed()
-    }
-
-    package func releaseHungSetNotify() async {
-        let waiters = hungSetNotifyWaiters
-        hungSetNotifyWaiters = []
-        waiters.forEach { $0.resume() }
         changed()
     }
 

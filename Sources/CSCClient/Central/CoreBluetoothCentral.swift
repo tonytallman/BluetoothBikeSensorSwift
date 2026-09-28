@@ -10,6 +10,8 @@ actor CoreBluetoothCentral: BluetoothCentral {
 
     private var state: BluetoothState = .unknown
     private var pending: [Request: CheckedContinuation<Data, Error>] = [:]
+    private var connectGeneration: [UUID: UInt64] = [:]
+    private var pendingConnectGeneration: [UUID: UInt64] = [:]
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
     private let discoveryBroadcaster = StreamBroadcaster<DiscoveredPeripheral>()
@@ -65,8 +67,17 @@ actor CoreBluetoothCentral: BluetoothCentral {
 
     package func connect(id: UUID) async throws {
         guard state == .poweredOn else { throw BluetoothCentralError.notPoweredOn }
-        guard delegateBridge.peripheral(for: id) != nil else {
+        let connectionState = queue.sync { () -> (found: Bool, connected: Bool) in
+            guard let peripheral = delegateBridge.peripheral(for: id) else {
+                return (false, false)
+            }
+            return (true, peripheral.state == .connected)
+        }
+        guard connectionState.found else {
             throw BluetoothCentralError.peripheralNotFound(id)
+        }
+        if connectionState.connected {
+            return
         }
         try await withTaskCancellationHandler {
             _ = try await enqueue(.connect(id)) {
@@ -106,6 +117,13 @@ actor CoreBluetoothCentral: BluetoothCentral {
                     complete(request, throwing: BluetoothCentralError.peripheralNotFound(id))
                     return
                 }
+                guard peripheral.state == .connected else {
+                    complete(
+                        request,
+                        throwing: BluetoothCentralError.disconnected(id, reason: nil),
+                    )
+                    return
+                }
                 peripheral.discoverServices(serviceUUIDs?.map(\.cbUUID))
             }
         }
@@ -124,6 +142,13 @@ actor CoreBluetoothCentral: BluetoothCentral {
             queue.sync {
                 guard let peripheral = delegateBridge.peripheral(for: id) else {
                     complete(request, throwing: BluetoothCentralError.peripheralNotFound(id))
+                    return
+                }
+                guard peripheral.state == .connected else {
+                    complete(
+                        request,
+                        throwing: BluetoothCentralError.disconnected(id, reason: nil),
+                    )
                     return
                 }
                 guard let service = peripheral.services?.first(where: { $0.uuid.foundationUUID == serviceUUID }) else {
@@ -266,6 +291,13 @@ actor CoreBluetoothCentral: BluetoothCentral {
             complete(request, throwing: BluetoothCentralError.peripheralNotFound(id))
             return
         }
+        if peripheral.state == .connected {
+            complete(request)
+            return
+        }
+        let generation = (connectGeneration[id] ?? 0) + 1
+        connectGeneration[id] = generation
+        pendingConnectGeneration[id] = generation
         centralManager.connect(peripheral, options: nil)
     }
 
@@ -279,7 +311,15 @@ actor CoreBluetoothCentral: BluetoothCentral {
 
     private func cancelConnect(id: UUID) {
         let request = Request.connect(id)
-        guard let continuation = pending.removeValue(forKey: request) else { return }
+        connectGeneration[id] = (connectGeneration[id] ?? 0) + 1
+        pendingConnectGeneration.removeValue(forKey: id)
+        guard let continuation = pending.removeValue(forKey: request) else {
+            queue.sync {
+                guard let peripheral = delegateBridge.peripheral(for: id) else { return }
+                centralManager.cancelPeripheralConnection(peripheral)
+            }
+            return
+        }
         queue.sync {
             guard let peripheral = delegateBridge.peripheral(for: id) else { return }
             centralManager.cancelPeripheralConnection(peripheral)
@@ -291,24 +331,34 @@ actor CoreBluetoothCentral: BluetoothCentral {
         for id: UUID,
         error: Error,
         resolvingDisconnect: Bool,
-        ignoreConnectFailureWhenConnected: Bool = false,
     ) {
-        let isConnected = queue.sync {
-            delegateBridge.peripheral(for: id)?.state == .connected
-        }
         let keys = pending.keys.filter { $0.peripheralID == id }
         for key in keys {
             if key == .disconnect(id), resolvingDisconnect {
-                complete(key)
-            } else if ignoreConnectFailureWhenConnected,
-                      key == .connect(id),
-                      isConnected
-            {
                 complete(key)
             } else {
                 complete(key, throwing: error)
             }
         }
+    }
+
+    private func completeConnectIfCurrent(id: UUID) {
+        guard pendingConnectGeneration[id] == connectGeneration[id] else {
+            return
+        }
+        pendingConnectGeneration.removeValue(forKey: id)
+        complete(.connect(id))
+    }
+
+    private func failConnectIfCurrent(id: UUID, reason: String) {
+        guard pendingConnectGeneration[id] == connectGeneration[id] else {
+            return
+        }
+        pendingConnectGeneration.removeValue(forKey: id)
+        complete(
+            .connect(id),
+            throwing: BluetoothCentralError.connectionFailed(id, reason: reason),
+        )
     }
 
     private static func characteristic(
@@ -332,30 +382,30 @@ actor CoreBluetoothCentral: BluetoothCentral {
             await discoveryBroadcaster.yield(discovery)
 
         case let .connected(id):
-            complete(.connect(id))
+            completeConnectIfCurrent(id: id)
 
         case let .failedToConnect(id, reason):
-            let shouldComplete = queue.sync {
-                guard let peripheral = delegateBridge.peripheral(for: id) else {
-                    return true
-                }
-                return peripheral.state != .connected
+            let ignore = queue.sync {
+                delegateBridge.peripheral(for: id)?.state == .connected
             }
-            if shouldComplete {
-                complete(
-                    .connect(id),
-                    throwing: BluetoothCentralError.connectionFailed(id, reason: reason),
-                )
+            if ignore {
+                return
             }
+            failConnectIfCurrent(id: id, reason: reason)
 
         case let .disconnected(id, reason):
-            await eventsBroadcaster.yield(.disconnected(peripheralID: id))
+            let ignore = queue.sync {
+                delegateBridge.peripheral(for: id)?.state == .connected
+            }
+            if ignore {
+                return
+            }
             failPendingRequests(
                 for: id,
                 error: BluetoothCentralError.disconnected(id, reason: reason),
                 resolvingDisconnect: true,
-                ignoreConnectFailureWhenConnected: true,
             )
+            await eventsBroadcaster.yield(.disconnected(peripheralID: id))
 
         case let .servicesDiscovered(id, errorReason):
             complete(.discoverServices(id), id: id, errorReason: errorReason)
@@ -370,6 +420,7 @@ actor CoreBluetoothCentral: BluetoothCentral {
                     complete(request, id: id, errorReason: errorReason)
                     return
                 }
+                complete(request, returning: value)
                 await eventsBroadcaster.yield(
                     .valueUpdated(
                         peripheralID: id,
@@ -378,7 +429,6 @@ actor CoreBluetoothCentral: BluetoothCentral {
                         value: value,
                     ),
                 )
-                complete(request, returning: value)
             } else {
                 let error = BluetoothCentralError.connectionFailed(
                     id,
