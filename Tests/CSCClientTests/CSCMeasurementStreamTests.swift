@@ -8,15 +8,11 @@ struct CSCMeasurementStreamTests {
     private func makeSensor(
         fake: FakeBluetoothCentral,
         id: UUID = UUID(),
-        hasSpeed: Bool = true,
-        hasCadence: Bool = true,
     ) -> DiscoveredSensor {
         DiscoveredSensor(
             id: id,
             name: "Test Sensor",
             manufacturer: nil,
-            hasSpeed: hasSpeed,
-            hasCadence: hasCadence,
             central: fake,
         )
     }

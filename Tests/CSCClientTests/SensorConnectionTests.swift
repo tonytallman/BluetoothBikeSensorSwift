@@ -8,15 +8,11 @@ import Testing
         fake: FakeBluetoothCentral,
         id: UUID = UUID(),
         name: String = "Test Sensor",
-        hasSpeed: Bool = true,
-        hasCadence: Bool = true,
     ) -> DiscoveredSensor {
         DiscoveredSensor(
             id: id,
             name: name,
             manufacturer: nil,
-            hasSpeed: hasSpeed,
-            hasCadence: hasCadence,
             central: fake,
         )
     }
@@ -308,7 +304,7 @@ import Testing
         let fake = FakeBluetoothCentral()
         await fake.setFeatureData(CSCFeature([.crankRevolutionData]).encode())
 
-        let connected = try await makeSensor(fake: fake, hasSpeed: true, hasCadence: true).connect()
+        let connected = try await makeSensor(fake: fake).connect()
 
         switch connected.revolutions {
         case .crank:

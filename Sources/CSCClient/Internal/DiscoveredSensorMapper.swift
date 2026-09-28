@@ -11,8 +11,6 @@ enum DiscoveredSensorMapper {
             id: event.id,
             name: event.name,
             manufacturer: ManufacturerLookup.manufacturerName(from: event.manufacturerData),
-            hasSpeed: true,
-            hasCadence: true,
             central: central,
         )
     }

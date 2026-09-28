@@ -99,26 +99,12 @@ public final class ConnectedSensor: Sendable {
             throw DisconnectError.failed(reason: error.localizedDescription)
         }
 
-        let (hasSpeed, hasCadence) = Self.capabilityFlags(for: revolutions)
         return DiscoveredSensor(
             id: id,
             name: name,
             manufacturer: manufacturer,
-            hasSpeed: hasSpeed,
-            hasCadence: hasCadence,
             central: central,
         )
-    }
-
-    private static func capabilityFlags(for revolutions: RevolutionData) -> (hasSpeed: Bool, hasCadence: Bool) {
-        switch revolutions {
-        case .wheel:
-            return (true, false)
-        case .crank:
-            return (false, true)
-        case .wheelAndCrank:
-            return (true, true)
-        }
     }
 
     private func finishStreams() async {

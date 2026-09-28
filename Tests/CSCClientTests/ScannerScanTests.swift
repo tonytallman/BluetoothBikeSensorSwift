@@ -40,8 +40,6 @@ import Testing
         #expect(sensors.count == 1)
         #expect(sensors[0].id == peripheralID)
         #expect(sensors[0].name == "Speed Sensor")
-        #expect(sensors[0].hasSpeed)
-        #expect(sensors[0].hasCadence)
     }
 
     @Test func filtersNonCSCPeripheral() async {

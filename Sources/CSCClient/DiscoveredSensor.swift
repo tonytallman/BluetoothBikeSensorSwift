@@ -3,9 +3,8 @@ import Foundation
 
 /// A CSCS sensor discovered during an active scan.
 ///
-/// Obtain instances only from ``Scanner/scan()``. Capability flags on this type are
-/// best-effort from discovery; after ``connect()``, rely on ``ConnectedSensor/revolutions``
-/// and ``ConnectedSensor/location`` for supported features.
+/// Obtain instances only from ``Scanner/scan()``. After ``connect()``, rely on
+/// ``ConnectedSensor/revolutions`` and ``ConnectedSensor/location`` for supported features.
 public struct DiscoveredSensor: Sendable {
     nonisolated(unsafe) package static var connectTimeoutNanoseconds: UInt64 = 10_000_000_000
 
@@ -15,10 +14,6 @@ public struct DiscoveredSensor: Sendable {
     public let name: String?
     /// Manufacturer resolved from advertisement data, when available.
     public let manufacturer: String?
-    /// Best-effort speed support hint from discovery.
-    public let hasSpeed: Bool
-    /// Best-effort cadence support hint from discovery.
-    public let hasCadence: Bool
 
     private let central: any BluetoothCentral
 
@@ -26,15 +21,11 @@ public struct DiscoveredSensor: Sendable {
         id: UUID,
         name: String?,
         manufacturer: String?,
-        hasSpeed: Bool,
-        hasCadence: Bool,
         central: any BluetoothCentral,
     ) {
         self.id = id
         self.name = name
         self.manufacturer = manufacturer
-        self.hasSpeed = hasSpeed
-        self.hasCadence = hasCadence
         self.central = central
     }
 
