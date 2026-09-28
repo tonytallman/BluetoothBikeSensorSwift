@@ -2,7 +2,7 @@ internal import CSCWire
 import Foundation
 
 enum DiscoveredSensorMapper {
-    static func map(_ event: DiscoveredPeripheralEvent, central: any BluetoothCentral) -> DiscoveredSensor? {
+    static func map(_ event: DiscoveredPeripheral, central: any BluetoothCentral) -> DiscoveredSensor? {
         guard event.serviceUUIDs.contains(CSCS.serviceUUID) else {
             return nil
         }

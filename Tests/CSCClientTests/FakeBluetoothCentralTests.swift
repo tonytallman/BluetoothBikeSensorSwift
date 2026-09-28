@@ -49,12 +49,11 @@ import Testing
 
         let peripheralID = UUID()
         await fake.emitDiscovery(
-            DiscoveredPeripheralEvent(
+            DiscoveredPeripheral(
                 id: peripheralID,
                 name: "Cadence Sensor",
                 manufacturerData: Data([0x01, 0x02]),
                 serviceUUIDs: [UUID()],
-                rssi: -55,
             ),
         )
 

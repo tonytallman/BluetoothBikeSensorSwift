@@ -123,70 +123,33 @@ public final class ConnectedSensor: Sendable {
         crankRevolutions: CrankRevolutions?,
         stateBox: MeasurementStateBox,
     ) async {
-        async let gattLoop: Void = consumeGATTEvents(
-            central: central,
-            id: id,
-            wheelRevolutions: wheelRevolutions,
-            crankRevolutions: crankRevolutions,
-            stateBox: stateBox,
-        )
-        async let connectionLoop: Void = consumeConnectionEvents(
-            central: central,
-            id: id,
-            wheelRevolutions: wheelRevolutions,
-            crankRevolutions: crankRevolutions,
-        )
-        _ = await (gattLoop, connectionLoop)
-    }
-
-    private static func consumeGATTEvents(
-        central: any BluetoothCentral,
-        id: UUID,
-        wheelRevolutions: WheelRevolutions?,
-        crankRevolutions: CrankRevolutions?,
-        stateBox: MeasurementStateBox,
-    ) async {
-        let gattEvents = await central.gattEvents
-        for await event in gattEvents {
+        let events = await central.events
+        for await event in events {
             guard !Task.isCancelled else {
                 return
             }
 
-            guard case let .characteristicValue(
-                peripheralID,
-                serviceUUID,
-                characteristicUUID,
-                value,
-            ) = event,
-                peripheralID == id,
-                serviceUUID == CSCS.serviceUUID,
-                characteristicUUID == CSCS.measurementUUID
-            else {
-                continue
-            }
+            switch event {
+            case let .valueUpdated(peripheralID, serviceUUID, characteristicUUID, value):
+                guard peripheralID == id,
+                    serviceUUID == CSCS.serviceUUID,
+                    characteristicUUID == CSCS.measurementUUID
+                else {
+                    continue
+                }
 
-            await processMeasurement(
-                value,
-                wheelRevolutions: wheelRevolutions,
-                crankRevolutions: crankRevolutions,
-                stateBox: stateBox,
-            )
-        }
-    }
+                await processMeasurement(
+                    value,
+                    wheelRevolutions: wheelRevolutions,
+                    crankRevolutions: crankRevolutions,
+                    stateBox: stateBox,
+                )
 
-    private static func consumeConnectionEvents(
-        central: any BluetoothCentral,
-        id: UUID,
-        wheelRevolutions: WheelRevolutions?,
-        crankRevolutions: CrankRevolutions?,
-    ) async {
-        let connectionEvents = await central.connectionEvents
-        for await event in connectionEvents {
-            guard !Task.isCancelled else {
-                return
-            }
+            case let .disconnected(peripheralID):
+                guard peripheralID == id else {
+                    continue
+                }
 
-            if case let .disconnected(peripheralID, _) = event, peripheralID == id {
                 if let wheelRevolutions {
                     await wheelRevolutions.finishStreams()
                 }

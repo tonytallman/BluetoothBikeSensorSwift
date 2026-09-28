@@ -188,16 +188,16 @@ package actor CSCControlPointSession {
             failIndicationWait(with: CancellationError())
         }
 
-        let gattEvents = await central.gattEvents
+        let events = await central.events
         listenerReadyContinuation?.resume()
         listenerReadyContinuation = nil
 
-        for await event in gattEvents {
+        for await event in events {
             guard !Task.isCancelled else {
                 return
             }
 
-            guard case let .characteristicValue(
+            guard case let .valueUpdated(
                 id,
                 serviceUUID,
                 characteristicUUID,

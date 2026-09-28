@@ -37,7 +37,7 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     private var nextControlPointResponseValue: UInt8?
     private var shouldHangNextConnect = false
     private var shouldHoldNextControlPointIndication = false
-    private var heldControlPointIndication: GATTEvent?
+    private var heldControlPointIndication: CentralEvent?
     private var featureData = CSCFeature([.wheelRevolutionData, .crankRevolutionData]).encode()
     private var discoveredCharacteristicUUIDs: [UUID] = [
         CSCS.measurementUUID,
@@ -48,9 +48,8 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     private var supportedSensorLocationBytes: [UInt8] = [0x05, 0x06, 0x0A]
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
-    private let discoveryBroadcaster = StreamBroadcaster<DiscoveredPeripheralEvent>()
-    private let connectionBroadcaster = StreamBroadcaster<ConnectionEvent>()
-    private let gattBroadcaster = StreamBroadcaster<GATTEvent>()
+    private let discoveryBroadcaster = StreamBroadcaster<DiscoveredPeripheral>()
+    private let eventsBroadcaster = StreamBroadcaster<CentralEvent>()
 
     package private(set) var recordedCalls: [RecordedCall] = []
 
@@ -76,7 +75,7 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         recordedCalls.append(.stopScanning)
     }
 
-    package var discoveries: AsyncStream<DiscoveredPeripheralEvent> {
+    package var discoveries: AsyncStream<DiscoveredPeripheral> {
         get async {
             await discoveryBroadcaster.makeStream()
         }
@@ -95,10 +94,8 @@ package actor FakeBluetoothCentral: BluetoothCentral {
 
         if let nextConnectError {
             self.nextConnectError = nil
-            await connectionBroadcaster.yield(.failed(id: id, reason: String(describing: nextConnectError)))
             throw nextConnectError
         }
-        await connectionBroadcaster.yield(.connected(id: id))
     }
 
     package func disconnect(id: UUID) async throws {
@@ -106,16 +103,15 @@ package actor FakeBluetoothCentral: BluetoothCentral {
 
         if let nextDisconnectError {
             self.nextDisconnectError = nil
-            await connectionBroadcaster.yield(.disconnected(id: id, reason: String(describing: nextDisconnectError)))
             throw nextDisconnectError
         }
 
-        await connectionBroadcaster.yield(.disconnected(id: id, reason: nil))
+        await eventsBroadcaster.yield(.disconnected(peripheralID: id))
     }
 
-    package var connectionEvents: AsyncStream<ConnectionEvent> {
+    package var events: AsyncStream<CentralEvent> {
         get async {
-            await connectionBroadcaster.makeStream()
+            await eventsBroadcaster.makeStream()
         }
     }
 
@@ -149,12 +145,6 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         return discoveredCharacteristicUUIDs
     }
 
-    package var gattEvents: AsyncStream<GATTEvent> {
-        get async {
-            await gattBroadcaster.makeStream()
-        }
-    }
-
     package func setNotifyValue(
         id: UUID,
         serviceUUID: UUID,
@@ -174,15 +164,6 @@ package actor FakeBluetoothCentral: BluetoothCentral {
             self.nextSetNotifyError = nil
             throw nextSetNotifyError
         }
-
-        await gattBroadcaster.yield(
-            .notificationStateChanged(
-                id: id,
-                serviceUUID: serviceUUID,
-                characteristicUUID: characteristicUUID,
-                isNotifying: enabled,
-            ),
-        )
     }
 
     package func readValue(
@@ -253,8 +234,8 @@ package actor FakeBluetoothCentral: BluetoothCentral {
             supportedLocationBytes: supportedSensorLocationBytes,
         )
 
-        let event = GATTEvent.characteristicValue(
-            id: id,
+        let event = CentralEvent.valueUpdated(
+            peripheralID: id,
             serviceUUID: serviceUUID,
             characteristicUUID: characteristicUUID,
             value: indication,
@@ -266,7 +247,7 @@ package actor FakeBluetoothCentral: BluetoothCentral {
             return
         }
 
-        await gattBroadcaster.yield(event)
+        await eventsBroadcaster.yield(event)
     }
 
     package func setState(_ newState: BluetoothState) async {
@@ -290,16 +271,12 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         supportedSensorLocationBytes = bytes
     }
 
-    package func emitDiscovery(_ event: DiscoveredPeripheralEvent) async {
+    package func emitDiscovery(_ event: DiscoveredPeripheral) async {
         await discoveryBroadcaster.yield(event)
     }
 
-    package func emitConnection(_ event: ConnectionEvent) async {
-        await connectionBroadcaster.yield(event)
-    }
-
-    package func emitGATT(_ event: GATTEvent) async {
-        await gattBroadcaster.yield(event)
+    package func emit(_ event: CentralEvent) async {
+        await eventsBroadcaster.yield(event)
     }
 
     package func failNextConnect(with error: BluetoothCentralError) {
@@ -351,7 +328,7 @@ package actor FakeBluetoothCentral: BluetoothCentral {
             return
         }
         heldControlPointIndication = nil
-        await gattBroadcaster.yield(event)
+        await eventsBroadcaster.yield(event)
     }
 
     private static func controlPointIndication(

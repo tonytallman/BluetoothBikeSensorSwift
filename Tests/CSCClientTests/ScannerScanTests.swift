@@ -27,12 +27,11 @@ import Testing
 
         let peripheralID = UUID()
         await fake.emitDiscovery(
-            DiscoveredPeripheralEvent(
+            DiscoveredPeripheral(
                 id: peripheralID,
                 name: "Speed Sensor",
                 manufacturerData: nil,
                 serviceUUIDs: [CSCS.serviceUUID],
-                rssi: -60,
             ),
         )
 
@@ -51,12 +50,11 @@ import Testing
         await Self.waitForScanStart(fake)
 
         await fake.emitDiscovery(
-            DiscoveredPeripheralEvent(
+            DiscoveredPeripheral(
                 id: UUID(),
                 name: "Heart Rate",
                 manufacturerData: nil,
                 serviceUUIDs: [UUID()],
-                rssi: -50,
             ),
         )
 
@@ -73,12 +71,11 @@ import Testing
         await Self.waitForScanStart(fake)
 
         let peripheralID = UUID()
-        let event = DiscoveredPeripheralEvent(
+        let event = DiscoveredPeripheral(
             id: peripheralID,
             name: "Cadence",
             manufacturerData: nil,
             serviceUUIDs: [CSCS.serviceUUID],
-            rssi: -55,
         )
 
         await fake.emitDiscovery(event)
@@ -130,12 +127,11 @@ import Testing
         manufacturerData.append(contentsOf: [0x6D, 0x00]) // Garmin company ID, little-endian
 
         await fake.emitDiscovery(
-            DiscoveredPeripheralEvent(
+            DiscoveredPeripheral(
                 id: UUID(),
                 name: "Garmin Sensor",
                 manufacturerData: manufacturerData,
                 serviceUUIDs: [CSCS.serviceUUID],
-                rssi: -48,
             ),
         )
 
@@ -158,12 +154,11 @@ import Testing
 
         let peripheralID = UUID()
         await fake.emitDiscovery(
-            DiscoveredPeripheralEvent(
+            DiscoveredPeripheral(
                 id: peripheralID,
                 name: "Delayed Sensor",
                 manufacturerData: nil,
                 serviceUUIDs: [CSCS.serviceUUID],
-                rssi: -50,
             ),
         )
 
@@ -184,12 +179,11 @@ import Testing
 
         let firstID = UUID()
         await fake.emitDiscovery(
-            DiscoveredPeripheralEvent(
+            DiscoveredPeripheral(
                 id: firstID,
                 name: "First",
                 manufacturerData: nil,
                 serviceUUIDs: [CSCS.serviceUUID],
-                rssi: -55,
             ),
         )
 
@@ -197,12 +191,11 @@ import Testing
 
         let secondID = UUID()
         await fake.emitDiscovery(
-            DiscoveredPeripheralEvent(
+            DiscoveredPeripheral(
                 id: secondID,
                 name: "Second",
                 manufacturerData: nil,
                 serviceUUIDs: [CSCS.serviceUUID],
-                rssi: -60,
             ),
         )
 

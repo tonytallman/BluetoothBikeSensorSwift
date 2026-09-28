@@ -657,7 +657,7 @@ struct CSCMeasurementStreamTests {
             return finished
         }
 
-        await fake.emitConnection(.disconnected(id: sensorID, reason: "Link lost"))
+        await fake.emit(.disconnected(peripheralID: sensorID))
         try? await Task.sleep(nanoseconds: 50_000_000)
 
         #expect(await speedCollector.value == true)
@@ -734,7 +734,7 @@ struct CSCMeasurementStreamTests {
 
         try? await Task.sleep(nanoseconds: 150_000_000)
 
-        await fake.emitConnection(.disconnected(id: sensorID, reason: "Link lost"))
+        await fake.emit(.disconnected(peripheralID: sensorID))
         try? await Task.sleep(nanoseconds: 100_000_000)
 
         let result = await collector.value
@@ -781,9 +781,9 @@ struct CSCMeasurementStreamTests {
             crankRevolutions: crankRevolutions,
             crankEventTime: crankEventTime,
         )
-        await fake.emitGATT(
-            .characteristicValue(
-                id: id,
+        await fake.emit(
+            .valueUpdated(
+                peripheralID: id,
                 serviceUUID: CSCS.serviceUUID,
                 characteristicUUID: CSCS.measurementUUID,
                 value: payload,
@@ -802,9 +802,9 @@ struct CSCMeasurementStreamTests {
             revolutions: revolutions,
             eventTime: eventTime,
         )
-        await fake.emitGATT(
-            .characteristicValue(
-                id: id,
+        await fake.emit(
+            .valueUpdated(
+                peripheralID: id,
                 serviceUUID: CSCS.serviceUUID,
                 characteristicUUID: CSCS.measurementUUID,
                 value: payload,
@@ -823,9 +823,9 @@ struct CSCMeasurementStreamTests {
             revolutions: revolutions,
             eventTime: eventTime,
         )
-        await fake.emitGATT(
-            .characteristicValue(
-                id: id,
+        await fake.emit(
+            .valueUpdated(
+                peripheralID: id,
                 serviceUUID: CSCS.serviceUUID,
                 characteristicUUID: CSCS.measurementUUID,
                 value: payload,

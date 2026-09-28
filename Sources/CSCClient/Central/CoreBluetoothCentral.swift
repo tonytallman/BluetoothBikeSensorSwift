@@ -17,9 +17,8 @@ package actor CoreBluetoothCentral: BluetoothCentral {
     private var pendingSetNotifyValues: [GATTRequestKey: CheckedContinuation<Void, Error>] = [:]
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
-    private let discoveryBroadcaster = StreamBroadcaster<DiscoveredPeripheralEvent>()
-    private let connectionBroadcaster = StreamBroadcaster<ConnectionEvent>()
-    private let gattBroadcaster = StreamBroadcaster<GATTEvent>()
+    private let discoveryBroadcaster = StreamBroadcaster<DiscoveredPeripheral>()
+    private let eventsBroadcaster = StreamBroadcaster<CentralEvent>()
 
     package init() {
         let bridge = CentralDelegateBridge()
@@ -53,7 +52,7 @@ package actor CoreBluetoothCentral: BluetoothCentral {
         centralManager.stopScan()
     }
 
-    package var discoveries: AsyncStream<DiscoveredPeripheralEvent> {
+    package var discoveries: AsyncStream<DiscoveredPeripheral> {
         get async {
             await discoveryBroadcaster.makeStream()
         }
@@ -84,9 +83,9 @@ package actor CoreBluetoothCentral: BluetoothCentral {
         }
     }
 
-    package var connectionEvents: AsyncStream<ConnectionEvent> {
+    package var events: AsyncStream<CentralEvent> {
         get async {
-            await connectionBroadcaster.makeStream()
+            await eventsBroadcaster.makeStream()
         }
     }
 
@@ -118,12 +117,6 @@ package actor CoreBluetoothCentral: BluetoothCentral {
             pendingCharacteristicDiscoveries[id] = continuation
             let cbCharacteristicUUIDs = characteristicUUIDs?.map { CBUUIDBridge(uuid: $0).cbUUID }
             peripheral.discoverCharacteristics(cbCharacteristicUUIDs, for: service)
-        }
-    }
-
-    package var gattEvents: AsyncStream<GATTEvent> {
-        get async {
-            await gattBroadcaster.makeStream()
         }
     }
 
@@ -266,16 +259,14 @@ package actor CoreBluetoothCentral: BluetoothCentral {
             await discoveryBroadcaster.yield(discovery)
 
         case let .connected(id):
-            await connectionBroadcaster.yield(.connected(id: id))
             pendingConnections.removeValue(forKey: id)?.resume()
 
         case let .failedToConnect(id, reason):
-            await connectionBroadcaster.yield(.failed(id: id, reason: reason))
             pendingConnections.removeValue(forKey: id)?
                 .resume(throwing: BluetoothCentralError.connectionFailed(id, reason: reason))
 
         case let .disconnected(id, reason):
-            await connectionBroadcaster.yield(.disconnected(id: id, reason: reason))
+            await eventsBroadcaster.yield(.disconnected(peripheralID: id))
             let disconnectError = BluetoothCentralError.disconnected(id, reason: reason)
             failPendingGATTRequests(for: id, error: disconnectError)
             pendingConnections.removeValue(forKey: id)?
@@ -292,7 +283,6 @@ package actor CoreBluetoothCentral: BluetoothCentral {
                     .resume(throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason))
                 return
             }
-            await gattBroadcaster.yield(.servicesDiscovered(id: id, serviceUUIDs: serviceUUIDs))
             pendingServiceDiscoveries.removeValue(forKey: id)?.resume()
 
         case let .characteristicsDiscovered(id, serviceUUID, characteristicUUIDs, errorReason):
@@ -301,13 +291,6 @@ package actor CoreBluetoothCentral: BluetoothCentral {
                     .resume(throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason))
                 return
             }
-            await gattBroadcaster.yield(
-                .characteristicsDiscovered(
-                    id: id,
-                    serviceUUID: serviceUUID,
-                    characteristicUUIDs: characteristicUUIDs,
-                ),
-            )
             pendingCharacteristicDiscoveries.removeValue(forKey: id)?
                 .resume(returning: characteristicUUIDs)
 
@@ -322,9 +305,9 @@ package actor CoreBluetoothCentral: BluetoothCentral {
                     .resume(throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason))
                 return
             }
-            await gattBroadcaster.yield(
-                .characteristicValue(
-                    id: id,
+            await eventsBroadcaster.yield(
+                .valueUpdated(
+                    peripheralID: id,
                     serviceUUID: serviceUUID,
                     characteristicUUID: characteristicUUID,
                     value: value,
@@ -375,14 +358,6 @@ package actor CoreBluetoothCentral: BluetoothCentral {
                     .resume(throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason))
                 return
             }
-            await gattBroadcaster.yield(
-                .notificationStateChanged(
-                    id: id,
-                    serviceUUID: serviceUUID,
-                    characteristicUUID: characteristicUUID,
-                    isNotifying: isNotifying,
-                ),
-            )
             pendingSetNotifyValues.removeValue(forKey: key)?.resume()
         }
     }
@@ -396,7 +371,7 @@ private struct GATTRequestKey: Hashable, Sendable {
 
 private enum CentralDelegateEvent: Sendable {
     case stateUpdated(BluetoothState)
-    case discovered(DiscoveredPeripheralEvent)
+    case discovered(DiscoveredPeripheral)
     case connected(id: UUID)
     case failedToConnect(id: UUID, reason: String)
     case disconnected(id: UUID, reason: String?)
@@ -472,13 +447,12 @@ private final class CentralDelegateBridge: NSObject, CBCentralManagerDelegate, C
 
         emit(
             .discovered(
-                DiscoveredPeripheralEvent(
+                DiscoveredPeripheral(
                     id: id,
                     name: peripheral.name ?? advertisementData[CBAdvertisementDataLocalNameKey] as? String,
                     manufacturerData: advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data,
                     serviceUUIDs: (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID])?
                         .map(\.asFoundationUUID) ?? [],
-                    rssi: RSSI.intValue,
                 ),
             ),
         )

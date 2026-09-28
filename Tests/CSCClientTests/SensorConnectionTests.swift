@@ -1051,9 +1051,9 @@ import Testing
             revolutions: revolutions,
             eventTime: eventTime,
         )
-        await fake.emitGATT(
-            .characteristicValue(
-                id: id,
+        await fake.emit(
+            .valueUpdated(
+                peripheralID: id,
                 serviceUUID: CSCS.serviceUUID,
                 characteristicUUID: CSCS.measurementUUID,
                 value: payload,
