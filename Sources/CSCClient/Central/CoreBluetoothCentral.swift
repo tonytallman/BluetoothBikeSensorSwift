@@ -71,9 +71,6 @@ actor CoreBluetoothCentral: BluetoothCentral {
             guard let peripheral = delegateBridge.peripheral(for: id) else {
                 return (false, false, false)
             }
-            if connectCancelPending.contains(id), peripheral.state == .disconnected {
-                connectCancelPending.remove(id)
-            }
             let cancelPending = connectCancelPending.contains(id)
             return (true, peripheral.state == .connected, cancelPending)
         }
@@ -321,11 +318,14 @@ actor CoreBluetoothCentral: BluetoothCentral {
         }
         pendingConnect.remove(id)
         queue.sync {
-            guard let peripheral = delegateBridge.peripheral(for: id) else { return }
-            if peripheral.state != .disconnected {
-                centralManager.cancelPeripheralConnection(peripheral)
-                connectCancelPending.insert(id)
+            guard let peripheral = delegateBridge.peripheral(for: id),
+                  peripheral.state != .disconnected
+            else {
+                connectCancelPending.remove(id)
+                return
             }
+            centralManager.cancelPeripheralConnection(peripheral)
+            connectCancelPending.insert(id)
         }
         continuation.resume(throwing: CancellationError())
     }
@@ -368,14 +368,11 @@ actor CoreBluetoothCentral: BluetoothCentral {
     }
 
     private func finishConnectCancelPending(id: UUID, peripheralState: PeripheralConnectionSnapshot) {
-        if connectCancelPending.contains(id), peripheralState == .connected {
+        if peripheralState == .connected {
             return
         }
-        if connectCancelPending.contains(id) {
-            connectCancelPending.remove(id)
-            issueConnectIfPending(id: id)
-            return
-        }
+        connectCancelPending.remove(id)
+        issueConnectIfPending(id: id)
     }
 
     private func issueConnectIfPending(id: UUID) {
@@ -420,8 +417,8 @@ actor CoreBluetoothCentral: BluetoothCentral {
         switch event {
         case let .stateUpdated(newState):
             state = newState
-            if newState == .poweredOff || newState == .resetting {
-                connectCancelPending.removeAll()
+            if newState == .poweredOff || newState == .resetting
+                || newState == .unauthorized || newState == .unsupported {
                 failPendingConnectsNotPoweredOn()
             }
             await stateBroadcaster.yield(newState)
