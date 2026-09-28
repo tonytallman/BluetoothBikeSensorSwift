@@ -46,7 +46,6 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     private var hungWriteWaiters: [CheckedContinuation<Void, Never>] = []
     private var hungSetNotifyWaiters: [CheckedContinuation<Void, Never>] = []
     private var connectedPeripheralIDs: Set<UUID> = []
-    private var connectCallbackDrops: [UUID: Int] = [:]
     private var heldControlPointIndication: CentralEvent?
     private var featureData: Data
     private var discoveredCharacteristicUUIDs: [UUID]
@@ -121,7 +120,6 @@ package actor FakeBluetoothCentral: BluetoothCentral {
             do {
                 try await Task.sleep(for: .seconds(3600))
             } catch {
-                connectCallbackDrops[id, default: 0] += 1
                 throw CancellationError()
             }
         }
@@ -352,15 +350,6 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         changed()
     }
 
-    /// Simulates a CoreBluetooth `didConnect` delivered after a cancelled connect attempt.
-    package func simulateLateConnectSuccessFromCancelledAttempt(id: UUID) {
-        if let drops = connectCallbackDrops[id], drops > 0 {
-            connectCallbackDrops[id] = drops - 1
-            return
-        }
-        connectedPeripheralIDs.insert(id)
-    }
-
     package func hangNextWrite() {
         shouldHangNextWrite = true
         changed()
@@ -412,6 +401,31 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         where predicate: @escaping @Sendable (RecordedCall) -> Bool,
     ) async {
         await waitUntil { self.recordedCalls.contains(where: predicate) }
+    }
+
+    package func waitForControlPointWriteCount(above baseline: Int) async {
+        await waitUntil {
+            Self.controlPointWriteCount(in: self.recordedCalls) > baseline
+        }
+    }
+
+    package func controlPointWriteCount() -> Int {
+        Self.controlPointWriteCount(in: recordedCalls)
+    }
+
+    private static func controlPointWriteCount(in calls: [RecordedCall]) -> Int {
+        calls.filter { call in
+            guard case let .writeValue(
+                _,
+                serviceUUID,
+                characteristicUUID,
+                _,
+            ) = call else {
+                return false
+            }
+            return serviceUUID == CSCS.serviceUUID
+                && characteristicUUID == CSCS.controlPointUUID
+        }.count
     }
 
     package func waitForStateUpdatesSubscriber() async {

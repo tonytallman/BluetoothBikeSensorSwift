@@ -11,7 +11,7 @@ actor CoreBluetoothCentral: BluetoothCentral {
     private var state: BluetoothState = .unknown
     private var pending: [Request: CheckedContinuation<Data, Error>] = [:]
     private var pendingConnect: Set<UUID> = []
-    private var connectCallbackDrops: [UUID: Int] = [:]
+    private var connectCancelPending: Set<UUID> = []
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
     private let discoveryBroadcaster = StreamBroadcaster<DiscoveredPeripheral>()
@@ -67,16 +67,20 @@ actor CoreBluetoothCentral: BluetoothCentral {
 
     package func connect(id: UUID) async throws {
         guard state == .poweredOn else { throw BluetoothCentralError.notPoweredOn }
-        let connectionState = queue.sync { () -> (found: Bool, connected: Bool) in
+        let connectionState = queue.sync { () -> (found: Bool, connected: Bool, cancelPending: Bool) in
             guard let peripheral = delegateBridge.peripheral(for: id) else {
-                return (false, false)
+                return (false, false, false)
             }
-            return (true, peripheral.state == .connected)
+            if connectCancelPending.contains(id), peripheral.state == .disconnected {
+                connectCancelPending.remove(id)
+            }
+            let cancelPending = connectCancelPending.contains(id)
+            return (true, peripheral.state == .connected, cancelPending)
         }
         guard connectionState.found else {
             throw BluetoothCentralError.peripheralNotFound(id)
         }
-        if connectionState.connected {
+        if connectionState.connected, !connectionState.cancelPending {
             return
         }
         try await withTaskCancellationHandler {
@@ -291,6 +295,9 @@ actor CoreBluetoothCentral: BluetoothCentral {
             complete(request, throwing: BluetoothCentralError.peripheralNotFound(id))
             return
         }
+        if connectCancelPending.contains(id) {
+            return
+        }
         if peripheral.state == .connected {
             complete(request)
             return
@@ -317,7 +324,7 @@ actor CoreBluetoothCentral: BluetoothCentral {
             guard let peripheral = delegateBridge.peripheral(for: id) else { return }
             if peripheral.state != .disconnected {
                 centralManager.cancelPeripheralConnection(peripheral)
-                connectCallbackDrops[id, default: 0] += 1
+                connectCancelPending.insert(id)
             }
         }
         continuation.resume(throwing: CancellationError())
@@ -341,19 +348,8 @@ actor CoreBluetoothCentral: BluetoothCentral {
         }
     }
 
-    private func consumeStaleConnectCallback(for id: UUID) -> Bool {
-        guard let drops = connectCallbackDrops[id], drops > 0 else {
-            return false
-        }
-        connectCallbackDrops[id] = drops - 1
-        return true
-    }
-
     private func completeConnectIfCurrent(id: UUID) {
         guard pendingConnect.contains(id) else {
-            return
-        }
-        if consumeStaleConnectCallback(for: id) {
             return
         }
         pendingConnect.remove(id)
@@ -364,14 +360,49 @@ actor CoreBluetoothCentral: BluetoothCentral {
         guard pendingConnect.contains(id) else {
             return
         }
-        if consumeStaleConnectCallback(for: id) {
-            return
-        }
         pendingConnect.remove(id)
         complete(
             .connect(id),
             throwing: BluetoothCentralError.connectionFailed(id, reason: reason),
         )
+    }
+
+    private func finishConnectCancelPending(id: UUID, peripheralState: PeripheralConnectionSnapshot) {
+        if connectCancelPending.contains(id), peripheralState == .connected {
+            return
+        }
+        if connectCancelPending.contains(id) {
+            connectCancelPending.remove(id)
+            issueConnectIfPending(id: id)
+            return
+        }
+    }
+
+    private func issueConnectIfPending(id: UUID) {
+        guard pending[.connect(id)] != nil else {
+            return
+        }
+        guard state == .poweredOn else {
+            pendingConnect.remove(id)
+            complete(.connect(id), throwing: BluetoothCentralError.notPoweredOn)
+            return
+        }
+        queue.sync {
+            connectPeripheral(id: id, request: .connect(id))
+        }
+    }
+
+    private func failPendingConnectsNotPoweredOn() {
+        let connectKeys = pending.keys.filter {
+            if case .connect = $0 { return true }
+            return false
+        }
+        for key in connectKeys {
+            if case let .connect(id) = key {
+                pendingConnect.remove(id)
+            }
+            complete(key, throwing: BluetoothCentralError.notPoweredOn)
+        }
     }
 
     private static func characteristic(
@@ -389,31 +420,37 @@ actor CoreBluetoothCentral: BluetoothCentral {
         switch event {
         case let .stateUpdated(newState):
             state = newState
+            if newState == .poweredOff || newState == .resetting {
+                connectCancelPending.removeAll()
+                failPendingConnectsNotPoweredOn()
+            }
             await stateBroadcaster.yield(newState)
 
         case let .discovered(discovery):
             await discoveryBroadcaster.yield(discovery)
 
         case let .connected(id):
-            if consumeStaleConnectCallback(for: id) {
+            if connectCancelPending.contains(id) {
                 return
             }
             completeConnectIfCurrent(id: id)
 
         case let .failedToConnect(id, reason, peripheralState):
-            if peripheralState == .connected {
+            if connectCancelPending.contains(id) {
+                finishConnectCancelPending(id: id, peripheralState: peripheralState)
                 return
             }
-            if consumeStaleConnectCallback(for: id) {
+            if peripheralState == .connected {
                 return
             }
             failConnectIfCurrent(id: id, reason: reason)
 
         case let .disconnected(id, reason, peripheralState):
-            if peripheralState == .connected {
+            if connectCancelPending.contains(id) {
+                finishConnectCancelPending(id: id, peripheralState: peripheralState)
                 return
             }
-            if consumeStaleConnectCallback(for: id) {
+            if peripheralState == .connected {
                 return
             }
             failPendingRequests(

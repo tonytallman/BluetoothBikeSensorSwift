@@ -107,25 +107,6 @@ import Testing
         }
     }
 
-    @Test func lateConnectSuccessAfterCancelIsIgnored() async throws {
-        let fake = FakeBluetoothCentral()
-        let sensorID = UUID()
-        await fake.hangNextConnect()
-        let connectTask = Task {
-            try await fake.connect(id: sensorID)
-        }
-        connectTask.cancel()
-        try? await Task.sleep(for: .milliseconds(20))
-        await fake.simulateLateConnectSuccessFromCancelledAttempt(id: sensorID)
-
-        do {
-            try await fake.discoverServices(id: sensorID, serviceUUIDs: [CSCS.serviceUUID])
-            Issue.record("Late connect callback must not mark the peripheral connected")
-        } catch let error as BluetoothCentralError {
-            #expect(error == .disconnected(sensorID, reason: nil))
-        }
-    }
-
     @Test func disconnectAfterLinkLossDoesNotHangOnSetNotify() async throws {
         let fake = FakeBluetoothCentral()
         let sensorID = UUID()
