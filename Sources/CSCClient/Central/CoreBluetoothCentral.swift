@@ -9,7 +9,7 @@ package actor CoreBluetoothCentral: BluetoothCentral {
     private let delegateEvents: AsyncStream<CentralDelegateEvent>.Continuation
 
     private var state: BluetoothState = .unknown
-    private var pending: [Request: PendingContinuation] = [:]
+    private var pending: [Request: CheckedContinuation<Data, Error>] = [:]
 
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
     private let discoveryBroadcaster = StreamBroadcaster<DiscoveredPeripheral>()
@@ -34,9 +34,7 @@ package actor CoreBluetoothCentral: BluetoothCentral {
     }
 
     package var stateUpdates: AsyncStream<BluetoothState> {
-        get async {
-            await stateBroadcaster.makeStream()
-        }
+        get async { await stateBroadcaster.makeStream() }
     }
 
     package var currentState: BluetoothState {
@@ -46,53 +44,29 @@ package actor CoreBluetoothCentral: BluetoothCentral {
     package func startScanning(serviceUUIDs: [UUID]?) async {
         guard state == .poweredOn else { return }
         queue.sync {
-            let cbServiceUUIDs = serviceUUIDs?.map(\.cbUUID)
             centralManager.scanForPeripherals(
-                withServices: cbServiceUUIDs,
+                withServices: serviceUUIDs?.map(\.cbUUID),
                 options: [CBCentralManagerScanOptionAllowDuplicatesKey: false],
             )
         }
     }
 
     package func stopScanning() async {
-        queue.sync {
-            centralManager.stopScan()
-        }
+        queue.sync { centralManager.stopScan() }
     }
 
     package var discoveries: AsyncStream<DiscoveredPeripheral> {
-        get async {
-            await discoveryBroadcaster.makeStream()
-        }
+        get async { await discoveryBroadcaster.makeStream() }
     }
 
     package func connect(id: UUID) async throws {
-        guard state == .poweredOn else {
-            throw BluetoothCentralError.notPoweredOn
-        }
+        guard state == .poweredOn else { throw BluetoothCentralError.notPoweredOn }
         guard delegateBridge.peripheral(for: id) != nil else {
             throw BluetoothCentralError.peripheralNotFound(id)
         }
-
         try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                let request = Request.connect(id)
-                guard storePending(request, continuation: .void(continuation)) else {
-                    continuation.resume(
-                        throwing: BluetoothCentralError.connectionFailed(
-                            id,
-                            reason: "Request already in progress",
-                        ),
-                    )
-                    return
-                }
-                queue.sync {
-                    guard let peripheral = delegateBridge.peripheral(for: id) else {
-                        resumeVoid(request, throwing: BluetoothCentralError.peripheralNotFound(id))
-                        return
-                    }
-                    centralManager.connect(peripheral, options: nil)
-                }
+            _ = try await enqueue(.connect(id)) {
+                queue.sync { connectPeripheral(id: id, request: .connect(id)) }
             }
         } onCancel: {
             Task { await self.cancelConnect(id: id) }
@@ -101,68 +75,34 @@ package actor CoreBluetoothCentral: BluetoothCentral {
 
     package func disconnect(id: UUID) async throws {
         let peripheralState = queue.sync { () -> CBPeripheralState? in
-            guard let peripheral = delegateBridge.peripheral(for: id) else {
-                return nil
-            }
-            return peripheral.state
+            delegateBridge.peripheral(for: id)?.state
         }
         guard let peripheralState else {
             throw BluetoothCentralError.peripheralNotFound(id)
         }
-        if peripheralState == .disconnected {
-            return
-        }
+        if peripheralState == .disconnected { return }
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let request = Request.disconnect(id)
-            guard storePending(request, continuation: .void(continuation)) else {
-                continuation.resume(
-                    throwing: BluetoothCentralError.connectionFailed(
-                        id,
-                        reason: "Request already in progress",
-                    ),
-                )
-                return
-            }
-            queue.sync {
-                guard let peripheral = delegateBridge.peripheral(for: id) else {
-                    resumeVoid(request, throwing: BluetoothCentralError.peripheralNotFound(id))
-                    return
-                }
-                centralManager.cancelPeripheralConnection(peripheral)
-            }
+        _ = try await enqueue(.disconnect(id)) {
+            queue.sync { disconnectPeripheral(id: id, request: .disconnect(id)) }
         }
     }
 
     package var events: AsyncStream<CentralEvent> {
-        get async {
-            await eventsBroadcaster.makeStream()
-        }
+        get async { await eventsBroadcaster.makeStream() }
     }
 
     package func discoverServices(id: UUID, serviceUUIDs: [UUID]?) async throws {
         guard delegateBridge.peripheral(for: id) != nil else {
             throw BluetoothCentralError.peripheralNotFound(id)
         }
-
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let request = Request.discoverServices(id)
-            guard storePending(request, continuation: .void(continuation)) else {
-                continuation.resume(
-                    throwing: BluetoothCentralError.connectionFailed(
-                        id,
-                        reason: "Request already in progress",
-                    ),
-                )
-                return
-            }
+        let request = Request.discoverServices(id)
+        _ = try await enqueue(request) {
             queue.sync {
                 guard let peripheral = delegateBridge.peripheral(for: id) else {
-                    resumeVoid(request, throwing: BluetoothCentralError.peripheralNotFound(id))
+                    complete(request, throwing: BluetoothCentralError.peripheralNotFound(id))
                     return
                 }
-                let cbServiceUUIDs = serviceUUIDs?.map(\.cbUUID)
-                peripheral.discoverServices(cbServiceUUIDs)
+                peripheral.discoverServices(serviceUUIDs?.map(\.cbUUID))
             }
         }
     }
@@ -175,38 +115,27 @@ package actor CoreBluetoothCentral: BluetoothCentral {
         guard delegateBridge.peripheral(for: id) != nil else {
             throw BluetoothCentralError.peripheralNotFound(id)
         }
-
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let request = Request.discoverCharacteristics(id)
-            guard storePending(request, continuation: .void(continuation)) else {
-                continuation.resume(
-                    throwing: BluetoothCentralError.connectionFailed(
-                        id,
-                        reason: "Request already in progress",
-                    ),
-                )
-                return
-            }
+        let request = Request.discoverCharacteristics(id)
+        _ = try await enqueue(request) {
             queue.sync {
                 guard let peripheral = delegateBridge.peripheral(for: id) else {
-                    resumeVoid(request, throwing: BluetoothCentralError.peripheralNotFound(id))
+                    complete(request, throwing: BluetoothCentralError.peripheralNotFound(id))
                     return
                 }
                 guard let service = peripheral.services?.first(where: { $0.uuid.foundationUUID == serviceUUID }) else {
-                    resumeVoid(request, throwing: BluetoothCentralError.serviceNotFound(id, serviceUUID: serviceUUID))
+                    complete(
+                        request,
+                        throwing: BluetoothCentralError.serviceNotFound(id, serviceUUID: serviceUUID),
+                    )
                     return
                 }
-                let cbCharacteristicUUIDs = characteristicUUIDs?.map(\.cbUUID)
-                peripheral.discoverCharacteristics(cbCharacteristicUUIDs, for: service)
+                peripheral.discoverCharacteristics(characteristicUUIDs?.map(\.cbUUID), for: service)
             }
         }
-
         return queue.sync {
             guard let peripheral = delegateBridge.peripheral(for: id),
                   let service = peripheral.services?.first(where: { $0.uuid.foundationUUID == serviceUUID })
-            else {
-                return []
-            }
+            else { return [] }
             return service.characteristics?.compactMap { $0.uuid.foundationUUID } ?? []
         }
     }
@@ -217,45 +146,13 @@ package actor CoreBluetoothCentral: BluetoothCentral {
         characteristicUUID: UUID,
         enabled: Bool,
     ) async throws {
-        let key = GATTRequestKey(
-            peripheralID: id,
+        try await performGATT(
+            id: id,
             serviceUUID: serviceUUID,
             characteristicUUID: characteristicUUID,
-        )
-
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let request = Request.setNotify(key)
-            guard storePending(request, continuation: .void(continuation)) else {
-                continuation.resume(
-                    throwing: BluetoothCentralError.connectionFailed(
-                        id,
-                        reason: "Request already in progress",
-                    ),
-                )
-                return
-            }
-            queue.sync {
-                guard let peripheral = delegateBridge.peripheral(for: id) else {
-                    resumeVoid(request, throwing: BluetoothCentralError.peripheralNotFound(id))
-                    return
-                }
-                guard let characteristic = Self.characteristic(
-                    on: peripheral,
-                    serviceUUID: serviceUUID,
-                    characteristicUUID: characteristicUUID,
-                ) else {
-                    resumeVoid(
-                        request,
-                        throwing: BluetoothCentralError.characteristicNotFound(
-                            id,
-                            serviceUUID: serviceUUID,
-                            characteristicUUID: characteristicUUID,
-                        ),
-                    )
-                    return
-                }
-                peripheral.setNotifyValue(enabled, for: characteristic)
-            }
+            request: { .setNotify($0, $1, $2) },
+        ) { peripheral, characteristic in
+            peripheral.setNotifyValue(enabled, for: characteristic)
         }
     }
 
@@ -264,26 +161,11 @@ package actor CoreBluetoothCentral: BluetoothCentral {
         serviceUUID: UUID,
         characteristicUUID: UUID,
     ) async throws -> Data {
-        let key = GATTRequestKey(
-            peripheralID: id,
-            serviceUUID: serviceUUID,
-            characteristicUUID: characteristicUUID,
-        )
-
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
-            let request = Request.read(key)
-            guard storePending(request, continuation: .data(continuation)) else {
-                continuation.resume(
-                    throwing: BluetoothCentralError.connectionFailed(
-                        id,
-                        reason: "Request already in progress",
-                    ),
-                )
-                return
-            }
+        let gattRequest = Request.read(id, serviceUUID, characteristicUUID)
+        return try await enqueue(gattRequest) {
             queue.sync {
                 guard let peripheral = delegateBridge.peripheral(for: id) else {
-                    resumeData(request, throwing: BluetoothCentralError.peripheralNotFound(id))
+                    complete(gattRequest, throwing: BluetoothCentralError.peripheralNotFound(id))
                     return
                 }
                 guard let characteristic = Self.characteristic(
@@ -291,8 +173,8 @@ package actor CoreBluetoothCentral: BluetoothCentral {
                     serviceUUID: serviceUUID,
                     characteristicUUID: characteristicUUID,
                 ) else {
-                    resumeData(
-                        request,
+                    complete(
+                        gattRequest,
                         throwing: BluetoothCentralError.characteristicNotFound(
                             id,
                             serviceUUID: serviceUUID,
@@ -312,26 +194,49 @@ package actor CoreBluetoothCentral: BluetoothCentral {
         characteristicUUID: UUID,
         value: Data,
     ) async throws {
-        let key = GATTRequestKey(
-            peripheralID: id,
+        try await performGATT(
+            id: id,
             serviceUUID: serviceUUID,
             characteristicUUID: characteristicUUID,
-        )
+            request: { .write($0, $1, $2) },
+        ) { peripheral, characteristic in
+            peripheral.writeValue(value, for: characteristic, type: .withResponse)
+        }
+    }
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let request = Request.write(key)
-            guard storePending(request, continuation: .void(continuation)) else {
-                continuation.resume(
-                    throwing: BluetoothCentralError.connectionFailed(
-                        id,
-                        reason: "Request already in progress",
-                    ),
-                )
+    private func enqueue(_ request: Request, work: () -> Void) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            guard pending[request] == nil else {
+                continuation.resume(throwing: request.duplicateInProgressError)
                 return
             }
+            pending[request] = continuation
+            work()
+        }
+    }
+
+    private func complete(_ request: Request, returning data: Data = Data()) {
+        guard let continuation = pending.removeValue(forKey: request) else { return }
+        continuation.resume(returning: data)
+    }
+
+    private func complete(_ request: Request, throwing error: Error) {
+        guard let continuation = pending.removeValue(forKey: request) else { return }
+        continuation.resume(throwing: error)
+    }
+
+    private func performGATT(
+        id: UUID,
+        serviceUUID: UUID,
+        characteristicUUID: UUID,
+        request: (UUID, UUID, UUID) -> Request,
+        perform: (CBPeripheral, CBCharacteristic) -> Void,
+    ) async throws {
+        let gattRequest = request(id, serviceUUID, characteristicUUID)
+        _ = try await enqueue(gattRequest) {
             queue.sync {
                 guard let peripheral = delegateBridge.peripheral(for: id) else {
-                    resumeVoid(request, throwing: BluetoothCentralError.peripheralNotFound(id))
+                    complete(gattRequest, throwing: BluetoothCentralError.peripheralNotFound(id))
                     return
                 }
                 guard let characteristic = Self.characteristic(
@@ -339,8 +244,8 @@ package actor CoreBluetoothCentral: BluetoothCentral {
                     serviceUUID: serviceUUID,
                     characteristicUUID: characteristicUUID,
                 ) else {
-                    resumeVoid(
-                        request,
+                    complete(
+                        gattRequest,
                         throwing: BluetoothCentralError.characteristicNotFound(
                             id,
                             serviceUUID: serviceUUID,
@@ -349,85 +254,44 @@ package actor CoreBluetoothCentral: BluetoothCentral {
                     )
                     return
                 }
-                peripheral.writeValue(value, for: characteristic, type: .withResponse)
+                perform(peripheral, characteristic)
             }
         }
     }
 
+    private func connectPeripheral(id: UUID, request: Request) {
+        guard let peripheral = delegateBridge.peripheral(for: id) else {
+            complete(request, throwing: BluetoothCentralError.peripheralNotFound(id))
+            return
+        }
+        centralManager.connect(peripheral, options: nil)
+    }
+
+    private func disconnectPeripheral(id: UUID, request: Request) {
+        guard let peripheral = delegateBridge.peripheral(for: id) else {
+            complete(request, throwing: BluetoothCentralError.peripheralNotFound(id))
+            return
+        }
+        centralManager.cancelPeripheralConnection(peripheral)
+    }
+
     private func cancelConnect(id: UUID) {
         let request = Request.connect(id)
-        guard let pendingContinuation = takePending(request) else { return }
+        guard let continuation = pending.removeValue(forKey: request) else { return }
         queue.sync {
             guard let peripheral = delegateBridge.peripheral(for: id) else { return }
             centralManager.cancelPeripheralConnection(peripheral)
         }
-        switch pendingContinuation {
-        case let .void(continuation):
-            continuation.resume(throwing: CancellationError())
-        case let .data(continuation):
-            continuation.resume(throwing: CancellationError())
-        }
-    }
-
-    private func storePending(_ request: Request, continuation: PendingContinuation) -> Bool {
-        if pending[request] != nil {
-            return false
-        }
-        pending[request] = continuation
-        return true
-    }
-
-    private func takePending(_ request: Request) -> PendingContinuation? {
-        pending.removeValue(forKey: request)
-    }
-
-    private func resumeVoid(_ request: Request, throwing error: Error) {
-        guard let pendingContinuation = takePending(request) else { return }
-        switch pendingContinuation {
-        case let .void(continuation):
-            continuation.resume(throwing: error)
-        case let .data(continuation):
-            continuation.resume(throwing: error)
-        }
-    }
-
-    private func resumeVoid(_ request: Request) {
-        guard let pendingContinuation = takePending(request) else { return }
-        switch pendingContinuation {
-        case let .void(continuation):
-            continuation.resume()
-        case let .data(continuation):
-            continuation.resume(throwing: BluetoothCentralError.connectionFailed(
-                request.peripheralID,
-                reason: "Unexpected pending type",
-            ))
-        }
-    }
-
-    private func resumeData(_ request: Request, returning data: Data) {
-        guard let pendingContinuation = takePending(request) else { return }
-        switch pendingContinuation {
-        case let .data(continuation):
-            continuation.resume(returning: data)
-        case let .void(continuation):
-            continuation.resume(throwing: BluetoothCentralError.connectionFailed(
-                request.peripheralID,
-                reason: "Unexpected pending type",
-            ))
-        }
-    }
-
-    private func resumeData(_ request: Request, throwing error: Error) {
-        resumeVoid(request, throwing: error)
+        continuation.resume(throwing: CancellationError())
     }
 
     private func failPendingRequests(for id: UUID, error: Error, resolvingDisconnect: Bool) {
         let keys = pending.keys.filter { $0.peripheralID == id }
         for key in keys {
             if key == .disconnect(id), resolvingDisconnect {
-                resumeVoid(key)
+                complete(key)
             } else {
-                resumeVoid(key, throwing: error)
+                complete(key, throwing: error)
             }
         }
     }
@@ -453,48 +317,49 @@ package actor CoreBluetoothCentral: BluetoothCentral {
             await discoveryBroadcaster.yield(discovery)
 
         case let .connected(id):
-            resumeVoid(.connect(id))
+            complete(.connect(id))
 
         case let .failedToConnect(id, reason):
-            resumeVoid(
+            complete(
                 .connect(id),
                 throwing: BluetoothCentralError.connectionFailed(id, reason: reason),
             )
 
         case let .disconnected(id, reason):
             await eventsBroadcaster.yield(.disconnected(peripheralID: id))
-            let disconnectError = BluetoothCentralError.disconnected(id, reason: reason)
-            failPendingRequests(for: id, error: disconnectError, resolvingDisconnect: true)
+            failPendingRequests(
+                for: id,
+                error: BluetoothCentralError.disconnected(id, reason: reason),
+                resolvingDisconnect: true,
+            )
 
         case let .servicesDiscovered(id, errorReason):
+            let request = Request.discoverServices(id)
             if let errorReason {
-                resumeVoid(
-                    .discoverServices(id),
+                complete(
+                    request,
                     throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason),
                 )
-                return
+            } else {
+                complete(request)
             }
-            resumeVoid(.discoverServices(id))
 
         case let .characteristicsDiscovered(id, errorReason):
+            let request = Request.discoverCharacteristics(id)
             if let errorReason {
-                resumeVoid(
-                    .discoverCharacteristics(id),
+                complete(
+                    request,
                     throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason),
                 )
-                return
+            } else {
+                complete(request)
             }
-            resumeVoid(.discoverCharacteristics(id))
 
         case let .characteristicValueUpdated(id, serviceUUID, characteristicUUID, value, errorReason):
-            let key = GATTRequestKey(
-                peripheralID: id,
-                serviceUUID: serviceUUID,
-                characteristicUUID: characteristicUUID,
-            )
+            let request = Request.read(id, serviceUUID, characteristicUUID)
             if let errorReason {
-                resumeData(
-                    .read(key),
+                complete(
+                    request,
                     throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason),
                 )
                 return
@@ -507,60 +372,46 @@ package actor CoreBluetoothCentral: BluetoothCentral {
                     value: value,
                 ),
             )
-            resumeData(.read(key), returning: value)
+            complete(request, returning: value)
 
         case let .characteristicWriteCompleted(id, serviceUUID, characteristicUUID, errorReason, attCode):
-            guard let serviceUUID else {
-                let error = BluetoothCentralError.connectionFailed(
-                    id,
-                    reason: errorReason ?? "Missing service for characteristic",
-                )
-                let writeKeys = pending.keys.filter {
-                    if case let .write(key) = $0 {
-                        return key.peripheralID == id && key.characteristicUUID == characteristicUUID
-                    }
-                    return false
-                }
-                for key in writeKeys {
-                    resumeVoid(key, throwing: error)
+            if let serviceUUID {
+                let request = Request.write(id, serviceUUID, characteristicUUID)
+                if let attCode {
+                    complete(request, throwing: BluetoothCentralError.attApplicationError(code: attCode))
+                } else if let errorReason {
+                    complete(
+                        request,
+                        throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason),
+                    )
+                } else {
+                    complete(request)
                 }
                 return
             }
 
-            let key = GATTRequestKey(
-                peripheralID: id,
-                serviceUUID: serviceUUID,
-                characteristicUUID: characteristicUUID,
+            let error = BluetoothCentralError.connectionFailed(
+                id,
+                reason: errorReason ?? "Missing service for characteristic",
             )
-            let request = Request.write(key)
-            if let attCode {
-                resumeVoid(request, throwing: BluetoothCentralError.attApplicationError(code: attCode))
-                return
+            for key in pending.keys {
+                guard case let .write(peripheralID, _, cid) = key,
+                      peripheralID == id,
+                      cid == characteristicUUID
+                else { continue }
+                complete(key, throwing: error)
             }
-            if let errorReason {
-                resumeVoid(
-                    request,
-                    throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason),
-                )
-                return
-            }
-            resumeVoid(request)
 
-        case let .notificationStateUpdated(id, serviceUUID, characteristicUUID, _, errorReason):
-            let key = GATTRequestKey(
-                peripheralID: id,
-                serviceUUID: serviceUUID,
-                characteristicUUID: characteristicUUID,
-            )
-            let request = Request.setNotify(key)
+        case let .notificationStateUpdated(id, serviceUUID, characteristicUUID, errorReason):
+            let request = Request.setNotify(id, serviceUUID, characteristicUUID)
             if let errorReason {
-                resumeVoid(
+                complete(
                     request,
                     throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason),
                 )
-                return
+            } else {
+                complete(request)
             }
-            resumeVoid(request)
         }
     }
 }
@@ -570,29 +421,27 @@ private enum Request: Hashable {
     case disconnect(UUID)
     case discoverServices(UUID)
     case discoverCharacteristics(UUID)
-    case read(GATTRequestKey)
-    case write(GATTRequestKey)
-    case setNotify(GATTRequestKey)
+    case read(UUID, UUID, UUID)
+    case write(UUID, UUID, UUID)
+    case setNotify(UUID, UUID, UUID)
 
     var peripheralID: UUID {
         switch self {
-        case let .connect(id), let .disconnect(id), let .discoverServices(id), let .discoverCharacteristics(id):
+        case let .connect(id),
+             let .disconnect(id),
+             let .discoverServices(id),
+             let .discoverCharacteristics(id):
             id
-        case let .read(key), let .write(key), let .setNotify(key):
-            key.peripheralID
+        case let .read(id, _, _),
+             let .write(id, _, _),
+             let .setNotify(id, _, _):
+            id
         }
     }
-}
 
-private enum PendingContinuation {
-    case void(CheckedContinuation<Void, Error>)
-    case data(CheckedContinuation<Data, Error>)
-}
-
-private struct GATTRequestKey: Hashable, Sendable {
-    let peripheralID: UUID
-    let serviceUUID: UUID
-    let characteristicUUID: UUID
+    var duplicateInProgressError: BluetoothCentralError {
+        .connectionFailed(peripheralID, reason: "Request already in progress")
+    }
 }
 
 private enum CentralDelegateEvent: Sendable {
@@ -621,7 +470,6 @@ private enum CentralDelegateEvent: Sendable {
         id: UUID,
         serviceUUID: UUID,
         characteristicUUID: UUID,
-        isNotifying: Bool,
         errorReason: String?,
     )
 }
@@ -663,13 +511,7 @@ private final class CentralDelegateBridge: NSObject, CBCentralManagerDelegate, C
 
         emit(
             .discovered(
-                DiscoveredPeripheral(
-                    id: id,
-                    name: peripheral.name ?? advertisementData[CBAdvertisementDataLocalNameKey] as? String,
-                    manufacturerData: advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data,
-                    serviceUUIDs: (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID])?
-                        .compactMap(\.foundationUUID) ?? [],
-                ),
+                Self.discoveredPeripheral(peripheral: peripheral, advertisementData: advertisementData),
             ),
         )
     }
@@ -700,29 +542,17 @@ private final class CentralDelegateBridge: NSObject, CBCentralManagerDelegate, C
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        emit(
-            .servicesDiscovered(
-                id: peripheral.identifier,
-                errorReason: error?.localizedDescription,
-            ),
-        )
+        emit(.servicesDiscovered(id: peripheral.identifier, errorReason: error?.localizedDescription))
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        emit(
-            .characteristicsDiscovered(
-                id: peripheral.identifier,
-                errorReason: error?.localizedDescription,
-            ),
-        )
+        emit(.characteristicsDiscovered(id: peripheral.identifier, errorReason: error?.localizedDescription))
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard let serviceUUID = characteristic.service?.uuid.foundationUUID,
               let characteristicUUID = characteristic.uuid.foundationUUID
-        else {
-            return
-        }
+        else { return }
         emit(
             .characteristicValueUpdated(
                 id: peripheral.identifier,
@@ -735,9 +565,10 @@ private final class CentralDelegateBridge: NSObject, CBCentralManagerDelegate, C
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard let characteristicUUID = characteristic.uuid.foundationUUID else { return }
+
         var attCode: UInt8?
         var errorReason: String?
-
         if let error = error as NSError? {
             if error.domain == CBATTErrorDomain {
                 let code = error.code
@@ -762,7 +593,7 @@ private final class CentralDelegateBridge: NSObject, CBCentralManagerDelegate, C
             .characteristicWriteCompleted(
                 id: peripheral.identifier,
                 serviceUUID: serviceUUID,
-                characteristicUUID: characteristic.uuid.foundationUUID ?? UUID(),
+                characteristicUUID: characteristicUUID,
                 errorReason: errorReason,
                 attCode: attCode,
             ),
@@ -776,17 +607,27 @@ private final class CentralDelegateBridge: NSObject, CBCentralManagerDelegate, C
     ) {
         guard let serviceUUID = characteristic.service?.uuid.foundationUUID,
               let characteristicUUID = characteristic.uuid.foundationUUID
-        else {
-            return
-        }
+        else { return }
         emit(
             .notificationStateUpdated(
                 id: peripheral.identifier,
                 serviceUUID: serviceUUID,
                 characteristicUUID: characteristicUUID,
-                isNotifying: characteristic.isNotifying,
                 errorReason: error?.localizedDescription,
             ),
+        )
+    }
+
+    private static func discoveredPeripheral(
+        peripheral: CBPeripheral,
+        advertisementData: [String: Any],
+    ) -> DiscoveredPeripheral {
+        DiscoveredPeripheral(
+            id: peripheral.identifier,
+            name: peripheral.name ?? advertisementData[CBAdvertisementDataLocalNameKey] as? String,
+            manufacturerData: advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data,
+            serviceUUIDs: (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID])?
+                .compactMap(\.foundationUUID) ?? [],
         )
     }
 }
@@ -794,28 +635,19 @@ private final class CentralDelegateBridge: NSObject, CBCentralManagerDelegate, C
 private extension BluetoothState {
     init(_ state: CBManagerState) {
         switch state {
-        case .unknown:
-            self = .unknown
-        case .resetting:
-            self = .resetting
-        case .unsupported:
-            self = .unsupported
-        case .unauthorized:
-            self = .unauthorized
-        case .poweredOff:
-            self = .poweredOff
-        case .poweredOn:
-            self = .poweredOn
-        @unknown default:
-            self = .unknown
+        case .unknown: self = .unknown
+        case .resetting: self = .resetting
+        case .unsupported: self = .unsupported
+        case .unauthorized: self = .unauthorized
+        case .poweredOff: self = .poweredOff
+        case .poweredOn: self = .poweredOn
+        @unknown default: self = .unknown
         }
     }
 }
 
 private extension UUID {
-    var cbUUID: CBUUID {
-        CBUUID(nsuuid: self)
-    }
+    var cbUUID: CBUUID { CBUUID(nsuuid: self) }
 }
 
 private extension CBUUID {
