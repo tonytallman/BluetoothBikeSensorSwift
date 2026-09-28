@@ -147,6 +147,7 @@ public struct DiscoveredSensor: Sendable {
             controlPointIndicationsEnabled: connectionResult.controlPointAvailable,
             stateBox: stateBox,
             timeouts: timeouts,
+            centralEvents: connectionResult.centralEvents,
         )
     }
 

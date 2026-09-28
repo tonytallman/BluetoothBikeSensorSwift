@@ -11,6 +11,7 @@ package struct CSCConnectionResult: Sendable {
     package let revolutions: ResolvedRevolutions
     package let location: ResolvedLocation
     package let controlPointAvailable: Bool
+    package let centralEvents: AsyncStream<CentralEvent>
 }
 
 package enum ResolvedLocation: Sendable {
@@ -74,6 +75,8 @@ enum CSCConnectionSetup {
             controlPointAvailable: controlPointAvailable,
         )
 
+        let centralEvents = await central.events
+
         try await central.setNotifyValue(
             id: id,
             serviceUUID: CSCS.serviceUUID,
@@ -97,6 +100,7 @@ enum CSCConnectionSetup {
             revolutions: revolutions,
             location: location,
             controlPointAvailable: controlPointAvailable,
+            centralEvents: centralEvents,
         )
     }
 

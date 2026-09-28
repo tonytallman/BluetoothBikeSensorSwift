@@ -20,7 +20,7 @@ public final class ConnectedSensor: Sendable {
     private let controlPointSession: CSCControlPointSession
     private let controlPointIndicationsEnabled: Bool
     private let timeouts: Timeouts
-    private let loopOwner: MeasurementLoopOwner
+    private let eventLoop: Task<Void, Never>
 
     private let wheelRevolutions: WheelRevolutions?
     private let crankRevolutions: CrankRevolutions?
@@ -36,6 +36,7 @@ public final class ConnectedSensor: Sendable {
         controlPointIndicationsEnabled: Bool,
         stateBox: MeasurementStateBox,
         timeouts: Timeouts,
+        centralEvents: AsyncStream<CentralEvent>,
     ) {
         self.id = id
         self.name = name
@@ -47,34 +48,43 @@ public final class ConnectedSensor: Sendable {
         self.controlPointIndicationsEnabled = controlPointIndicationsEnabled
         self.timeouts = timeouts
 
+        let loopWheel: WheelRevolutions?
+        let loopCrank: CrankRevolutions?
         switch revolutions {
         case let .wheel(wheel):
-            wheelRevolutions = wheel
-            crankRevolutions = nil
+            loopWheel = wheel
+            loopCrank = nil
         case let .crank(crank):
-            wheelRevolutions = nil
-            crankRevolutions = crank
+            loopWheel = nil
+            loopCrank = crank
         case let .wheelAndCrank(wheel, crank):
-            wheelRevolutions = wheel
-            crankRevolutions = crank
+            loopWheel = wheel
+            loopCrank = crank
         }
+        wheelRevolutions = loopWheel
+        crankRevolutions = loopCrank
 
-        loopOwner = MeasurementLoopOwner(
-            central: central,
-            id: id,
-            wheelRevolutions: wheelRevolutions,
-            crankRevolutions: crankRevolutions,
-            stateBox: stateBox,
-        )
+        let loopID = id
+        let loopStateBox = stateBox
+        let events = centralEvents
+        eventLoop = Task {
+            await Self.runMeasurementLoop(
+                events: events,
+                id: loopID,
+                wheelRevolutions: loopWheel,
+                crankRevolutions: loopCrank,
+                stateBox: loopStateBox,
+            )
+        }
     }
 
     deinit {
-        loopOwner.cancel()
+        eventLoop.cancel()
     }
 
     /// Disconnects from the sensor and returns a ``DiscoveredSensor`` for reconnection.
     public func disconnect() async throws -> DiscoveredSensor {
-        loopOwner.cancel()
+        eventLoop.cancel()
         await controlPointSession.cancel()
         await finishStreams()
 
@@ -121,13 +131,12 @@ public final class ConnectedSensor: Sendable {
     }
 
     private static func runMeasurementLoop(
-        central: any BluetoothCentral,
+        events: AsyncStream<CentralEvent>,
         id: UUID,
         wheelRevolutions: WheelRevolutions?,
         crankRevolutions: CrankRevolutions?,
         stateBox: MeasurementStateBox,
     ) async {
-        let events = await central.events
         for await event in events {
             guard !Task.isCancelled else {
                 return
@@ -219,29 +228,4 @@ public final class ConnectedSensor: Sendable {
         }
     }
 
-    private final class MeasurementLoopOwner: @unchecked Sendable {
-        private let task: Task<Void, Never>
-
-        init(
-            central: any BluetoothCentral,
-            id: UUID,
-            wheelRevolutions: WheelRevolutions?,
-            crankRevolutions: CrankRevolutions?,
-            stateBox: MeasurementStateBox,
-        ) {
-            task = Task {
-                await ConnectedSensor.runMeasurementLoop(
-                    central: central,
-                    id: id,
-                    wheelRevolutions: wheelRevolutions,
-                    crankRevolutions: crankRevolutions,
-                    stateBox: stateBox,
-                )
-            }
-        }
-
-        func cancel() {
-            task.cancel()
-        }
-    }
 }
