@@ -8,7 +8,7 @@ public final class WheelRevolutions: Sendable {
     private let speedBroadcaster = StreamBroadcaster<Speed>()
     private let wheelSampleBroadcaster = StreamBroadcaster<WheelSample>()
     private let stateBox: MeasurementStateBox
-    private let controlPointSession: CSCControlPointSession
+    private let controlPoint: ControlPoint?
 
     /// Wheel circumference used for speed calculation. Client-managed; not persisted by the library.
     public var wheelCircumference: Measurement<UnitLength> {
@@ -32,10 +32,10 @@ public final class WheelRevolutions: Sendable {
 
     package init(
         stateBox: MeasurementStateBox,
-        controlPointSession: CSCControlPointSession,
+        controlPoint: ControlPoint?,
     ) {
         self.stateBox = stateBox
-        self.controlPointSession = controlPointSession
+        self.controlPoint = controlPoint
     }
 
     /// Sets the sensor's cumulative wheel revolutions via the SC Control Point.
@@ -43,13 +43,12 @@ public final class WheelRevolutions: Sendable {
     /// Success clears the local wheel delta baseline so the next measurement establishes a new baseline.
     /// Throws ``ControlPointError/controlPointUnavailable`` when SC Control Point was not discovered.
     public func setCumulativeRevolutions(_ value: UInt32) async throws {
-        let stateBox = stateBox
-        try await controlPointSession.perform(
-            request: CSCControlPointRequest.setCumulativeValue(value).encode(),
-            expectedRequestOpcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
-        ) { _ in
-            stateBox.resetWheelBaseline()
+        guard let controlPoint else {
+            throw ControlPointError.controlPointUnavailable
         }
+        let stateBox = stateBox
+        _ = try await controlPoint.perform(.setCumulativeValue(value))
+        stateBox.resetWheelBaseline()
     }
 
     package func finishStreams() async {

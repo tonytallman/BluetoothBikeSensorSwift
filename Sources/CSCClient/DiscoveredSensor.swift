@@ -72,6 +72,7 @@ public struct DiscoveredSensor: Sendable {
             connectionResult = try await CSCConnectionSetup.prepare(
                 central: central,
                 id: id,
+                controlPointProcedure: timeouts.controlPointProcedure,
             )
         } catch let error as ConnectError {
             try? await central.disconnect(id: id)
@@ -103,21 +104,12 @@ public struct DiscoveredSensor: Sendable {
         timeouts: Timeouts,
     ) async -> ConnectedSensor {
         let stateBox = MeasurementStateBox()
-        let controlPointSession = CSCControlPointSession(
-            central: central,
-            peripheralID: id,
-            controlPointAvailable: connectionResult.controlPointAvailable,
-            timeout: timeouts.controlPointProcedure,
-        )
-
-        if connectionResult.controlPointAvailable {
-            await controlPointSession.startListener()
-        }
+        let controlPoint = connectionResult.controlPoint
 
         let revolutions = Self.makeRevolutions(
             resolved: connectionResult.revolutions,
             stateBox: stateBox,
-            controlPointSession: controlPointSession,
+            controlPoint: controlPoint,
         )
 
         let location: LocationSupport
@@ -127,11 +119,14 @@ public struct DiscoveredSensor: Sendable {
         case let .fixed(sensorLocation):
             location = .fixed(sensorLocation)
         case let .multiple(supported, current):
+            guard let controlPoint else {
+                fatalError("Multiple locations require control point")
+            }
             location = .multiple(
                 MultipleSensorLocations(
                     supported: supported,
                     current: current,
-                    controlPointSession: controlPointSession,
+                    controlPoint: controlPoint,
                 ),
             )
         }
@@ -143,7 +138,7 @@ public struct DiscoveredSensor: Sendable {
             revolutions: revolutions,
             location: location,
             central: central,
-            controlPointSession: controlPointSession,
+            controlPoint: controlPoint,
             controlPointIndicationsEnabled: connectionResult.controlPointAvailable,
             stateBox: stateBox,
             timeouts: timeouts,
@@ -154,14 +149,14 @@ public struct DiscoveredSensor: Sendable {
     private static func makeRevolutions(
         resolved: ResolvedRevolutions,
         stateBox: MeasurementStateBox,
-        controlPointSession: CSCControlPointSession,
+        controlPoint: ControlPoint?,
     ) -> RevolutionData {
         switch resolved {
         case .wheel:
             return .wheel(
                 WheelRevolutions(
                     stateBox: stateBox,
-                    controlPointSession: controlPointSession,
+                    controlPoint: controlPoint,
                 ),
             )
         case .crank:
@@ -170,7 +165,7 @@ public struct DiscoveredSensor: Sendable {
             return .wheelAndCrank(
                 WheelRevolutions(
                     stateBox: stateBox,
-                    controlPointSession: controlPointSession,
+                    controlPoint: controlPoint,
                 ),
                 CrankRevolutions(),
             )

@@ -40,6 +40,8 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     private var nextControlPointResponseValue: UInt8?
     private var shouldHangNextConnect = false
     private var shouldHoldNextControlPointIndication = false
+    private var shouldHangNextWrite = false
+    private var hungWriteWaiters: [CheckedContinuation<Void, Never>] = []
     private var heldControlPointIndication: CentralEvent?
     private var featureData: Data
     private var discoveredCharacteristicUUIDs: [UUID]
@@ -228,6 +230,14 @@ package actor FakeBluetoothCentral: BluetoothCentral {
             throw error
         }
 
+        if shouldHangNextWrite {
+            shouldHangNextWrite = false
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                hungWriteWaiters.append(continuation)
+            }
+            throw BluetoothCentralError.connectionFailed(id, reason: "Hung write released")
+        }
+
         guard characteristicUUID == CSCS.controlPointUUID else {
             return
         }
@@ -291,6 +301,18 @@ package actor FakeBluetoothCentral: BluetoothCentral {
 
     package func hangNextConnect() {
         shouldHangNextConnect = true
+        changed()
+    }
+
+    package func hangNextWrite() {
+        shouldHangNextWrite = true
+        changed()
+    }
+
+    package func releaseHungWrite() async {
+        let waiters = hungWriteWaiters
+        hungWriteWaiters = []
+        waiters.forEach { $0.resume() }
         changed()
     }
 

@@ -4,7 +4,7 @@ import Foundation
 /// Multiple sensor locations supported by a connected CSCS sensor.
 public final class MultipleSensorLocations: @unchecked Sendable {
     private let lock = NSLock()
-    private let controlPointSession: CSCControlPointSession
+    package let controlPoint: ControlPoint
 
     /// Sensor locations this peripheral supports.
     public let supported: [SensorLocation]
@@ -21,11 +21,11 @@ public final class MultipleSensorLocations: @unchecked Sendable {
     package init(
         supported: [SensorLocation],
         current: SensorLocation,
-        controlPointSession: CSCControlPointSession,
+        controlPoint: ControlPoint,
     ) {
         self.supported = supported
         _current = current
-        self.controlPointSession = controlPointSession
+        self.controlPoint = controlPoint
     }
 
     /// Updates the sensor location via the SC Control Point.
@@ -36,13 +36,8 @@ public final class MultipleSensorLocations: @unchecked Sendable {
             throw ControlPointError.unsupportedLocation
         }
 
-        let locationToApply = location
-        try await controlPointSession.perform(
-            request: CSCControlPointRequest.updateSensorLocation(location.assignedNumber).encode(),
-            expectedRequestOpcode: CSCControlPointOpCode.updateSensorLocation.rawValue,
-        ) { _ in
-            setCurrent(locationToApply)
-        }
+        _ = try await controlPoint.perform(.updateSensorLocation(location.assignedNumber))
+        setCurrent(location)
     }
 
     private func setCurrent(_ location: SensorLocation) {

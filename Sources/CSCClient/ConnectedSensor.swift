@@ -17,7 +17,7 @@ public final class ConnectedSensor: Sendable {
     private let name: String?
     private let manufacturer: String?
     private let central: any BluetoothCentral
-    private let controlPointSession: CSCControlPointSession
+    private let controlPoint: ControlPoint?
     private let controlPointIndicationsEnabled: Bool
     private let timeouts: Timeouts
     private let eventLoop: Task<Void, Never>
@@ -32,7 +32,7 @@ public final class ConnectedSensor: Sendable {
         revolutions: RevolutionData,
         location: LocationSupport,
         central: any BluetoothCentral,
-        controlPointSession: CSCControlPointSession,
+        controlPoint: ControlPoint?,
         controlPointIndicationsEnabled: Bool,
         stateBox: MeasurementStateBox,
         timeouts: Timeouts,
@@ -44,7 +44,7 @@ public final class ConnectedSensor: Sendable {
         self.revolutions = revolutions
         self.location = location
         self.central = central
-        self.controlPointSession = controlPointSession
+        self.controlPoint = controlPoint
         self.controlPointIndicationsEnabled = controlPointIndicationsEnabled
         self.timeouts = timeouts
 
@@ -85,7 +85,6 @@ public final class ConnectedSensor: Sendable {
     /// Disconnects from the sensor and returns a ``DiscoveredSensor`` for reconnection.
     public func disconnect() async throws -> DiscoveredSensor {
         eventLoop.cancel()
-        await controlPointSession.cancel()
         await finishStreams()
 
         try? await central.setNotifyValue(

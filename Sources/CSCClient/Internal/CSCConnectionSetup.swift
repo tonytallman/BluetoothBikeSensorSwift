@@ -11,6 +11,7 @@ package struct CSCConnectionResult: Sendable {
     package let revolutions: ResolvedRevolutions
     package let location: ResolvedLocation
     package let controlPointAvailable: Bool
+    package let controlPoint: ControlPoint?
     package let centralEvents: AsyncStream<CentralEvent>
 }
 
@@ -24,6 +25,7 @@ enum CSCConnectionSetup {
     static func prepare(
         central: any BluetoothCentral,
         id: UUID,
+        controlPointProcedure: Duration,
     ) async throws -> CSCConnectionResult {
         let discovered = try await central.discoverCharacteristics(
             id: id,
@@ -58,6 +60,7 @@ enum CSCConnectionSetup {
         let controlPointAvailable = discovered.contains(CSCS.controlPointUUID)
         let sensorLocationAvailable = discovered.contains(CSCS.sensorLocationUUID)
 
+        var controlPoint: ControlPoint?
         if controlPointAvailable {
             try await central.setNotifyValue(
                 id: id,
@@ -65,9 +68,15 @@ enum CSCConnectionSetup {
                 characteristicUUID: CSCS.controlPointUUID,
                 enabled: true,
             )
+            controlPoint = ControlPoint(
+                central: central,
+                peripheralID: id,
+                timeout: controlPointProcedure,
+            )
         }
 
         let location = try await resolveLocation(
+            controlPoint: controlPoint,
             central: central,
             id: id,
             feature: feature,
@@ -100,11 +109,13 @@ enum CSCConnectionSetup {
             revolutions: revolutions,
             location: location,
             controlPointAvailable: controlPointAvailable,
+            controlPoint: controlPoint,
             centralEvents: centralEvents,
         )
     }
 
     private static func resolveLocation(
+        controlPoint: ControlPoint?,
         central: any BluetoothCentral,
         id: UUID,
         feature: CSCFeature,
@@ -130,8 +141,7 @@ enum CSCConnectionSetup {
             let current = SensorLocation.fromAssignedNumber(wireLocation.assignedNumber)
 
             let supported = try await requestSupportedSensorLocations(
-                central: central,
-                id: id,
+                controlPoint: controlPoint,
             )
 
             guard supported.contains(current) else {
@@ -157,30 +167,20 @@ enum CSCConnectionSetup {
     }
 
     private static func requestSupportedSensorLocations(
-        central: any BluetoothCentral,
-        id: UUID,
+        controlPoint: ControlPoint?,
     ) async throws -> [SensorLocation] {
-        let session = CSCControlPointSession(
-            central: central,
-            peripheralID: id,
-            controlPointAvailable: true,
-        )
-        await session.startListener()
+        guard let controlPoint else {
+            throw ConnectError.serviceDiscoveryFailed(reason: "SC Control Point characteristic missing")
+        }
 
         let response: CSCControlPointResponse
         do {
-            response = try await session.perform(
-                request: CSCControlPointRequest.requestSupportedSensorLocations.encode(),
-                expectedRequestOpcode: CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
-            )
+            response = try await controlPoint.perform(.requestSupportedSensorLocations)
         } catch let error as ControlPointError {
-            await session.cancel()
             throw ConnectError.serviceDiscoveryFailed(reason: String(describing: error))
         } catch {
-            await session.cancel()
             throw ConnectError.serviceDiscoveryFailed(reason: error.localizedDescription)
         }
-        await session.cancel()
 
         guard let supported = CSCControlPointClient.supportedLocations(from: response) else {
             throw ConnectError.serviceDiscoveryFailed(reason: "Request Supported Sensor Locations failed")
