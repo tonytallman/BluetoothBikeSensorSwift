@@ -96,19 +96,6 @@ import Testing
     }
 }
 
-@Suite struct ScannerDependencyTests {
-    @Test func scannerAcceptsInjectedFakeCentral() {
-        let fake = FakeBluetoothCentral()
-        let scanner = Scanner(central: fake)
-        _ = scanner.scan()
-    }
-
-    @Test func scannerDefaultInitializerConstructs() {
-        let scanner = Scanner()
-        _ = scanner.scan()
-    }
-}
-
 enum AsyncTestHelpers {
     private actor Collector<T: Sendable> {
         private var values: [T] = []

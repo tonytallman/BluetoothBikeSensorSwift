@@ -12,9 +12,11 @@ public struct Scanner: Sendable {
     private let central: any BluetoothCentral
 
     /// Client entry point. Production dependencies are wired here.
+    #if canImport(CoreBluetooth)
     public init() {
         self.init(central: CoreBluetoothCentral())
     }
+    #endif
 
     /// Test and same-package injection only.
     package init(central: any BluetoothCentral) {
