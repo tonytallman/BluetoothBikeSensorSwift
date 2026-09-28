@@ -146,7 +146,7 @@ package actor CoreBluetoothCentral: BluetoothCentral {
         characteristicUUID: UUID,
         enabled: Bool,
     ) async throws {
-        try await performGATT(
+        _ = try await performGATT(
             id: id,
             serviceUUID: serviceUUID,
             characteristicUUID: characteristicUUID,
@@ -161,30 +161,13 @@ package actor CoreBluetoothCentral: BluetoothCentral {
         serviceUUID: UUID,
         characteristicUUID: UUID,
     ) async throws -> Data {
-        let gattRequest = Request.read(id, serviceUUID, characteristicUUID)
-        return try await enqueue(gattRequest) {
-            queue.sync {
-                guard let peripheral = delegateBridge.peripheral(for: id) else {
-                    complete(gattRequest, throwing: BluetoothCentralError.peripheralNotFound(id))
-                    return
-                }
-                guard let characteristic = Self.characteristic(
-                    on: peripheral,
-                    serviceUUID: serviceUUID,
-                    characteristicUUID: characteristicUUID,
-                ) else {
-                    complete(
-                        gattRequest,
-                        throwing: BluetoothCentralError.characteristicNotFound(
-                            id,
-                            serviceUUID: serviceUUID,
-                            characteristicUUID: characteristicUUID,
-                        ),
-                    )
-                    return
-                }
-                peripheral.readValue(for: characteristic)
-            }
+        try await performGATT(
+            id: id,
+            serviceUUID: serviceUUID,
+            characteristicUUID: characteristicUUID,
+            request: { .read($0, $1, $2) },
+        ) { peripheral, characteristic in
+            peripheral.readValue(for: characteristic)
         }
     }
 
@@ -194,7 +177,7 @@ package actor CoreBluetoothCentral: BluetoothCentral {
         characteristicUUID: UUID,
         value: Data,
     ) async throws {
-        try await performGATT(
+        _ = try await performGATT(
             id: id,
             serviceUUID: serviceUUID,
             characteristicUUID: characteristicUUID,
@@ -225,15 +208,23 @@ package actor CoreBluetoothCentral: BluetoothCentral {
         continuation.resume(throwing: error)
     }
 
+    private func complete(_ request: Request, id: UUID, errorReason: String?) {
+        if let errorReason {
+            complete(request, throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason))
+        } else {
+            complete(request)
+        }
+    }
+
     private func performGATT(
         id: UUID,
         serviceUUID: UUID,
         characteristicUUID: UUID,
         request: (UUID, UUID, UUID) -> Request,
         perform: (CBPeripheral, CBCharacteristic) -> Void,
-    ) async throws {
+    ) async throws -> Data {
         let gattRequest = request(id, serviceUUID, characteristicUUID)
-        _ = try await enqueue(gattRequest) {
+        return try await enqueue(gattRequest) {
             queue.sync {
                 guard let peripheral = delegateBridge.peripheral(for: id) else {
                     complete(gattRequest, throwing: BluetoothCentralError.peripheralNotFound(id))
@@ -334,34 +325,15 @@ package actor CoreBluetoothCentral: BluetoothCentral {
             )
 
         case let .servicesDiscovered(id, errorReason):
-            let request = Request.discoverServices(id)
-            if let errorReason {
-                complete(
-                    request,
-                    throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason),
-                )
-            } else {
-                complete(request)
-            }
+            complete(.discoverServices(id), id: id, errorReason: errorReason)
 
         case let .characteristicsDiscovered(id, errorReason):
-            let request = Request.discoverCharacteristics(id)
-            if let errorReason {
-                complete(
-                    request,
-                    throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason),
-                )
-            } else {
-                complete(request)
-            }
+            complete(.discoverCharacteristics(id), id: id, errorReason: errorReason)
 
         case let .characteristicValueUpdated(id, serviceUUID, characteristicUUID, value, errorReason):
             let request = Request.read(id, serviceUUID, characteristicUUID)
             if let errorReason {
-                complete(
-                    request,
-                    throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason),
-                )
+                complete(request, id: id, errorReason: errorReason)
                 return
             }
             await eventsBroadcaster.yield(
@@ -394,24 +366,16 @@ package actor CoreBluetoothCentral: BluetoothCentral {
                 id,
                 reason: errorReason ?? "Missing service for characteristic",
             )
-            for key in pending.keys {
-                guard case let .write(peripheralID, _, cid) = key,
-                      peripheralID == id,
-                      cid == characteristicUUID
-                else { continue }
+            let writeKeys = pending.keys.filter {
+                guard case let .write(peripheralID, _, cid) = $0 else { return false }
+                return peripheralID == id && cid == characteristicUUID
+            }
+            for key in writeKeys {
                 complete(key, throwing: error)
             }
 
         case let .notificationStateUpdated(id, serviceUUID, characteristicUUID, errorReason):
-            let request = Request.setNotify(id, serviceUUID, characteristicUUID)
-            if let errorReason {
-                complete(
-                    request,
-                    throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason),
-                )
-            } else {
-                complete(request)
-            }
+            complete(.setNotify(id, serviceUUID, characteristicUUID), id: id, errorReason: errorReason)
         }
     }
 }
