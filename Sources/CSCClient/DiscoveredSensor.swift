@@ -1,20 +1,35 @@
 internal import CSCWire
 import Foundation
 
+/// Errors thrown by ``DiscoveredSensor/connect()``.
+public enum ConnectError: Error, Sendable, Equatable {
+    case notPoweredOn
+    case timeout
+    case failed(reason: String)
+    case peripheralNotFound
+    case serviceDiscoveryFailed(reason: String)
+}
+
 /// A CSCS sensor discovered during an active scan.
-///
-/// Obtain instances only from ``Scanner/scan()``. After ``connect()``, rely on
-/// ``ConnectedSensor/revolutions`` and ``ConnectedSensor/location`` for supported features.
 public struct DiscoveredSensor: Sendable {
-    /// Stable identifier for the peripheral.
     public let id: UUID
-    /// Advertised or peripheral name, when available.
     public let name: String?
-    /// Manufacturer resolved from advertisement data, when available.
     public let manufacturer: String?
 
-    private let central: any BluetoothCentral
-    private let timeouts: Timeouts
+    package let central: any BluetoothCentral
+    package let timeouts: Timeouts
+
+    init(
+        _ peripheral: DiscoveredPeripheral,
+        central: any BluetoothCentral,
+        timeouts: Timeouts = Timeouts(),
+    ) {
+        id = peripheral.id
+        name = peripheral.name
+        manufacturer = Self.manufacturerName(from: peripheral.manufacturerData)
+        self.central = central
+        self.timeouts = timeouts
+    }
 
     package init(
         id: UUID,
@@ -30,7 +45,6 @@ public struct DiscoveredSensor: Sendable {
         self.timeouts = timeouts
     }
 
-    /// Connects to the sensor, discovers CSC characteristics, and enables notifications.
     public func connect() async throws -> ConnectedSensor {
         guard await central.currentState == .poweredOn else {
             throw ConnectError.notPoweredOn
@@ -52,117 +66,67 @@ public struct DiscoveredSensor: Sendable {
         } catch let error as ConnectError {
             throw error
         } catch let error as BluetoothCentralError {
-            throw BluetoothCentralErrorMapping.connectError(from: error)
+            throw Self.connectError(from: error)
         } catch {
             throw ConnectError.failed(reason: error.localizedDescription)
         }
 
         do {
-            try await central.discoverServices(id: id, serviceUUIDs: [CSCS.serviceUUID])
-        } catch {
-            try? await central.disconnect(id: id)
-            if let centralError = error as? BluetoothCentralError {
-                throw BluetoothCentralErrorMapping.connectError(from: centralError)
-            }
-            throw ConnectError.serviceDiscoveryFailed(reason: error.localizedDescription)
-        }
-
-        let connectionResult: CSCConnectionResult
-        do {
-            connectionResult = try await CSCConnectionSetup.prepare(
-                central: central,
-                id: id,
-                controlPointProcedure: timeouts.controlPointProcedure,
-            )
+            return try await ConnectedSensor(connecting: self)
         } catch let error as ConnectError {
             try? await central.disconnect(id: id)
             throw error
+        } catch let error as ControlPointError {
+            try? await central.disconnect(id: id)
+            throw ConnectError.serviceDiscoveryFailed(reason: String(describing: error))
+        } catch let error as BluetoothCentralError {
+            try? await central.disconnect(id: id)
+            throw Self.connectError(from: error)
         } catch {
             try? await central.disconnect(id: id)
-            if let centralError = error as? BluetoothCentralError {
-                throw BluetoothCentralErrorMapping.connectError(from: centralError)
-            }
             throw ConnectError.serviceDiscoveryFailed(reason: error.localizedDescription)
         }
-
-        return await Self.makeConnectedSensor(
-            id: id,
-            name: name,
-            manufacturer: manufacturer,
-            connectionResult: connectionResult,
-            central: central,
-            timeouts: timeouts,
-        )
     }
 
-    private static func makeConnectedSensor(
-        id: UUID,
-        name: String?,
-        manufacturer: String?,
-        connectionResult: CSCConnectionResult,
-        central: any BluetoothCentral,
-        timeouts: Timeouts,
-    ) async -> ConnectedSensor {
-        let controlPoint = connectionResult.controlPoint
-
-        let revolutions = Self.makeRevolutions(
-            resolved: connectionResult.revolutions,
-            controlPoint: controlPoint,
-        )
-
-        let location: LocationSupport
-        switch connectionResult.location {
-        case .unavailable:
-            location = .unavailable
-        case let .fixed(sensorLocation):
-            location = .fixed(sensorLocation)
-        case let .multiple(supported, current):
-            guard let controlPoint else {
-                fatalError("Multiple locations require control point")
-            }
-            location = .multiple(
-                MultipleSensorLocations(
-                    supported: supported,
-                    current: current,
-                    controlPoint: controlPoint,
-                ),
+    private static func connectError(from error: BluetoothCentralError) -> ConnectError {
+        switch error {
+        case .notPoweredOn:
+            return .notPoweredOn
+        case .peripheralNotFound:
+            return .peripheralNotFound
+        case let .connectionFailed(_, reason):
+            return .failed(reason: reason)
+        case let .disconnected(_, reason):
+            return .failed(reason: reason ?? "Disconnected during connect")
+        case let .serviceNotFound(_, serviceUUID):
+            return .serviceDiscoveryFailed(reason: "Service not found: \(serviceUUID)")
+        case let .characteristicNotFound(_, serviceUUID, characteristicUUID):
+            return .serviceDiscoveryFailed(
+                reason: "Characteristic not found: \(characteristicUUID) on \(serviceUUID)",
             )
+        case let .attApplicationError(code):
+            return .serviceDiscoveryFailed(reason: "ATT error \(code)")
         }
-
-        return ConnectedSensor(
-            id: id,
-            name: name,
-            manufacturer: manufacturer,
-            revolutions: revolutions,
-            location: location,
-            central: central,
-            controlPoint: controlPoint,
-            controlPointIndicationsEnabled: connectionResult.controlPointAvailable,
-            timeouts: timeouts,
-            centralEvents: connectionResult.centralEvents,
-        )
     }
 
-    private static func makeRevolutions(
-        resolved: ResolvedRevolutions,
-        controlPoint: ControlPoint?,
-    ) -> RevolutionData {
-        switch resolved {
-        case .wheel:
-            return .wheel(
-                WheelRevolutions(
-                    controlPoint: controlPoint,
-                ),
-            )
-        case .crank:
-            return .crank(CrankRevolutions())
-        case .wheelAndCrank:
-            return .wheelAndCrank(
-                WheelRevolutions(
-                    controlPoint: controlPoint,
-                ),
-                CrankRevolutions(),
-            )
+    /// Bluetooth SIG company identifiers (16-bit), little-endian in advertisement data.
+    private static let companyNames: [UInt16: String] = [
+        0x006D: "Garmin",
+        0x0077: "Wahoo Fitness",
+        0x0099: "Stages Cycling",
+        0x00D1: "Quarq",
+        0x0137: "Magene",
+        0x0154: "Cycling Power Meter",
+        0x0157: "SRAM",
+    ]
+
+    private static func manufacturerName(from manufacturerData: Data?) -> String? {
+        guard let manufacturerData, manufacturerData.count >= 2 else {
+            return nil
         }
+
+        let bytes = Array(manufacturerData.prefix(2))
+        let companyID = UInt16(bytes[0]) | UInt16(bytes[1]) << 8
+        return companyNames[companyID]
     }
 }

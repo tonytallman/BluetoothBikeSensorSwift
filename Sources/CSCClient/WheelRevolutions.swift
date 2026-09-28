@@ -42,7 +42,7 @@ public final class WheelRevolutions: Sendable {
         }
     }
 
-    package init(controlPoint: ControlPoint?) {
+    init(controlPoint: ControlPoint?) {
         self.controlPoint = controlPoint
     }
 

@@ -242,6 +242,6 @@ enum CSCControlPointClient {
             return nil
         }
 
-        return response.parameter.map { SensorLocation.fromAssignedNumber($0) }
+        return response.parameter.map { SensorLocation(assignedNumber: $0) }
     }
 }

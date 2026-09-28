@@ -34,7 +34,7 @@ public final class CrankRevolutions: Sendable {
         }
     }
 
-    package init() {}
+    init() {}
 
     package func receive(revolutions: UInt16, eventTime: UInt16) async {
         let sample: CrankSample? = lock.withLock {

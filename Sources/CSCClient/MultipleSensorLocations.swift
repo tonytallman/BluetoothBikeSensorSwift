@@ -18,7 +18,7 @@ public final class MultipleSensorLocations: @unchecked Sendable {
         return _current
     }
 
-    package init(
+    init(
         supported: [SensorLocation],
         current: SensorLocation,
         controlPoint: ControlPoint,
