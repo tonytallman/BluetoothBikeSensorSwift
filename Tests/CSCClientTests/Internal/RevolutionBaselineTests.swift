@@ -1,7 +1,7 @@
 import CSCClient
 import Testing
 
-@Suite struct RevolutionBaselineTests {
+@Suite(.timeLimit(.minutes(1))) struct RevolutionBaselineTests {
     @Test func firstPacketSeeds() {
         var baseline = RevolutionBaseline<UInt32>()
         #expect(baseline.delta(revolutions: 100, eventTime: 1_024) == nil)

@@ -26,7 +26,7 @@ package actor ControlPoint {
     private var writeInFlight = false
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
 
-    package init(
+    init(
         central: any BluetoothCentral,
         peripheralID: UUID,
         timeout: Duration,
@@ -75,18 +75,6 @@ package actor ControlPoint {
         }
     }
 
-    package func cancel() {
-        if let waiter {
-            self.waiter = nil
-            waiter.resume(throwing: ControlPointError.failed(reason: "Cancelled"))
-        }
-        helpers.forEach { $0.cancel() }
-        helpers = []
-        isBusy = false
-        writeInFlight = false
-        resumeIdleWaitersIfNeeded()
-    }
-
     private func start(id: UInt, requestData: Data, events: AsyncStream<CentralEvent>) {
         writeInFlight = true
 
@@ -122,7 +110,14 @@ package actor ControlPoint {
         helpers.append(listener)
 
         let timer = Task {
-            try? await Task.sleep(for: timeout)
+            do {
+                try await Task.sleep(for: timeout)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else {
+                return
+            }
             await resolve(id: id, result: .failure(ControlPointError.timedOut))
         }
         helpers.append(timer)
@@ -143,8 +138,11 @@ package actor ControlPoint {
     }
 
     private func writeFinished(procedureID: UInt) async {
+        guard procedureID == procedure else {
+            return
+        }
         writeInFlight = false
-        if procedureID == procedure, waiter == nil, isBusy {
+        if waiter == nil, isBusy {
             isBusy = false
         }
         resumeIdleWaitersIfNeeded()
@@ -231,17 +229,5 @@ package actor ControlPoint {
             }
         }
         return .failed(reason: error.localizedDescription)
-    }
-}
-
-enum CSCControlPointClient {
-    static func supportedLocations(from response: CSCControlPointResponse) -> [SensorLocation]? {
-        guard response.requestOpcode == CSCControlPointOpCode.requestSupportedSensorLocations.rawValue,
-              response.value == CSCControlPointResponseValue.success.rawValue
-        else {
-            return nil
-        }
-
-        return response.parameter.map { SensorLocation(assignedNumber: $0) }
     }
 }

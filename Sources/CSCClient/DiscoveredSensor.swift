@@ -2,22 +2,34 @@ internal import CSCWire
 import Foundation
 
 /// Errors thrown by ``DiscoveredSensor/connect()``.
+/// Errors thrown by ``DiscoveredSensor/connect()``.
 public enum ConnectError: Error, Sendable, Equatable {
+    /// Bluetooth is not powered on.
     case notPoweredOn
+    /// Connection did not complete within the timeout.
     case timeout
+    /// Connection failed for another reason.
     case failed(reason: String)
+    /// The peripheral could not be found.
     case peripheralNotFound
+    /// CSC service or characteristic discovery failed.
     case serviceDiscoveryFailed(reason: String)
 }
 
 /// A CSCS sensor discovered during an active scan.
+///
+/// Obtain instances only from ``Scanner/scan()``. After ``connect()``, rely on
+/// ``ConnectedSensor/revolutions`` and ``ConnectedSensor/location`` for supported features.
 public struct DiscoveredSensor: Sendable {
+    /// Stable identifier for the peripheral.
     public let id: UUID
+    /// Advertised or peripheral name, when available.
     public let name: String?
+    /// Manufacturer resolved from advertisement data, when available.
     public let manufacturer: String?
 
-    package let central: any BluetoothCentral
-    package let timeouts: Timeouts
+    let central: any BluetoothCentral
+    let timeouts: Timeouts
 
     init(
         _ peripheral: DiscoveredPeripheral,
@@ -45,6 +57,7 @@ public struct DiscoveredSensor: Sendable {
         self.timeouts = timeouts
     }
 
+    /// Connects to the sensor, discovers CSC characteristics, and enables notifications.
     public func connect() async throws -> ConnectedSensor {
         guard await central.currentState == .poweredOn else {
             throw ConnectError.notPoweredOn
@@ -73,19 +86,23 @@ public struct DiscoveredSensor: Sendable {
 
         do {
             return try await ConnectedSensor(connecting: self)
-        } catch let error as ConnectError {
-            try? await central.disconnect(id: id)
-            throw error
-        } catch let error as ControlPointError {
-            try? await central.disconnect(id: id)
-            throw ConnectError.serviceDiscoveryFailed(reason: String(describing: error))
-        } catch let error as BluetoothCentralError {
-            try? await central.disconnect(id: id)
-            throw Self.connectError(from: error)
         } catch {
             try? await central.disconnect(id: id)
-            throw ConnectError.serviceDiscoveryFailed(reason: error.localizedDescription)
+            throw Self.mapSetupError(error)
         }
+    }
+
+    private static func mapSetupError(_ error: Error) -> ConnectError {
+        if let error = error as? ConnectError {
+            return error
+        }
+        if let error = error as? ControlPointError {
+            return .serviceDiscoveryFailed(reason: String(describing: error))
+        }
+        if let error = error as? BluetoothCentralError {
+            return connectError(from: error)
+        }
+        return .serviceDiscoveryFailed(reason: error.localizedDescription)
     }
 
     private static func connectError(from error: BluetoothCentralError) -> ConnectError {

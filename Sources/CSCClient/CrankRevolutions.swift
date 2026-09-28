@@ -10,6 +10,7 @@ extension UnitFrequency {
     )
 }
 
+/// A crank rotation delta between two CSC measurement notifications.
 public struct CrankSample: Sendable, Equatable {
     public let deltaRevolutions: Int
     public let deltaTime: Measurement<UnitDuration>
@@ -22,12 +23,14 @@ public final class CrankRevolutions: Sendable {
     private let lock = NSLock()
     private nonisolated(unsafe) var baseline = RevolutionBaseline<UInt16>()
 
+    /// Live cadence stream in revolutions per minute. The stream finishes on disconnect.
     public var cadence: AsyncStream<Cadence> {
         get async {
             await cadenceBroadcaster.makeStream()
         }
     }
 
+    /// Crank delta-sample stream derived from CSC crank event timestamps.
     public var crankSamples: AsyncStream<CrankSample> {
         get async {
             await crankSampleBroadcaster.makeStream()
@@ -36,7 +39,7 @@ public final class CrankRevolutions: Sendable {
 
     init() {}
 
-    package func receive(revolutions: UInt16, eventTime: UInt16) async {
+    func receive(revolutions: UInt16, eventTime: UInt16) async {
         let sample: CrankSample? = lock.withLock {
             guard let delta = baseline.delta(revolutions: revolutions, eventTime: eventTime) else {
                 return nil
@@ -64,7 +67,7 @@ public final class CrankRevolutions: Sendable {
         )
     }
 
-    package func finishStreams() async {
+    func finishStreams() async {
         await cadenceBroadcaster.finish()
         await crankSampleBroadcaster.finish()
     }

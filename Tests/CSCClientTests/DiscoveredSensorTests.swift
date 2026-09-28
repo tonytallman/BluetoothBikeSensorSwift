@@ -310,6 +310,11 @@ import Testing
             #expect(CSCClientTestSupport.hasMeasurementNotifyEnabled(in: calls, sensorID: sensorID))
         case .crankOnlyConnectWithoutControlPointSucceeds:
             #expect(connected.revolutions.crank != nil)
+            #expect(connected.revolutions.wheel == nil)
+            guard case .unavailable = connected.location else {
+                Issue.record("Expected unavailable location")
+                return
+            }
             #expect(!CSCClientTestSupport.hasControlPointNotifyEnabled(in: calls, sensorID: sensorID))
             #expect(CSCClientTestSupport.hasMeasurementNotifyEnabled(in: calls, sensorID: sensorID))
         }
@@ -590,7 +595,6 @@ import Testing
                     )
                 },
                 configure: { fake, _ in
-                    await fake.setSupportedSensorLocationBytes([0x05, 0x06, 0x0A])
                 },
                 expected: .serviceDiscoveryFailed(reason: "Current sensor location is not supported"),
                 expectsDisconnect: true,

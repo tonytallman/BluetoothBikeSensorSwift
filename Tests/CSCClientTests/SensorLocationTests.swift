@@ -26,7 +26,6 @@ import Testing
             ]).encode(),
             discoveredCharacteristicUUIDs: FakeCharacteristicSets.allCSCCharacteristicUUIDs,
         )
-        await fake.setSupportedSensorLocationBytes([0x05, 0x06, 0x0A])
 
         let connected = try await CSCClientTestSupport.sensor(central: fake).connect()
         guard case let .multiple(locations) = connected.location else {
@@ -50,7 +49,6 @@ import Testing
             ]).encode(),
             discoveredCharacteristicUUIDs: FakeCharacteristicSets.allCSCCharacteristicUUIDs,
         )
-        await fake.setSupportedSensorLocationBytes([0x05, 0x06, 0x0A])
 
         let connected = try await CSCClientTestSupport.sensor(central: fake).connect()
         guard case let .multiple(locations) = connected.location else {
@@ -78,7 +76,6 @@ import Testing
             ]).encode(),
             discoveredCharacteristicUUIDs: FakeCharacteristicSets.allCSCCharacteristicUUIDs,
         )
-        await fake.setSupportedSensorLocationBytes([0x05, 0x06, 0x0A])
 
         var connected: ConnectedSensor? = try await CSCClientTestSupport.sensor(central: fake).connect()
         guard case let .multiple(locations) = connected?.location else {

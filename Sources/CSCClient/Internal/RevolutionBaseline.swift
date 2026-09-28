@@ -25,7 +25,7 @@ package struct RevolutionBaseline<Count: FixedWidthInteger & UnsignedInteger & S
         return (deltaRevolutions, seconds)
     }
 
-    package mutating func reset() {
+    mutating func reset() {
         previousRevolutions = nil
         previousEventTime = nil
     }

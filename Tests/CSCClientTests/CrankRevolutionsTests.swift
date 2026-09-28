@@ -75,9 +75,11 @@ import Testing
             #expect(await iterator.next()?.deltaRevolutions == 1)
         case "crankCapJustOverThreeHundredRejected":
             await emitCrank(fake: fake, id: sensorID, revolutions: 10, eventTime: 1_024)
-            await emitCrank(fake: fake, id: sensorID, revolutions: 20, eventTime: 2_048)
-            await emitCrank(fake: fake, id: sensorID, revolutions: 21, eventTime: 3_072)
-            #expect(await iterator.next()?.deltaRevolutions == 1)
+            await emitCrank(fake: fake, id: sensorID, revolutions: 16, eventTime: 2_048)
+            await emitCrank(fake: fake, id: sensorID, revolutions: 17, eventTime: 3_072)
+            let sample = await iterator.next()
+            #expect(sample?.deltaRevolutions == 1)
+            #expect(sample?.deltaTime.converted(to: .seconds).value == 1.0)
         default:
             Issue.record("Unknown case")
         }

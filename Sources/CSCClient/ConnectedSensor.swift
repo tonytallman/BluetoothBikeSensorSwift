@@ -3,7 +3,9 @@ import Foundation
 
 /// Errors thrown by ``ConnectedSensor/disconnect()``.
 public enum DisconnectError: Error, Sendable, Equatable {
+    /// Disconnect failed for a reason other than already being disconnected.
     case failed(reason: String)
+    /// The sensor was already disconnected.
     case alreadyDisconnected
 }
 
@@ -37,8 +39,15 @@ public enum RevolutionData: Sendable {
 }
 
 /// A connected CSCS sensor emitting live speed and/or cadence measurements.
+///
+/// Created only by ``DiscoveredSensor/connect()``. Set ``WheelRevolutions/wheelCircumference``
+/// before or during streaming so speed values reflect your wheel size. Streams finish when the
+/// sensor disconnects unexpectedly; call ``disconnect()`` to release the connection.
 public final class ConnectedSensor: Sendable {
+    /// Supported revolution data and live measurement streams.
     public let revolutions: RevolutionData
+
+    /// Sensor location support for this connection.
     public let location: LocationSupport
 
     private let sensor: DiscoveredSensor
@@ -185,6 +194,7 @@ public final class ConnectedSensor: Sendable {
         eventLoop.cancel()
     }
 
+    /// Disconnects from the sensor and returns a ``DiscoveredSensor`` for reconnection.
     public func disconnect() async throws -> DiscoveredSensor {
         eventLoop.cancel()
         await finishStreams()

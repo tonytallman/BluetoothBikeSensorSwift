@@ -2,9 +2,9 @@ internal import CSCWire
 import Foundation
 
 package struct Timeouts: Sendable {
-    package var bluetoothPowerOn: Duration
-    package var connect: Duration
-    package var controlPointProcedure: Duration
+    package let bluetoothPowerOn: Duration
+    package let connect: Duration
+    package let controlPointProcedure: Duration
 
     package init(
         bluetoothPowerOn: Duration = .seconds(2),
@@ -78,9 +78,17 @@ public struct Scanner: Sendable {
     private static func waitForPoweredOn(central: any BluetoothCentral, timeouts: Timeouts) async -> Bool {
         let unavailableStates: Set<BluetoothState> = [.unsupported, .unauthorized, .poweredOff]
 
+        let stateUpdates = await central.stateUpdates
+        let initialState = await central.currentState
+        if initialState == .poweredOn {
+            return true
+        }
+        if unavailableStates.contains(initialState) {
+            return false
+        }
+
         return await withTaskGroup(of: Bool.self) { group in
             group.addTask {
-                let stateUpdates = await central.stateUpdates
                 for await state in stateUpdates {
                     if state == .poweredOn {
                         return true

@@ -9,8 +9,11 @@ public enum LocationSupport: Sendable {
 }
 
 /// A CSCS sensor location assigned number (GATT values 0...16).
+///
+/// Instances are obtained only from a connected sensor (`fixed`, `supported`, or `current`).
+/// Compare and select locations using ``kind``; use ``displayName`` for UI labels.
 public struct SensorLocation: Sendable, Hashable {
-    package let assignedNumber: UInt8
+    let assignedNumber: UInt8
 
     package init(assignedNumber: UInt8) {
         self.assignedNumber = assignedNumber
@@ -115,10 +118,12 @@ public final class MultipleSensorLocations: Sendable {
     private let lock = NSLock()
     package let controlPoint: ControlPoint
 
+    /// Sensor locations this peripheral supports.
     public let supported: [SensorLocation]
 
     private nonisolated(unsafe) var currentStorage: SensorLocation
 
+    /// The sensor's current location assignment.
     public var current: SensorLocation {
         lock.withLock { currentStorage }
     }
@@ -133,6 +138,7 @@ public final class MultipleSensorLocations: Sendable {
         self.controlPoint = controlPoint
     }
 
+    /// Updates the sensor location via the SC Control Point characteristic.
     public func update(_ location: SensorLocation) async throws {
         guard supported.contains(location) else {
             throw ControlPointError.unsupportedLocation

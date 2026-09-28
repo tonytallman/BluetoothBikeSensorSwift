@@ -2,7 +2,7 @@
 import CoreBluetooth
 import Foundation
 
-package actor CoreBluetoothCentral: BluetoothCentral {
+actor CoreBluetoothCentral: BluetoothCentral {
     private let queue = DispatchQueue(label: "com.bluetoothbikesensor.central")
     private let centralManager: CBCentralManager
     private let delegateBridge: CentralDelegateBridge

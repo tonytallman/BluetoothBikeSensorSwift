@@ -78,7 +78,6 @@ import Testing
 
     @Test func timedOutIndicationIsIgnoredByNextProcedure() async throws {
         let fake = multipleLocationFake()
-        await fake.setSupportedSensorLocationBytes([0x05, 0x06, 0x0A])
         let connected = try await CSCClientTestSupport.sensor(
             central: fake,
             timeouts: Timeouts(controlPointProcedure: .milliseconds(100)),
@@ -150,6 +149,37 @@ import Testing
             Issue.record("Unknown case")
         }
 
+        _ = try await connected.disconnect()
+    }
+
+    @Test func priorProcedureWriteFinishIgnoresStaleGeneration() async throws {
+        let fake = multipleLocationFake()
+        let connected = try await CSCClientTestSupport.sensor(
+            central: fake,
+            timeouts: Timeouts(controlPointProcedure: .milliseconds(100)),
+        ).connect()
+        guard case let .multiple(locations) = connected.location else {
+            Issue.record("Expected multiple locations")
+            return
+        }
+
+        await fake.hangNextWrite()
+        do {
+            try await locations.update(locations.supported[1])
+            Issue.record("Expected timedOut")
+        } catch let error as ControlPointError {
+            #expect(error == .timedOut)
+        }
+
+        do {
+            try await locations.update(locations.supported[2])
+            Issue.record("Expected procedureInProgress while first write is hung")
+        } catch let error as ControlPointError {
+            #expect(error == .procedureInProgress)
+        }
+
+        await fake.releaseHungWrite()
+        await locations.controlPoint.waitUntilIdle()
         _ = try await connected.disconnect()
     }
 

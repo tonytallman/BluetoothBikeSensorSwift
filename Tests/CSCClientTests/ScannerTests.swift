@@ -58,6 +58,9 @@ import Testing
             var sensors: [DiscoveredSensor] = []
             for await sensor in stream {
                 sensors.append(sensor)
+                if sensors.count >= 1 {
+                    break
+                }
             }
             return sensors
         }
@@ -73,9 +76,19 @@ import Testing
             ),
         )
 
-        collector.cancel()
+        let cscID = UUID()
+        await fake.emitDiscovery(
+            DiscoveredPeripheral(
+                id: cscID,
+                name: "Cadence",
+                manufacturerData: nil,
+                serviceUUIDs: [CSCS.serviceUUID],
+            ),
+        )
+
         let sensors = await collector.value
-        #expect(sensors.isEmpty)
+        #expect(sensors.count == 1)
+        #expect(sensors[0].id == cscID)
     }
 
     @Test func deduplicatesByPeripheralID() async {
@@ -83,12 +96,15 @@ import Testing
         let scanner = Scanner(central: fake)
         let stream = scanner.scan()
 
-        let collector = Task { () -> [DiscoveredSensor] in
-            var iterator = stream.makeAsyncIterator()
-            if let first = await iterator.next() {
-                return [first]
+        let collector = Task {
+            var sensors: [DiscoveredSensor] = []
+            for await sensor in stream {
+                sensors.append(sensor)
+                if sensors.count >= 2 {
+                    break
+                }
             }
-            return []
+            return sensors
         }
 
         await Self.waitForScanStart(fake)
@@ -103,10 +119,18 @@ import Testing
 
         await fake.emitDiscovery(event)
         await fake.emitDiscovery(event)
+        await fake.emitDiscovery(
+            DiscoveredPeripheral(
+                id: UUID(),
+                name: "Other",
+                manufacturerData: nil,
+                serviceUUIDs: [CSCS.serviceUUID],
+            ),
+        )
 
         let sensors = await collector.value
-        #expect(sensors.count == 1)
-        #expect(sensors[0].id == peripheralID)
+        #expect(sensors.count == 2)
+        #expect(sensors.filter { $0.id == peripheralID }.count == 1)
     }
 
     @Test func stopScanningWhenStreamCancelled() async {
@@ -147,14 +171,22 @@ import Testing
         #expect(!calls.contains(.startScanning(serviceUUIDs: [CSCS.serviceUUID])))
     }
 
+    @Test func scanStartsPromptlyWhenAlreadyPoweredOn() async {
+        let fake = FakeBluetoothCentral(initialState: .poweredOn)
+        let scanner = Scanner(central: fake)
+        let start = ContinuousClock.now
+        let stream = scanner.scan()
+        _ = stream
+
+        await Self.waitForScanStart(fake)
+        #expect(start.duration(to: .now) < .seconds(1))
+    }
+
     @Test func scanStartsAfterUnknownTransitionsToPoweredOn() async {
         let fake = FakeBluetoothCentral(initialState: .unknown)
         let scanner = Scanner(central: fake)
         let stream = scanner.scan()
 
-        let stateTask = Task {
-            _ = await fake.stateUpdates
-        }
         await fake.waitForStateUpdatesSubscriber()
         await fake.setState(.poweredOn)
 
@@ -182,7 +214,6 @@ import Testing
         )
 
         let sensors = await collector.value
-        stateTask.cancel()
         #expect(sensors.count == 1)
         #expect(sensors[0].id == peripheralID)
     }

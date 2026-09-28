@@ -80,7 +80,20 @@ enum CSCClientTestSupport {
         on fake: FakeBluetoothCentral,
         after baseline: Int,
     ) async {
-        await fake.waitForControlPointWriteCount(greaterThan: baseline)
+        while await controlPointWrites(on: fake) <= baseline {
+            await fake.waitForRecordedCall { call in
+                guard case let .writeValue(
+                    _,
+                    serviceUUID,
+                    characteristicUUID,
+                    _,
+                ) = call else {
+                    return false
+                }
+                return serviceUUID == CSCS.serviceUUID
+                    && characteristicUUID == CSCS.controlPointUUID
+            }
+        }
     }
 
     static func hasControlPointNotifyEnabled(

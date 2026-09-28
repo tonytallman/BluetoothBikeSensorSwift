@@ -274,11 +274,6 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         changed()
     }
 
-    package func setSupportedSensorLocationBytes(_ bytes: [UInt8]) {
-        supportedSensorLocationBytes = bytes
-        changed()
-    }
-
     package func emitDiscovery(_ event: DiscoveredPeripheral) async {
         await discoveryBroadcaster.yield(event)
         changed()
@@ -348,23 +343,6 @@ package actor FakeBluetoothCentral: BluetoothCentral {
 
     package func waitForStateUpdatesSubscriber() async {
         await waitUntil { self.stateUpdatesSubscriberCount > 0 }
-    }
-
-    package func waitForControlPointWriteCount(greaterThan baseline: Int) async {
-        await waitUntil {
-            self.recordedCalls.filter { call in
-                guard case let .writeValue(
-                    _,
-                    serviceUUID,
-                    characteristicUUID,
-                    _,
-                ) = call else {
-                    return false
-                }
-                return serviceUUID == CSCS.serviceUUID
-                    && characteristicUUID == CSCS.controlPointUUID
-            }.count > baseline
-        }
     }
 
     private func appendRecordedCall(_ call: RecordedCall) {
