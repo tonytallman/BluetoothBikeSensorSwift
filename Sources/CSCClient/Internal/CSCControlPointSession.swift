@@ -27,11 +27,10 @@ private final class ListenerTaskBox: @unchecked Sendable {
 }
 
 package actor CSCControlPointSession {
-    nonisolated(unsafe) package static var procedureTimeoutNanoseconds: UInt64 = 30_000_000_000
-
     private let central: any BluetoothCentral
     private let peripheralID: UUID
     private let controlPointAvailable: Bool
+    private let procedureTimeout: Duration
     private let listenerTaskBox = ListenerTaskBox()
     private var procedureInFlight = false
     private var epoch: UInt = 0
@@ -45,10 +44,12 @@ package actor CSCControlPointSession {
         central: any BluetoothCentral,
         peripheralID: UUID,
         controlPointAvailable: Bool,
+        timeout: Duration = .seconds(30),
     ) {
         self.central = central
         self.peripheralID = peripheralID
         self.controlPointAvailable = controlPointAvailable
+        procedureTimeout = timeout
     }
 
     deinit {
@@ -103,9 +104,8 @@ package actor CSCControlPointSession {
     }
 
     private func waitForIndicationAfterWrite(request: Data) async throws -> Data {
-        let timeoutNanoseconds = Self.procedureTimeoutNanoseconds
         let timeoutTask = Task {
-            try await Task.sleep(nanoseconds: timeoutNanoseconds)
+            try await Task.sleep(for: procedureTimeout)
             self.failIndicationWait(with: ControlPointError.timedOut)
         }
         defer { timeoutTask.cancel() }

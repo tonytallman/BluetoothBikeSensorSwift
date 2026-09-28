@@ -19,6 +19,7 @@ public final class ConnectedSensor: Sendable {
     private let central: any BluetoothCentral
     private let controlPointSession: CSCControlPointSession
     private let controlPointIndicationsEnabled: Bool
+    private let timeouts: Timeouts
     private let loopOwner: MeasurementLoopOwner
 
     private let wheelRevolutions: WheelRevolutions?
@@ -34,6 +35,7 @@ public final class ConnectedSensor: Sendable {
         controlPointSession: CSCControlPointSession,
         controlPointIndicationsEnabled: Bool,
         stateBox: MeasurementStateBox,
+        timeouts: Timeouts,
     ) {
         self.id = id
         self.name = name
@@ -43,6 +45,7 @@ public final class ConnectedSensor: Sendable {
         self.central = central
         self.controlPointSession = controlPointSession
         self.controlPointIndicationsEnabled = controlPointIndicationsEnabled
+        self.timeouts = timeouts
 
         switch revolutions {
         case let .wheel(wheel):
@@ -104,6 +107,7 @@ public final class ConnectedSensor: Sendable {
             name: name,
             manufacturer: manufacturer,
             central: central,
+            timeouts: timeouts,
         )
     }
 

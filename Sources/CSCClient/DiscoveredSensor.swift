@@ -6,8 +6,6 @@ import Foundation
 /// Obtain instances only from ``Scanner/scan()``. After ``connect()``, rely on
 /// ``ConnectedSensor/revolutions`` and ``ConnectedSensor/location`` for supported features.
 public struct DiscoveredSensor: Sendable {
-    nonisolated(unsafe) package static var connectTimeoutNanoseconds: UInt64 = 10_000_000_000
-
     /// Stable identifier for the peripheral.
     public let id: UUID
     /// Advertised or peripheral name, when available.
@@ -16,17 +14,20 @@ public struct DiscoveredSensor: Sendable {
     public let manufacturer: String?
 
     private let central: any BluetoothCentral
+    private let timeouts: Timeouts
 
     package init(
         id: UUID,
         name: String?,
         manufacturer: String?,
         central: any BluetoothCentral,
+        timeouts: Timeouts = Timeouts(),
     ) {
         self.id = id
         self.name = name
         self.manufacturer = manufacturer
         self.central = central
+        self.timeouts = timeouts
     }
 
     /// Connects to the sensor, discovers CSC characteristics, and enables notifications.
@@ -41,7 +42,7 @@ public struct DiscoveredSensor: Sendable {
                     try await central.connect(id: id)
                 }
                 group.addTask {
-                    try await Task.sleep(nanoseconds: Self.connectTimeoutNanoseconds)
+                    try await Task.sleep(for: timeouts.connect)
                     throw ConnectError.timeout
                 }
 
@@ -89,6 +90,7 @@ public struct DiscoveredSensor: Sendable {
             manufacturer: manufacturer,
             connectionResult: connectionResult,
             central: central,
+            timeouts: timeouts,
         )
     }
 
@@ -98,12 +100,14 @@ public struct DiscoveredSensor: Sendable {
         manufacturer: String?,
         connectionResult: CSCConnectionResult,
         central: any BluetoothCentral,
+        timeouts: Timeouts,
     ) async -> ConnectedSensor {
         let stateBox = MeasurementStateBox()
         let controlPointSession = CSCControlPointSession(
             central: central,
             peripheralID: id,
             controlPointAvailable: connectionResult.controlPointAvailable,
+            timeout: timeouts.controlPointProcedure,
         )
 
         if connectionResult.controlPointAvailable {
@@ -142,6 +146,7 @@ public struct DiscoveredSensor: Sendable {
             controlPointSession: controlPointSession,
             controlPointIndicationsEnabled: connectionResult.controlPointAvailable,
             stateBox: stateBox,
+            timeouts: timeouts,
         )
     }
 

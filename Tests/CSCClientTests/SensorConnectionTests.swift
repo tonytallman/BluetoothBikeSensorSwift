@@ -8,12 +8,14 @@ import Testing
         fake: FakeBluetoothCentral,
         id: UUID = UUID(),
         name: String = "Test Sensor",
+        timeouts: Timeouts = Timeouts(),
     ) -> DiscoveredSensor {
         DiscoveredSensor(
             id: id,
             name: name,
             manufacturer: nil,
             central: fake,
+            timeouts: timeouts,
         )
     }
 
@@ -88,10 +90,7 @@ import Testing
 
     @Test func connectTimeout() async {
         let fake = FakeBluetoothCentral()
-        let sensor = makeSensor(fake: fake)
-        let originalTimeout = DiscoveredSensor.connectTimeoutNanoseconds
-        DiscoveredSensor.connectTimeoutNanoseconds = 100_000_000
-        defer { DiscoveredSensor.connectTimeoutNanoseconds = originalTimeout }
+        let sensor = makeSensor(fake: fake, timeouts: Timeouts(connect: .milliseconds(100)))
 
         await fake.hangNextConnect()
 
@@ -446,15 +445,14 @@ import Testing
     }
 
     @Test func heldControlPointIndicationTimesOutOnUpdate() async throws {
-        let originalTimeout = CSCControlPointSession.procedureTimeoutNanoseconds
-        CSCControlPointSession.procedureTimeoutNanoseconds = 100_000_000
-        defer { CSCControlPointSession.procedureTimeoutNanoseconds = originalTimeout }
-
         let fake = FakeBluetoothCentral()
         await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
 
-        let connected = try await makeSensor(fake: fake).connect()
+        let connected = try await makeSensor(
+            fake: fake,
+            timeouts: Timeouts(controlPointProcedure: .milliseconds(100)),
+        ).connect()
         guard case let .multiple(locations) = connected.location else {
             Issue.record("Expected multiple locations")
             return
@@ -477,17 +475,16 @@ import Testing
     }
 
     @Test func heldControlPointIndicationTimesOutOnConnect() async {
-        let originalTimeout = CSCControlPointSession.procedureTimeoutNanoseconds
-        CSCControlPointSession.procedureTimeoutNanoseconds = 100_000_000
-        defer { CSCControlPointSession.procedureTimeoutNanoseconds = originalTimeout }
-
         let fake = FakeBluetoothCentral()
         await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
         await fake.holdNextControlPointIndication()
 
         do {
-            _ = try await makeSensor(fake: fake).connect()
+            _ = try await makeSensor(
+                fake: fake,
+                timeouts: Timeouts(controlPointProcedure: .milliseconds(100)),
+            ).connect()
             Issue.record("Expected connect to throw")
         } catch let error as ConnectError {
             #expect(error == .serviceDiscoveryFailed(reason: "timedOut"))
@@ -604,17 +601,16 @@ import Testing
     }
 
     @Test func timedOutIndicationIsIgnoredByNextProcedure() async throws {
-        let originalTimeout = CSCControlPointSession.procedureTimeoutNanoseconds
-        CSCControlPointSession.procedureTimeoutNanoseconds = 100_000_000
-        defer { CSCControlPointSession.procedureTimeoutNanoseconds = originalTimeout }
-
         let fake = FakeBluetoothCentral()
         await fake.setFeatureData(CSCFeature([.wheelRevolutionData, .crankRevolutionData, .multipleSensorLocations]).encode())
         await fake.setDiscoveredCharacteristicUUIDs(ConnectedSensorTestHelpers.allCSCCharacteristicUUIDs)
         await fake.setSensorLocationData(CSCSensorLocation(assignedNumber: 0x05).encode())
         await fake.setSupportedSensorLocationBytes([0x05, 0x06, 0x0A])
 
-        let connected = try await makeSensor(fake: fake).connect()
+        let connected = try await makeSensor(
+            fake: fake,
+            timeouts: Timeouts(controlPointProcedure: .milliseconds(100)),
+        ).connect()
         guard case let .multiple(locations) = connected.location else {
             Issue.record("Expected multiple locations")
             return
