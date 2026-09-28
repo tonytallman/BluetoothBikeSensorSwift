@@ -74,7 +74,7 @@ import Testing
         let sensorID = UUID()
         let sensor = makeSensor(fake: fake, id: sensorID)
 
-        await fake.failNextConnect(with: .connectionFailed(sensorID, reason: "Refused"))
+        await fake.failNext(.connect, with: .connectionFailed(sensorID, reason: "Refused"))
 
         do {
             _ = try await sensor.connect()
@@ -110,7 +110,8 @@ import Testing
         let sensorID = UUID()
         let sensor = makeSensor(fake: fake, id: sensorID)
 
-        await fake.failNextDiscoverServices(
+        await fake.failNext(
+            .discoverServices,
             with: .serviceNotFound(sensorID, serviceUUID: CSCS.serviceUUID),
         )
 
@@ -165,7 +166,7 @@ import Testing
         let sensor = makeSensor(fake: fake, id: sensorID)
         let connected = try await sensor.connect()
 
-        await fake.failNextDisconnect(with: .peripheralNotFound(sensorID))
+        await fake.failNext(.disconnect, with: .peripheralNotFound(sensorID))
 
         do {
             _ = try await connected.disconnect()
@@ -205,7 +206,7 @@ import Testing
         let sensorID = UUID()
         let sensor = makeSensor(fake: fake, id: sensorID)
 
-        await fake.failNextConnect(with: .peripheralNotFound(sensorID))
+        await fake.failNext(.connect, with: .peripheralNotFound(sensorID))
 
         do {
             _ = try await sensor.connect()
@@ -223,7 +224,7 @@ import Testing
         let sensor = makeSensor(fake: fake, id: sensorID)
         let connected = try await sensor.connect()
 
-        await fake.failNextDisconnect(with: .connectionFailed(sensorID, reason: "Link dropped"))
+        await fake.failNext(.disconnect, with: .connectionFailed(sensorID, reason: "Link dropped"))
 
         do {
             _ = try await connected.disconnect()
@@ -240,7 +241,8 @@ import Testing
         let sensorID = UUID()
         let sensor = makeSensor(fake: fake, id: sensorID)
 
-        await fake.failNextDiscoverCharacteristics(
+        await fake.failNext(
+            .discoverCharacteristics,
             with: .characteristicNotFound(
                 sensorID,
                 serviceUUID: CSCS.serviceUUID,
@@ -268,7 +270,8 @@ import Testing
         let sensorID = UUID()
         let sensor = makeSensor(fake: fake, id: sensorID)
 
-        await fake.failNextReadValue(
+        await fake.failNext(
+            .readValue,
             with: .characteristicNotFound(
                 sensorID,
                 serviceUUID: CSCS.serviceUUID,
@@ -531,7 +534,7 @@ import Testing
             return
         }
 
-        await fake.failNextWriteWithATTCode(CSCATTApplicationError.cccdImproperlyConfigured.rawValue)
+        await fake.failNext(.writeValue, with: .attApplicationError(code: CSCATTApplicationError.cccdImproperlyConfigured.rawValue))
 
         let start = ContinuousClock.now
         do {
@@ -1029,7 +1032,7 @@ import Testing
             return
         }
 
-        await fake.failNextWriteWithATTCode(CSCATTApplicationError.procedureAlreadyInProgress.rawValue)
+        await fake.failNext(.writeValue, with: .attApplicationError(code: CSCATTApplicationError.procedureAlreadyInProgress.rawValue))
 
         do {
             try await locations.update(locations.supported[1])

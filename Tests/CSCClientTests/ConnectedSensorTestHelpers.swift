@@ -51,40 +51,12 @@ enum ConnectedSensorTestHelpers {
     static func waitForControlPointWrite(
         on fake: FakeBluetoothCentral,
         after baseline: Int,
-        timeoutNanoseconds: UInt64 = 1_000_000_000,
-    ) async throws {
-        let pollInterval: UInt64 = 5_000_000
-        var elapsed: UInt64 = 0
-
-        while elapsed < timeoutNanoseconds {
-            let calls = await fake.recordedCalls
-            let writeCount = calls.filter { call in
-                guard case let .writeValue(
-                    _,
-                    serviceUUID,
-                    characteristicUUID,
-                    _,
-                ) = call else {
-                    return false
-                }
-                return serviceUUID == CSCS.serviceUUID
-                    && characteristicUUID == CSCS.controlPointUUID
-            }.count
-
-            if writeCount > baseline {
-                return
-            }
-
-            try? await Task.sleep(nanoseconds: pollInterval)
-            elapsed += pollInterval
-        }
-
-        throw ControlPointWriteTimeout()
+    ) async {
+        await fake.waitForControlPointWriteCount(greaterThan: baseline)
     }
 
-    static func controlPointWriteCount(on fake: FakeBluetoothCentral) async -> Int {
-        let calls = await fake.recordedCalls
-        return calls.filter { call in
+    private static func controlPointWriteCount(in calls: [FakeBluetoothCentral.RecordedCall]) -> Int {
+        calls.filter { call in
             guard case let .writeValue(
                 _,
                 serviceUUID,
@@ -97,6 +69,9 @@ enum ConnectedSensorTestHelpers {
                 && characteristicUUID == CSCS.controlPointUUID
         }.count
     }
-}
 
-private struct ControlPointWriteTimeout: Error {}
+    static func controlPointWriteCount(on fake: FakeBluetoothCentral) async -> Int {
+        let calls = await fake.recordedCalls
+        return controlPointWriteCount(in: calls)
+    }
+}

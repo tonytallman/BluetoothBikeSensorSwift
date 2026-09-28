@@ -747,7 +747,8 @@ struct CSCMeasurementStreamTests {
         let sensorID = UUID()
         let sensor = makeSensor(fake: fake, id: sensorID)
 
-        await fake.failNextSetNotify(
+        await fake.failNext(
+            .setNotifyValue,
             with: .characteristicNotFound(
                 sensorID,
                 serviceUUID: CSCS.serviceUUID,

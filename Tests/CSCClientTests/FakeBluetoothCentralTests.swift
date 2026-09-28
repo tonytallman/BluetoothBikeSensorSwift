@@ -82,7 +82,7 @@ import Testing
         let peripheralID = UUID()
         let expectedError = BluetoothCentralError.connectionFailed(peripheralID, reason: "Test failure")
 
-        await fake.failNextConnect(with: expectedError)
+        await fake.failNext(.connect, with: expectedError)
 
         do {
             try await fake.connect(id: peripheralID)

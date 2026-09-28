@@ -5,15 +5,9 @@ import Testing
 
 @Suite(.timeLimit(.minutes(1))) struct ScannerScanTests {
     private static func waitForScanStart(_ fake: FakeBluetoothCentral) async {
-        for _ in 0..<50 {
-            let calls = await fake.recordedCalls
-            if calls.contains(where: {
-                if case .startScanning = $0 { return true }
-                return false
-            }) {
-                return
-            }
-            try? await Task.sleep(nanoseconds: 10_000_000)
+        await fake.waitForRecordedCall { call in
+            if case .startScanning = call { return true }
+            return false
         }
     }
 

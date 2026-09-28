@@ -3,6 +3,16 @@ import Foundation
 
 /// Controllable `BluetoothCentral` for unit tests. Not intended for production use.
 package actor FakeBluetoothCentral: BluetoothCentral {
+    package enum Operation: Hashable, Sendable {
+        case connect
+        case disconnect
+        case discoverServices
+        case discoverCharacteristics
+        case readValue
+        case setNotifyValue
+        case writeValue
+    }
+
     package enum RecordedCall: Sendable, Equatable {
         case startScanning(serviceUUIDs: [UUID]?)
         case stopScanning
@@ -26,14 +36,7 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     }
 
     private var state: BluetoothState
-    private var nextConnectError: BluetoothCentralError?
-    private var nextDiscoverServicesError: BluetoothCentralError?
-    private var nextDiscoverCharacteristicsError: BluetoothCentralError?
-    private var nextDisconnectError: BluetoothCentralError?
-    private var nextReadValueError: BluetoothCentralError?
-    private var nextSetNotifyError: BluetoothCentralError?
-    private var nextWriteValueError: BluetoothCentralError?
-    private var nextWriteATTCode: UInt8?
+    private var nextErrors: [Operation: BluetoothCentralError] = [:]
     private var nextControlPointResponseValue: UInt8?
     private var shouldHangNextConnect = false
     private var shouldHoldNextControlPointIndication = false
@@ -47,6 +50,9 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     private var sensorLocationData = CSCSensorLocation(assignedNumber: 0x05).encode()
     private var supportedSensorLocationBytes: [UInt8] = [0x05, 0x06, 0x0A]
 
+    private var conditionWaiters: [(isMet: () -> Bool, continuation: CheckedContinuation<Void, Never>)] = []
+    private var stateUpdatesSubscriberCount = 0
+
     private let stateBroadcaster = StreamBroadcaster<BluetoothState>()
     private let discoveryBroadcaster = StreamBroadcaster<DiscoveredPeripheral>()
     private let eventsBroadcaster = StreamBroadcaster<CentralEvent>()
@@ -59,7 +65,9 @@ package actor FakeBluetoothCentral: BluetoothCentral {
 
     package var stateUpdates: AsyncStream<BluetoothState> {
         get async {
-            await stateBroadcaster.makeStream()
+            stateUpdatesSubscriberCount += 1
+            changed()
+            return await stateBroadcaster.makeStream()
         }
     }
 
@@ -68,11 +76,11 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     }
 
     package func startScanning(serviceUUIDs: [UUID]?) async {
-        recordedCalls.append(.startScanning(serviceUUIDs: serviceUUIDs))
+        appendRecordedCall(.startScanning(serviceUUIDs: serviceUUIDs))
     }
 
     package func stopScanning() async {
-        recordedCalls.append(.stopScanning)
+        appendRecordedCall(.stopScanning)
     }
 
     package var discoveries: AsyncStream<DiscoveredPeripheral> {
@@ -82,31 +90,31 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     }
 
     package func connect(id: UUID) async throws {
-        recordedCalls.append(.connect(id: id))
+        appendRecordedCall(.connect(id: id))
 
         if shouldHangNextConnect {
             shouldHangNextConnect = false
-            while !Task.isCancelled {
-                try await Task.sleep(nanoseconds: 10_000_000)
+            do {
+                try await Task.sleep(for: .seconds(3600))
+            } catch {
+                throw CancellationError()
             }
-            throw CancellationError()
         }
 
-        if let nextConnectError {
-            self.nextConnectError = nil
-            throw nextConnectError
+        if let error = nextErrors.removeValue(forKey: .connect) {
+            throw error
         }
     }
 
     package func disconnect(id: UUID) async throws {
-        recordedCalls.append(.disconnect(id: id))
+        appendRecordedCall(.disconnect(id: id))
 
-        if let nextDisconnectError {
-            self.nextDisconnectError = nil
-            throw nextDisconnectError
+        if let error = nextErrors.removeValue(forKey: .disconnect) {
+            throw error
         }
 
         await eventsBroadcaster.yield(.disconnected(peripheralID: id))
+        changed()
     }
 
     package var events: AsyncStream<CentralEvent> {
@@ -116,11 +124,10 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     }
 
     package func discoverServices(id: UUID, serviceUUIDs: [UUID]?) async throws {
-        recordedCalls.append(.discoverServices(id: id, serviceUUIDs: serviceUUIDs))
+        appendRecordedCall(.discoverServices(id: id, serviceUUIDs: serviceUUIDs))
 
-        if let nextDiscoverServicesError {
-            self.nextDiscoverServicesError = nil
-            throw nextDiscoverServicesError
+        if let error = nextErrors.removeValue(forKey: .discoverServices) {
+            throw error
         }
     }
 
@@ -129,7 +136,7 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         serviceUUID: UUID,
         characteristicUUIDs: [UUID]?,
     ) async throws -> [UUID] {
-        recordedCalls.append(
+        appendRecordedCall(
             .discoverCharacteristics(
                 id: id,
                 serviceUUID: serviceUUID,
@@ -137,9 +144,8 @@ package actor FakeBluetoothCentral: BluetoothCentral {
             ),
         )
 
-        if let nextDiscoverCharacteristicsError {
-            self.nextDiscoverCharacteristicsError = nil
-            throw nextDiscoverCharacteristicsError
+        if let error = nextErrors.removeValue(forKey: .discoverCharacteristics) {
+            throw error
         }
 
         return discoveredCharacteristicUUIDs
@@ -151,7 +157,7 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         characteristicUUID: UUID,
         enabled: Bool,
     ) async throws {
-        recordedCalls.append(
+        appendRecordedCall(
             .setNotifyValue(
                 id: id,
                 serviceUUID: serviceUUID,
@@ -160,9 +166,8 @@ package actor FakeBluetoothCentral: BluetoothCentral {
             ),
         )
 
-        if let nextSetNotifyError {
-            self.nextSetNotifyError = nil
-            throw nextSetNotifyError
+        if let error = nextErrors.removeValue(forKey: .setNotifyValue) {
+            throw error
         }
     }
 
@@ -171,7 +176,7 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         serviceUUID: UUID,
         characteristicUUID: UUID,
     ) async throws -> Data {
-        recordedCalls.append(
+        appendRecordedCall(
             .readValue(
                 id: id,
                 serviceUUID: serviceUUID,
@@ -179,9 +184,8 @@ package actor FakeBluetoothCentral: BluetoothCentral {
             ),
         )
 
-        if let nextReadValueError {
-            self.nextReadValueError = nil
-            throw nextReadValueError
+        if let error = nextErrors.removeValue(forKey: .readValue) {
+            throw error
         }
 
         if characteristicUUID == CSCS.featureUUID {
@@ -201,7 +205,7 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         characteristicUUID: UUID,
         value: Data,
     ) async throws {
-        recordedCalls.append(
+        appendRecordedCall(
             .writeValue(
                 id: id,
                 serviceUUID: serviceUUID,
@@ -210,15 +214,8 @@ package actor FakeBluetoothCentral: BluetoothCentral {
             ),
         )
 
-        if let nextWriteATTCode {
-            let code = nextWriteATTCode
-            self.nextWriteATTCode = nil
-            throw BluetoothCentralError.attApplicationError(code: code)
-        }
-
-        if let nextWriteValueError {
-            self.nextWriteValueError = nil
-            throw nextWriteValueError
+        if let error = nextErrors.removeValue(forKey: .writeValue) {
+            throw error
         }
 
         guard characteristicUUID == CSCS.controlPointUUID else {
@@ -248,79 +245,63 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         }
 
         await eventsBroadcaster.yield(event)
+        changed()
     }
 
     package func setState(_ newState: BluetoothState) async {
         state = newState
         await stateBroadcaster.yield(newState)
+        changed()
     }
 
     package func setFeatureData(_ data: Data) {
         featureData = data
+        changed()
     }
 
     package func setDiscoveredCharacteristicUUIDs(_ uuids: [UUID]) {
         discoveredCharacteristicUUIDs = uuids
+        changed()
     }
 
     package func setSensorLocationData(_ data: Data) {
         sensorLocationData = data
+        changed()
     }
 
     package func setSupportedSensorLocationBytes(_ bytes: [UInt8]) {
         supportedSensorLocationBytes = bytes
+        changed()
     }
 
     package func emitDiscovery(_ event: DiscoveredPeripheral) async {
         await discoveryBroadcaster.yield(event)
+        changed()
     }
 
     package func emit(_ event: CentralEvent) async {
         await eventsBroadcaster.yield(event)
+        changed()
     }
 
-    package func failNextConnect(with error: BluetoothCentralError) {
-        nextConnectError = error
-    }
-
-    package func failNextDiscoverServices(with error: BluetoothCentralError) {
-        nextDiscoverServicesError = error
-    }
-
-    package func failNextDiscoverCharacteristics(with error: BluetoothCentralError) {
-        nextDiscoverCharacteristicsError = error
-    }
-
-    package func failNextDisconnect(with error: BluetoothCentralError) {
-        nextDisconnectError = error
-    }
-
-    package func failNextReadValue(with error: BluetoothCentralError) {
-        nextReadValueError = error
-    }
-
-    package func failNextSetNotify(with error: BluetoothCentralError) {
-        nextSetNotifyError = error
-    }
-
-    package func failNextWriteValue(with error: BluetoothCentralError) {
-        nextWriteValueError = error
-    }
-
-    package func failNextWriteWithATTCode(_ code: UInt8) {
-        nextWriteATTCode = code
+    package func failNext(_ operation: Operation, with error: BluetoothCentralError) {
+        nextErrors[operation] = error
+        changed()
     }
 
     package func setNextControlPointResponseValue(_ value: UInt8) {
         nextControlPointResponseValue = value
+        changed()
     }
 
     package func hangNextConnect() {
         shouldHangNextConnect = true
+        changed()
     }
 
     package func holdNextControlPointIndication() {
         shouldHoldNextControlPointIndication = true
+        changed()
     }
 
     package func releaseHeldControlPointIndication() async {
@@ -329,6 +310,65 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         }
         heldControlPointIndication = nil
         await eventsBroadcaster.yield(event)
+        changed()
+    }
+
+    package func waitUntil(_ isMet: @escaping () -> Bool) async {
+        if isMet() {
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            conditionWaiters.append((isMet, continuation))
+            resumeConditionWaiters()
+        }
+    }
+
+    package func waitForRecordedCall(
+        where predicate: @escaping @Sendable (RecordedCall) -> Bool,
+    ) async {
+        await waitUntil { self.recordedCalls.contains(where: predicate) }
+    }
+
+    package func waitForStateUpdatesSubscriber() async {
+        await waitUntil { self.stateUpdatesSubscriberCount > 0 }
+    }
+
+    package func waitForControlPointWriteCount(greaterThan baseline: Int) async {
+        await waitUntil {
+            self.recordedCalls.filter { call in
+                guard case let .writeValue(
+                    _,
+                    serviceUUID,
+                    characteristicUUID,
+                    _,
+                ) = call else {
+                    return false
+                }
+                return serviceUUID == CSCS.serviceUUID
+                    && characteristicUUID == CSCS.controlPointUUID
+            }.count > baseline
+        }
+    }
+
+    private func appendRecordedCall(_ call: RecordedCall) {
+        recordedCalls.append(call)
+        changed()
+    }
+
+    private func changed() {
+        resumeConditionWaiters()
+    }
+
+    private func resumeConditionWaiters() {
+        var remaining: [(isMet: () -> Bool, continuation: CheckedContinuation<Void, Never>)] = []
+        for waiter in conditionWaiters {
+            if waiter.isMet() {
+                waiter.continuation.resume()
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        conditionWaiters = remaining
     }
 
     private static func controlPointIndication(
@@ -336,34 +376,16 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         responseValue: UInt8,
         supportedLocationBytes: [UInt8],
     ) -> Data {
-        guard let requestOpcode = request.first else {
-            return CSCControlPointResponse(
-                requestOpcode: 0x00,
-                value: responseValue,
-                parameter: Data(),
-            ).encode()
-        }
-
-        switch requestOpcode {
-        case CSCControlPointOpCode.requestSupportedSensorLocations.rawValue:
-            if responseValue == CSCControlPointResponseValue.success.rawValue {
-                return CSCControlPointResponse(
-                    requestOpcode: requestOpcode,
-                    value: responseValue,
-                    parameter: Data(supportedLocationBytes),
-                ).encode()
-            }
-            return CSCControlPointResponse(
-                requestOpcode: requestOpcode,
-                value: responseValue,
-                parameter: Data(),
-            ).encode()
-        default:
-            return CSCControlPointResponse(
-                requestOpcode: requestOpcode,
-                value: responseValue,
-                parameter: Data(),
-            ).encode()
-        }
+        let requestOpcode = request.first ?? 0x00
+        let parameter: Data =
+            requestOpcode == CSCControlPointOpCode.requestSupportedSensorLocations.rawValue
+            && responseValue == CSCControlPointResponseValue.success.rawValue
+            ? Data(supportedLocationBytes)
+            : Data()
+        return CSCControlPointResponse(
+            requestOpcode: requestOpcode,
+            value: responseValue,
+            parameter: parameter,
+        ).encode()
     }
 }
