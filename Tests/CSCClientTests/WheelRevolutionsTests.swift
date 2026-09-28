@@ -150,7 +150,7 @@ import Testing
         deltaSeconds: Double,
         expectedSpeed: Double,
     ) {
-        let circumference = caseName == "wheelCapExactlyFiftyMetersPerSecondAccepted" ? 2.105 : 2.105
+        let circumference = 2.105
         let sample = WheelRevolutions.sample(
             revolutions: deltaRevolutions,
             seconds: deltaSeconds,
@@ -180,9 +180,9 @@ import Testing
             #expect(sample?.deltaTime.converted(to: .seconds).value == 1.0)
             #expect(sample?.deltaDistance.converted(to: .meters).value == 2.105)
         } else {
-            await emitWheel(fake: fake, id: sensorID, revolutions: 100, eventTime: 1_024)
-            await emitWheel(fake: fake, id: sensorID, revolutions: 10_126, eventTime: 2_048)
-            await emitWheel(fake: fake, id: sensorID, revolutions: 10_127, eventTime: 3_072)
+            await emitWheel(fake: fake, id: sensorID, revolutions: 0, eventTime: 0)
+            await emitWheel(fake: fake, id: sensorID, revolutions: 25, eventTime: 511)
+            await emitWheel(fake: fake, id: sensorID, revolutions: 26, eventTime: 511 + 1_024)
             let sample = await iterator.next()
             #expect(sample?.deltaDistance.converted(to: .meters).value == 2.105)
             #expect(sample?.deltaTime.converted(to: .seconds).value == 1.0)

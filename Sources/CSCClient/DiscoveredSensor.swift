@@ -2,7 +2,6 @@ internal import CSCWire
 import Foundation
 
 /// Errors thrown by ``DiscoveredSensor/connect()``.
-/// Errors thrown by ``DiscoveredSensor/connect()``.
 public enum ConnectError: Error, Sendable, Equatable {
     /// Bluetooth is not powered on.
     case notPoweredOn

@@ -41,7 +41,11 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     private var shouldHangNextConnect = false
     private var shouldHoldNextControlPointIndication = false
     private var shouldHangNextWrite = false
+    private var hangWriteAfterIndicationCount = 0
+    private var shouldHangNextSetNotify = false
     private var hungWriteWaiters: [CheckedContinuation<Void, Never>] = []
+    private var hungSetNotifyWaiters: [CheckedContinuation<Void, Never>] = []
+    private var connectedPeripheralIDs: Set<UUID> = []
     private var heldControlPointIndication: CentralEvent?
     private var featureData: Data
     private var discoveredCharacteristicUUIDs: [UUID]
@@ -87,6 +91,13 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         get async { state }
     }
 
+    package func stateSubscriptionSnapshot() async -> (AsyncStream<BluetoothState>, BluetoothState) {
+        stateUpdatesSubscriberCount += 1
+        changed()
+        let stream = await stateBroadcaster.makeStream()
+        return (stream, state)
+    }
+
     package func startScanning(serviceUUIDs: [UUID]?) async {
         appendRecordedCall(.startScanning(serviceUUIDs: serviceUUIDs))
     }
@@ -116,6 +127,8 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         if let error = nextErrors.removeValue(forKey: .connect) {
             throw error
         }
+
+        connectedPeripheralIDs.insert(id)
     }
 
     package func disconnect(id: UUID) async throws {
@@ -125,6 +138,7 @@ package actor FakeBluetoothCentral: BluetoothCentral {
             throw error
         }
 
+        connectedPeripheralIDs.remove(id)
         await eventsBroadcaster.yield(.disconnected(peripheralID: id))
         changed()
     }
@@ -169,6 +183,10 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         characteristicUUID: UUID,
         enabled: Bool,
     ) async throws {
+        guard connectedPeripheralIDs.contains(id) else {
+            throw BluetoothCentralError.disconnected(id, reason: nil)
+        }
+
         appendRecordedCall(
             .setNotifyValue(
                 id: id,
@@ -181,6 +199,13 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         if let error = nextErrors.removeValue(forKey: .setNotifyValue) {
             throw error
         }
+
+        if shouldHangNextSetNotify {
+            shouldHangNextSetNotify = false
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                hungSetNotifyWaiters.append(continuation)
+            }
+        }
     }
 
     package func readValue(
@@ -188,6 +213,10 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         serviceUUID: UUID,
         characteristicUUID: UUID,
     ) async throws -> Data {
+        guard connectedPeripheralIDs.contains(id) else {
+            throw BluetoothCentralError.disconnected(id, reason: nil)
+        }
+
         appendRecordedCall(
             .readValue(
                 id: id,
@@ -217,6 +246,10 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         characteristicUUID: UUID,
         value: Data,
     ) async throws {
+        guard connectedPeripheralIDs.contains(id) else {
+            throw BluetoothCentralError.disconnected(id, reason: nil)
+        }
+
         appendRecordedCall(
             .writeValue(
                 id: id,
@@ -266,6 +299,13 @@ package actor FakeBluetoothCentral: BluetoothCentral {
 
         await eventsBroadcaster.yield(event)
         changed()
+
+        if hangWriteAfterIndicationCount > 0 {
+            hangWriteAfterIndicationCount -= 1
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                hungWriteWaiters.append(continuation)
+            }
+        }
     }
 
     package func setState(_ newState: BluetoothState) async {
@@ -280,6 +320,9 @@ package actor FakeBluetoothCentral: BluetoothCentral {
     }
 
     package func emit(_ event: CentralEvent) async {
+        if case let .disconnected(peripheralID) = event {
+            connectedPeripheralIDs.remove(peripheralID)
+        }
         await eventsBroadcaster.yield(event)
         changed()
     }
@@ -304,9 +347,27 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         changed()
     }
 
+    package func hangWriteAfterIndicating(count: Int = 1) {
+        hangWriteAfterIndicationCount += count
+        changed()
+    }
+
+    package func hangNextSetNotify() {
+        shouldHangNextSetNotify = true
+        changed()
+    }
+
     package func releaseHungWrite() async {
-        let waiters = hungWriteWaiters
-        hungWriteWaiters = []
+        guard !hungWriteWaiters.isEmpty else {
+            return
+        }
+        hungWriteWaiters.removeFirst().resume()
+        changed()
+    }
+
+    package func releaseHungSetNotify() async {
+        let waiters = hungSetNotifyWaiters
+        hungSetNotifyWaiters = []
         waiters.forEach { $0.resume() }
         changed()
     }

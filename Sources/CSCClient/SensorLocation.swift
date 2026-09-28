@@ -39,6 +39,7 @@ public struct SensorLocation: Sendable, Hashable {
         case chainRing
         case reserved(UInt8)
 
+        /// Human-readable name for this location kind.
         public var displayName: String {
             switch self {
             case .other:
@@ -104,10 +105,12 @@ public struct SensorLocation: Sendable, Hashable {
         }
     }
 
+    /// Standard GATT location identity for this peripheral-reported token.
     public var kind: Kind {
         Kind(assignedNumber: assignedNumber)
     }
 
+    /// Human-readable name for the assigned GATT value.
     public var displayName: String {
         kind.displayName
     }

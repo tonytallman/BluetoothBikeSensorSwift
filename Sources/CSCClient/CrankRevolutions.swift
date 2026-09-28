@@ -1,9 +1,13 @@
 internal import CSCWire
 import Foundation
 
+/// Instantaneous cadence from a CSCS sensor, as ``Measurement`` in ``UnitFrequency``.
+///
+/// Use ``UnitFrequency/revolutionsPerMinute`` for RPM values.
 public typealias Cadence = Measurement<UnitFrequency>
 
 extension UnitFrequency {
+    /// Revolutions per minute for CSC cadence values.
     public static let revolutionsPerMinute = UnitFrequency(
         symbol: "rpm",
         converter: UnitConverterLinear(coefficient: 1.0 / 60.0),
@@ -11,8 +15,14 @@ extension UnitFrequency {
 }
 
 /// A crank rotation delta between two CSC measurement notifications.
+///
+/// `deltaTime` comes from CSC last-crank-event timestamps (1/1024 s resolution),
+/// not BLE arrival time.
 public struct CrankSample: Sendable, Equatable {
+    /// Crank revolutions during this interval.
     public let deltaRevolutions: Int
+
+    /// Elapsed time between CSC crank event timestamps for this interval.
     public let deltaTime: Measurement<UnitDuration>
 }
 

@@ -1,6 +1,7 @@
 internal import CSCWire
 import Foundation
 
+/// Instantaneous speed from a CSCS sensor, as ``Measurement`` in ``UnitSpeed``.
 public typealias Speed = Measurement<UnitSpeed>
 
 /// A wheel rotation delta between two CSC measurement notifications.
@@ -80,6 +81,7 @@ public final class WheelRevolutions: Sendable {
         await wheelSampleBroadcaster.yield(sample)
     }
 
+    /// Throws ``ControlPointError/controlPointUnavailable`` when SC Control Point was not discovered.
     public func setCumulativeRevolutions(_ value: UInt32) async throws {
         guard let controlPoint else {
             throw ControlPointError.controlPointUnavailable

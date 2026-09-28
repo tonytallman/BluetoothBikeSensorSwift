@@ -297,6 +297,7 @@ import Testing
             #expect(CSCClientTestSupport.hasMeasurementNotifyEnabled(in: calls, sensorID: sensorID))
         case .wheelConnectSucceedsWithoutControlPoint:
             #expect(connected.revolutions.wheel != nil)
+            #expect(connected.revolutions.crank == nil)
             guard case .unavailable = connected.location else {
                 Issue.record("Expected unavailable location")
                 return

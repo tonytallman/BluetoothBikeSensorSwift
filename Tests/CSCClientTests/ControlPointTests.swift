@@ -171,13 +171,38 @@ import Testing
             #expect(error == .timedOut)
         }
 
-        do {
+        await fake.hangNextWrite()
+        let blockedUpdate = Task {
             try await locations.update(locations.supported[2])
-            Issue.record("Expected procedureInProgress while first write is hung")
+        }
+        for _ in 0..<1_000 {
+            let writeCount = await fake.recordedCalls.filter {
+                if case .writeValue = $0 { return true }
+                return false
+            }.count
+            if writeCount >= 2 {
+                break
+            }
+            await Task.yield()
+        }
+
+        do {
+            try await locations.update(locations.supported[0])
+            Issue.record("Expected procedureInProgress while second procedure is active")
         } catch let error as ControlPointError {
             #expect(error == .procedureInProgress)
         }
 
+        await fake.releaseHungWrite()
+
+        do {
+            try await locations.update(locations.supported[0])
+            Issue.record("Expected procedureInProgress after stale write completion")
+        } catch let error as ControlPointError {
+            #expect(error == .procedureInProgress)
+        }
+
+        blockedUpdate.cancel()
         await fake.releaseHungWrite()
         await locations.controlPoint.waitUntilIdle()
         _ = try await connected.disconnect()

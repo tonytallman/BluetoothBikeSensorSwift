@@ -75,6 +75,19 @@ import Testing
         #expect(await crankTask.value)
     }
 
+    @Test func disconnectAfterLinkLossDoesNotHangOnSetNotify() async throws {
+        let fake = FakeBluetoothCentral()
+        let sensorID = UUID()
+        let connected = try await CSCClientTestSupport.sensor(id: sensorID, central: fake).connect()
+
+        await fake.hangNextSetNotify()
+        await fake.emit(.disconnected(peripheralID: sensorID))
+
+        let start = ContinuousClock.now
+        _ = try await connected.disconnect()
+        #expect(start.duration(to: .now) < .seconds(1))
+    }
+
     @Test func unexpectedDisconnectFinishesAllStreams() async throws {
         let fake = FakeBluetoothCentral()
         let sensorID = UUID()
