@@ -46,9 +46,10 @@ package struct ServerConfiguration: Sendable {
     /// `wheel != nil` (though currently derived from it, together with `location`).
     let includesControlPoint: Bool
 
-    /// Enforces "at least one revolution source" at runtime — `ServerBuilder.build()` has no
-    /// compile-time constraint preventing an empty configuration, unlike the wheel/crank/location
-    /// type-state markers.
+    /// `ServerBuilder.build()` is only available for wheel-only, crank-only, or wheel-and-crank
+    /// configurations. This `precondition` remains because the wheel/crank type-state markers are
+    /// not stored on these optionals (e.g. the module-internal `ServerBuilder` initializer can still
+    /// be called with both sources nil).
     init(
         wheel: WheelConfiguration?,
         crankRevolutions: AnyAsyncSequence<CrankRevolution>?,

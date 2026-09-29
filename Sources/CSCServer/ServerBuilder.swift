@@ -179,13 +179,37 @@ extension ServerBuilder where Location == ServerLocation.Unselected {
     }
 }
 
-extension ServerBuilder {
-    /// Builds the server from the configured revolution sources and location settings.
-    ///
-    /// Unlike the type-state markers for wheel/crank/location, "at least one revolution source"
-    /// is not enforced by the type system: `build()` is callable with neither
-    /// `wheelRevolutions` nor `crankRevolutions` selected, and `ServerConfiguration`'s
-    /// initializer enforces the requirement with a runtime `precondition` instead.
+extension ServerBuilder
+where Wheel == ServerWheel.Selected, Crank == ServerCrank.Unselected {
+    /// Builds the server from a wheel-only configuration.
+    public consuming func build() -> Server {
+        Server(
+            configuration: ServerConfiguration(
+                wheel: wheel,
+                crankRevolutions: crankRevolutions,
+                location: location,
+            ),
+        )
+    }
+}
+
+extension ServerBuilder
+where Wheel == ServerWheel.Unselected, Crank == ServerCrank.Selected {
+    /// Builds the server from a crank-only configuration.
+    public consuming func build() -> Server {
+        Server(
+            configuration: ServerConfiguration(
+                wheel: wheel,
+                crankRevolutions: crankRevolutions,
+                location: location,
+            ),
+        )
+    }
+}
+
+extension ServerBuilder
+where Wheel == ServerWheel.Selected, Crank == ServerCrank.Selected {
+    /// Builds the server from a wheel-and-crank configuration.
     public consuming func build() -> Server {
         Server(
             configuration: ServerConfiguration(
