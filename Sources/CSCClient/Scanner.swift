@@ -48,18 +48,29 @@ public struct Scanner: Sendable {
         let central = central
 
         return AsyncStream { continuation in
+            let session = ScanSessionID.issue()
             let scanTask = Task {
                 guard await Self.waitForPoweredOn(central: central, timeouts: timeouts) else {
                     continuation.finish()
                     return
                 }
 
+                guard !Task.isCancelled else {
+                    continuation.finish()
+                    return
+                }
+
                 let discoveries = await central.discoveries
-                await central.startScanning(serviceUUIDs: [CSCS.serviceUUID])
+                guard !Task.isCancelled else {
+                    continuation.finish()
+                    return
+                }
+
+                await central.startScanning(serviceUUIDs: [CSCS.serviceUUID], session: session)
 
                 var seenIDs: Set<UUID> = []
 
-                for await event in discoveries where event.serviceUUIDs.contains(CSCS.serviceUUID) {
+                for await event in discoveries where Self.matchesCSCScan(peripheral: event) {
                     let sensor = DiscoveredSensor(event, central: central, timeouts: timeouts)
                     guard seenIDs.insert(sensor.id).inserted else { continue }
                     continuation.yield(sensor)
@@ -69,10 +80,14 @@ public struct Scanner: Sendable {
             continuation.onTermination = { _ in
                 scanTask.cancel()
                 Task {
-                    await central.stopScanning()
+                    await central.stopScanning(session: session)
                 }
             }
         }
+    }
+
+    private static func matchesCSCScan(peripheral: DiscoveredPeripheral) -> Bool {
+        peripheral.serviceUUIDs.isEmpty || peripheral.serviceUUIDs.contains(CSCS.serviceUUID)
     }
 
     private static func waitForPoweredOn(central: any BluetoothCentral, timeouts: Timeouts) async -> Bool {

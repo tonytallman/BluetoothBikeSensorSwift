@@ -472,7 +472,9 @@ import Testing
                         ),
                     )
                 },
-                expected: .serviceDiscoveryFailed(reason: "CSC Feature read failed"),
+                expected: .serviceDiscoveryFailed(
+                    reason: "Characteristic not found: \(CSCS.featureUUID) on \(CSCS.serviceUUID)",
+                ),
                 expectsDisconnect: true,
             ),
             ConnectFailureCase(

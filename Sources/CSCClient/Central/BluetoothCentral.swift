@@ -50,8 +50,8 @@ package protocol BluetoothCentral: Sendable {
     /// Subscribes to ``stateUpdates`` and returns ``currentState`` in one central turn.
     func stateSubscriptionSnapshot() async -> (AsyncStream<BluetoothState>, BluetoothState)
 
-    func startScanning(serviceUUIDs: [UUID]?) async
-    func stopScanning() async
+    func startScanning(serviceUUIDs: [UUID]?, session: UInt64) async
+    func stopScanning(session: UInt64) async
 
     var discoveries: AsyncStream<DiscoveredPeripheral> { get async }
 

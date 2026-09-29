@@ -242,6 +242,33 @@ import Testing
         #expect(crankSample?.deltaRevolutions == 1)
     }
 
+    @Test func featureReadLinkLossMapsToConnectFailed() async {
+        let fake = FakeBluetoothCentral()
+        let sensorID = UUID()
+        await fake.failNext(.readValue, with: .disconnected(sensorID, reason: "Link lost"))
+
+        do {
+            _ = try await CSCClientTestSupport.sensor(id: sensorID, central: fake).connect()
+            Issue.record("Expected connect to throw")
+        } catch let error as ConnectError {
+            #expect(error == .failed(reason: "Link lost"))
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test func streamsFinishWhenConnectedSensorReleased() async throws {
+        let fake = FakeBluetoothCentral()
+        var connected: ConnectedSensor? = try await CSCClientTestSupport.sensor(central: fake).connect()
+        let wheel = try #require(connected?.revolutions.wheel)
+        let speedStream = await wheel.speed
+        let speedTask = Task { await consumeStream(speedStream) }
+
+        connected = nil
+
+        #expect(await speedTask.value)
+    }
+
     @Test func streamRequestedAfterDisconnectFinishes() async throws {
         let fake = FakeBluetoothCentral()
         let connected = try await CSCClientTestSupport.sensor(central: fake).connect()

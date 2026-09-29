@@ -78,9 +78,9 @@ public struct DiscoveredSensor: Sendable {
         } catch let error as ConnectError {
             throw error
         } catch let error as BluetoothCentralError {
-            throw Self.connectError(from: error)
+            throw BluetoothCentralConnectErrorMapping.connectError(from: error)
         } catch {
-            throw ConnectError.failed(reason: error.localizedDescription)
+            throw ConnectError.failed(reason: "\(error)")
         }
 
         do {
@@ -99,30 +99,9 @@ public struct DiscoveredSensor: Sendable {
             return .serviceDiscoveryFailed(reason: String(describing: error))
         }
         if let error = error as? BluetoothCentralError {
-            return connectError(from: error)
+            return BluetoothCentralConnectErrorMapping.connectError(from: error)
         }
-        return .serviceDiscoveryFailed(reason: error.localizedDescription)
-    }
-
-    private static func connectError(from error: BluetoothCentralError) -> ConnectError {
-        switch error {
-        case .notPoweredOn:
-            return .notPoweredOn
-        case .peripheralNotFound:
-            return .peripheralNotFound
-        case let .connectionFailed(_, reason):
-            return .failed(reason: reason)
-        case let .disconnected(_, reason):
-            return .failed(reason: reason ?? "Disconnected during connect")
-        case let .serviceNotFound(_, serviceUUID):
-            return .serviceDiscoveryFailed(reason: "Service not found: \(serviceUUID)")
-        case let .characteristicNotFound(_, serviceUUID, characteristicUUID):
-            return .serviceDiscoveryFailed(
-                reason: "Characteristic not found: \(characteristicUUID) on \(serviceUUID)",
-            )
-        case let .attApplicationError(code):
-            return .serviceDiscoveryFailed(reason: "ATT error \(code)")
-        }
+        return .serviceDiscoveryFailed(reason: "\(error)")
     }
 
     /// Bluetooth SIG company identifiers (16-bit), little-endian in advertisement data.

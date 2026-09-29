@@ -35,6 +35,8 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         )
     }
 
+    private var activeScanSession: UInt64 = 0
+    private var highestStoppedScanSession: UInt64 = 0
     private var state: BluetoothState
     private var nextErrors: [Operation: BluetoothCentralError] = [:]
     private var nextControlPointResponseValue: UInt8?
@@ -98,11 +100,18 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         return (stream, state)
     }
 
-    package func startScanning(serviceUUIDs: [UUID]?) async {
+    package func startScanning(serviceUUIDs: [UUID]?, session: UInt64) async {
+        guard session > highestStoppedScanSession else { return }
+        activeScanSession = session
         appendRecordedCall(.startScanning(serviceUUIDs: serviceUUIDs))
     }
 
-    package func stopScanning() async {
+    package func stopScanning(session: UInt64) async {
+        if session > highestStoppedScanSession {
+            highestStoppedScanSession = session
+        }
+        guard activeScanSession == session else { return }
+        activeScanSession = 0
         appendRecordedCall(.stopScanning)
     }
 
@@ -401,6 +410,19 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         where predicate: @escaping @Sendable (RecordedCall) -> Bool,
     ) async {
         await waitUntil { self.recordedCalls.contains(where: predicate) }
+    }
+
+    package func waitForStartScanCount(atLeast count: Int) async {
+        await waitUntil {
+            Self.startScanCount(in: self.recordedCalls) >= count
+        }
+    }
+
+    private static func startScanCount(in calls: [RecordedCall]) -> Int {
+        calls.filter { call in
+            if case .startScanning = call { return true }
+            return false
+        }.count
     }
 
     package func waitForControlPointWriteCount(above baseline: Int) async {

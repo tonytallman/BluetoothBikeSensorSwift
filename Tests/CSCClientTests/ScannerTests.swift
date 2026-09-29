@@ -265,4 +265,102 @@ import Testing
         let calls = await fake.recordedCalls
         #expect(!calls.contains(.stopScanning))
     }
+
+    @Test func yieldsWhenAdvertisementOmitsServiceUUIDs() async {
+        let fake = FakeBluetoothCentral()
+        let scanner = Scanner(central: fake)
+        let stream = scanner.scan()
+
+        let collector = Task {
+            var sensors: [DiscoveredSensor] = []
+            for await sensor in stream {
+                sensors.append(sensor)
+                if sensors.count >= 1 {
+                    break
+                }
+            }
+            return sensors
+        }
+
+        await Self.waitForScanStart(fake)
+
+        let peripheralID = UUID()
+        await fake.emitDiscovery(
+            DiscoveredPeripheral(
+                id: peripheralID,
+                name: "Background CSC",
+                manufacturerData: nil,
+                serviceUUIDs: [],
+            ),
+        )
+
+        let sensors = await collector.value
+        #expect(sensors.count == 1)
+        #expect(sensors[0].id == peripheralID)
+    }
+
+    @Test func stopBeforeStartDoesNotStartRadio() async {
+        let fake = FakeBluetoothCentral(initialState: .unknown)
+        let scanner = Scanner(
+            central: fake,
+            timeouts: Timeouts(bluetoothPowerOn: .seconds(60)),
+        )
+        let stream = scanner.scan()
+        let task = Task {
+            for await _ in stream {}
+        }
+
+        task.cancel()
+        _ = await task.value
+
+        let calls = await fake.recordedCalls
+        #expect(
+            !calls.contains { call in
+                if case .startScanning = call { return true }
+                return false
+            },
+        )
+    }
+
+    @Test func staleStopScanDoesNotCancelNewSession() async {
+        let fake = FakeBluetoothCentral()
+        let scanner = Scanner(central: fake)
+
+        let firstTask = Task {
+            for await _ in scanner.scan() {
+                break
+            }
+        }
+
+        await Self.waitForScanStart(fake)
+
+        let secondTask = Task {
+            for await _ in scanner.scan() {
+                break
+            }
+        }
+
+        await fake.waitForStartScanCount(atLeast: 2)
+
+        firstTask.cancel()
+        _ = await firstTask.value
+
+        var calls = await fake.recordedCalls
+        #expect(calls.filter {
+            if case .stopScanning = $0 { return true }
+            return false
+        }.isEmpty)
+
+        secondTask.cancel()
+        await fake.waitForRecordedCall { call in
+            if case .stopScanning = call { return true }
+            return false
+        }
+
+        calls = await fake.recordedCalls
+        #expect(calls.filter {
+            if case .stopScanning = $0 { return true }
+            return false
+        }.count == 1)
+    }
 }

@@ -84,8 +84,10 @@ public final class ConnectedSensor: Sendable {
                 serviceUUID: CSCS.serviceUUID,
                 characteristicUUID: CSCS.featureUUID,
             )
+        } catch let error as BluetoothCentralError {
+            throw BluetoothCentralConnectErrorMapping.connectError(from: error)
         } catch {
-            throw ConnectError.serviceDiscoveryFailed(reason: "CSC Feature read failed")
+            throw ConnectError.serviceDiscoveryFailed(reason: "\(error)")
         }
 
         guard let feature = CSCFeature.decode(featureData) else {
@@ -222,7 +224,7 @@ public final class ConnectedSensor: Sendable {
         } catch let error as BluetoothCentralError {
             throw Self.disconnectError(from: error)
         } catch {
-            throw DisconnectError.failed(reason: error.localizedDescription)
+            throw DisconnectError.failed(reason: "\(error)")
         }
 
         return sensor
@@ -306,7 +308,7 @@ public final class ConnectedSensor: Sendable {
         } catch let error as ControlPointError {
             throw ConnectError.serviceDiscoveryFailed(reason: String(describing: error))
         } catch {
-            throw ConnectError.serviceDiscoveryFailed(reason: error.localizedDescription)
+            throw ConnectError.serviceDiscoveryFailed(reason: "\(error)")
         }
 
         return response.parameter.map { SensorLocation(assignedNumber: $0) }
@@ -338,8 +340,8 @@ public final class ConnectedSensor: Sendable {
         crankRevolutions: CrankRevolutions?,
     ) async {
         for await event in events {
-            guard !Task.isCancelled else {
-                return
+            if Task.isCancelled {
+                break
             }
 
             switch event {
@@ -369,6 +371,15 @@ public final class ConnectedSensor: Sendable {
                     await crankRevolutions.finishStreams()
                 }
                 return
+            }
+        }
+
+        if Task.isCancelled {
+            if let wheelRevolutions {
+                await wheelRevolutions.finishStreams()
+            }
+            if let crankRevolutions {
+                await crankRevolutions.finishStreams()
             }
         }
     }

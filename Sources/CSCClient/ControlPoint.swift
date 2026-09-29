@@ -265,6 +265,6 @@ package actor ControlPoint {
                 return .failed(reason: String(describing: centralError))
             }
         }
-        return .failed(reason: error.localizedDescription)
+        return .failed(reason: "\(error)")
     }
 }
