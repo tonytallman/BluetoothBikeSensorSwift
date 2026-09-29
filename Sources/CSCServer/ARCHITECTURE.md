@@ -16,7 +16,7 @@ Cadence Service (CSCS)**: it advertises `0x1816`, serves CSC Measurement notific
 caller-supplied wheel/crank revolution sources, and handles the SC Control Point procedures
 (Set Cumulative Value, Update Sensor Location, Request Supported Sensor Locations). It does not
 implement the central/client side — that is `CSCClient`, a separate, independent product in this
-package. `CSCWire` (an internal, non-product target) holds the shared wire codecs (`CSCMeasurement`,
+package. `CSCWire` (an internal, nonproduct target) holds the shared wire codecs (`CSCMeasurement`,
 `CSCFeature`, `CSCControlPoint`, `CSCSensorLocation`, GATT UUIDs) that both `CSCServer` and
 `CSCClient` depend on.
 
@@ -141,12 +141,12 @@ change what a server advertises is to build a new one.
    - subscribes to `events` **before** calling `add`/`startAdvertising` (the stream does not
      replay, so subscribing late would lose events);
    - publishes the GATT service, then starts advertising;
-   - re-checks that the power-loss counter hasn't changed since the wait — if Bluetooth dropped
+   - rechecks that the power-loss counter hasn't changed since the wait — if Bluetooth dropped
      and came back mid-startup, startup still fails with `.notPoweredOn`;
    - drains any inbound events that arrived while starting (buffered, not dropped) in arrival
      order, then opens the "startup gate" so future events are handled live;
    - starts the wheel/crank pull loops.
-3. Back in `ServerLifecycle`, once the child task finishes, re-verify it is still the task `phase`
+3. Back in `ServerLifecycle`, once the child task finishes, reverify it is still the task `phase`
    points at before committing to `.running` — a concurrent `stop()` may have already begun
    tearing this same task down.
 
@@ -177,7 +177,7 @@ While running, any `BluetoothState` other than `.poweredOn` suspends the session
 subscriber sets (so measurement and control-point traffic stops), lets the outbound pump discard
 whatever is queued, and keeps pulling from the wheel/crank sources (samples are simply dropped
 since nobody is subscribed) — but does **not** unpublish the service. When the state transitions
-back into `.poweredOn` (a genuine transition, not a duplicate event), recovery re-publishes the
+back into `.poweredOn` (a genuine transition, not a duplicate event), recovery republishes the
 exact build-time service and starts advertising again from scratch; centrals must reconnect and
 resubscribe. A failed recovery attempt leaves the server suspended, without throwing, and simply
 retries on the next loss-then-regain cycle.
@@ -215,14 +215,14 @@ loops themselves, not just the pump.
 The pump is the **only** caller of `updateValue` and the only remover of the queue head. When
 `updateValue` returns `false` (CoreBluetooth's transmit buffer is full), the pump parks on a
 ready-to-update latch and retries the exact same payload once `events` reports
-`.readyToUpdateSubscribers`. `prepareHead(_:)` re-checks, both before the first send attempt and
+`.readyToUpdateSubscribers`. `prepareHead(_:)` rechecks, both before the first send attempt and
 again after every `false` return, the three reasons the head might no longer be sendable:
 
 - **Shutdown or no subscribers**: the item is dropped and its producer resumed.
 - **Staleness**: a queued wheel-bearing payload is stamped with the `wheelGeneration` it was
   encoded against. If a Set Cumulative Value procedure completes while that payload is still
   queued (or even mid-flight, suspended inside `updateValue`), the payload is recognized as stale
-  and re-encoded (crank-only, if there's a crank half) or dropped, rather than sent with a
+  and reencoded (crank-only, if there's a crank half) or dropped, rather than sent with a
   now-wrong wheel cumulative.
 
 **Radio loss during a send** is checked separately, only on acceptance: if Bluetooth drops while a
@@ -253,7 +253,7 @@ Requests and responses use the same outbound queue and pump as measurements, but
    `enqueueIndication` itself checks `closed`/timed-out and ends the procedure without indicating
    if either is true, so call sites do not need a separate check before indicating. Because the
    pump may be suspended mid-retry when something else (unsubscribe, timeout, another radio loss)
-   removes or ends the owning procedure, every re-entry point re-validates that this exact item
+   removes or ends the owning procedure, every reentry point revalidates that this exact item
    (matched by a stable id) is still the one being processed before acting on it again.
 5. A delegate call that returns successfully *after* the timeout has still applied its side effect
    (the new value is stored / the cumulative delegate ran), but no indication is sent — the spec
@@ -261,7 +261,7 @@ Requests and responses use the same outbound queue and pump as measurements, but
 
 Set Cumulative Value bumps `wheelGeneration` (invalidating queued wheel data, see above) and wakes
 a parked pump directly, without pretending a real CoreBluetooth ready signal arrived — the
-distinction between "wake to re-check something" and "a real ready-to-update signal happened" is
+distinction between "wake to recheck something" and "a real ready-to-update signal happened" is
 deliberate: `resumeReadyToUpdateWaiter()` only wakes an already-parked waiter, while
 `signalReadyToUpdate()` (the real CoreBluetooth callback) also arms the latch for a future wait.
 
@@ -273,7 +273,7 @@ deliberate: `resumeReadyToUpdateWaiter()` only wakes an already-parked waiter, w
   Bluetooth-power API. The server suspends and recovers automatically; apps observe the effect
   (subscriber count dropping to zero) rather than the cause. Apps needing to distinguish
   "unauthorized" from "temporarily off" check `CBManager.authorization` directly, since folding
-  that into `ServerError` would break exhaustive switches over a non-frozen public enum.
+  that into `ServerError` would break exhaustive switches over a nonfrozen public enum.
 - **Delegate failures** during a control-point procedure indicate `operationFailed`.
 - **CoreBluetooth-level errors** (`BluetoothPeripheralError`) are mapped to the smaller public
   `ServerError` surface at the two places startup can fail (`add`, `startAdvertising`); the same
@@ -308,7 +308,7 @@ radio state, subscriber count, wheel/crank behavior, builder validation) rather 
 source-file, because most interesting behavior spans several source files (a control-point test
 exercises `ServerSession`'s write handling, the outbound pump, and often `ServerClock`).
 
-## Non-obvious design decisions
+## Nonobvious design decisions
 
 - **A new `ServerSession` per `start()`**, rather than a reusable session, keeps all of the
   session's intricate state (queues, caches, generations, gates) trivially reset on restart —
