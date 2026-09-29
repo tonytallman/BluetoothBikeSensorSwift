@@ -55,8 +55,6 @@ BluetoothBikeSensorSwift is a Swift package that scans for, connects to, and rea
     - id (universally unique)
     - name
     - manufacturer
-    - hasSpeed: Bool (if possible)
-    - hasCadence: Bool (if possible)
 - Has a single function `connect()` returning `async` `ConnectedSensor`, throwing `ConnectError`.
 
 #### ConnectedSensor

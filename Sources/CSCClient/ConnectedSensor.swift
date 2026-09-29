@@ -1,6 +1,43 @@
 internal import CSCWire
 import Foundation
 
+/// Errors thrown by ``ConnectedSensor/disconnect()``.
+public enum DisconnectError: Error, Sendable, Equatable {
+    /// Disconnect failed for a reason other than already being disconnected.
+    case failed(reason: String)
+    /// The sensor was already disconnected.
+    case alreadyDisconnected
+}
+
+/// Wheel and/or crank revolution support exposed by a connected sensor.
+public enum RevolutionData: Sendable {
+    case wheel(WheelRevolutions)
+    case crank(CrankRevolutions)
+    case wheelAndCrank(WheelRevolutions, CrankRevolutions)
+
+    package var wheel: WheelRevolutions? {
+        switch self {
+        case let .wheel(wheel):
+            wheel
+        case let .wheelAndCrank(wheel, _):
+            wheel
+        case .crank:
+            nil
+        }
+    }
+
+    package var crank: CrankRevolutions? {
+        switch self {
+        case let .crank(crank):
+            crank
+        case let .wheelAndCrank(_, crank):
+            crank
+        case .wheel:
+            nil
+        }
+    }
+}
+
 /// A connected CSCS sensor emitting live speed and/or cadence measurements.
 ///
 /// Created only by ``DiscoveredSensor/connect()``. Set ``WheelRevolutions/wheelCircumference``
@@ -13,67 +50,156 @@ public final class ConnectedSensor: Sendable {
     /// Sensor location support for this connection.
     public let location: LocationSupport
 
-    private let id: UUID
-    private let name: String?
-    private let manufacturer: String?
+    private let sensor: DiscoveredSensor
     private let central: any BluetoothCentral
-    private let controlPointSession: CSCControlPointSession
-    private let controlPointIndicationsEnabled: Bool
-    private let loopOwner: MeasurementLoopOwner
+    private let controlPoint: ControlPoint?
+    private let eventLoop: Task<Void, Never>
 
     private let wheelRevolutions: WheelRevolutions?
     private let crankRevolutions: CrankRevolutions?
 
-    package init(
-        id: UUID,
-        name: String?,
-        manufacturer: String?,
-        revolutions: RevolutionData,
-        location: LocationSupport,
-        central: any BluetoothCentral,
-        controlPointSession: CSCControlPointSession,
-        controlPointIndicationsEnabled: Bool,
-        stateBox: MeasurementStateBox,
-    ) {
-        self.id = id
-        self.name = name
-        self.manufacturer = manufacturer
-        self.revolutions = revolutions
-        self.location = location
-        self.central = central
-        self.controlPointSession = controlPointSession
-        self.controlPointIndicationsEnabled = controlPointIndicationsEnabled
+    init(connecting sensor: DiscoveredSensor) async throws {
+        self.sensor = sensor
+        central = sensor.central
+        let id = sensor.id
+        let timeouts = sensor.timeouts
 
-        switch revolutions {
-        case let .wheel(wheel):
-            wheelRevolutions = wheel
-            crankRevolutions = nil
-        case let .crank(crank):
-            wheelRevolutions = nil
-            crankRevolutions = crank
-        case let .wheelAndCrank(wheel, crank):
-            wheelRevolutions = wheel
-            crankRevolutions = crank
+        try await central.discoverServices(id: id, serviceUUIDs: [CSCS.serviceUUID])
+
+        let discovered = try await central.discoverCharacteristics(
+            id: id,
+            serviceUUID: CSCS.serviceUUID,
+            characteristicUUIDs: [
+                CSCS.measurementUUID,
+                CSCS.featureUUID,
+                CSCS.sensorLocationUUID,
+                CSCS.controlPointUUID,
+            ],
+        )
+
+        let featureData: Data
+        do {
+            featureData = try await central.readValue(
+                id: id,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.featureUUID,
+            )
+        } catch {
+            throw ConnectError.serviceDiscoveryFailed(reason: "CSC Feature read failed")
         }
 
-        loopOwner = MeasurementLoopOwner(
+        guard let feature = CSCFeature.decode(featureData) else {
+            throw ConnectError.serviceDiscoveryFailed(reason: "Invalid CSC Feature value")
+        }
+
+        guard feature.hasSpeed || feature.hasCadence else {
+            throw ConnectError.serviceDiscoveryFailed(reason: "Sensor supports neither wheel nor crank data")
+        }
+
+        let controlPointAvailable = discovered.contains(CSCS.controlPointUUID)
+        let sensorLocationAvailable = discovered.contains(CSCS.sensorLocationUUID)
+
+        var controlPoint: ControlPoint?
+        if controlPointAvailable {
+            try await central.setNotifyValue(
+                id: id,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.controlPointUUID,
+                enabled: true,
+            )
+            controlPoint = ControlPoint(
+                central: central,
+                peripheralID: id,
+                timeout: timeouts.controlPointProcedure,
+            )
+        }
+        self.controlPoint = controlPoint
+
+        let resolvedLocation = try await Self.resolveLocation(
+            controlPoint: controlPoint,
             central: central,
             id: id,
-            wheelRevolutions: wheelRevolutions,
-            crankRevolutions: crankRevolutions,
-            stateBox: stateBox,
+            feature: feature,
+            sensorLocationAvailable: sensorLocationAvailable,
+            controlPointAvailable: controlPointAvailable,
         )
+
+        let centralEvents = await central.events
+
+        try await central.setNotifyValue(
+            id: id,
+            serviceUUID: CSCS.serviceUUID,
+            characteristicUUID: CSCS.measurementUUID,
+            enabled: true,
+        )
+
+        let revolutions: RevolutionData
+        if feature.hasSpeed, feature.hasCadence {
+            revolutions = .wheelAndCrank(
+                WheelRevolutions(controlPoint: controlPoint),
+                CrankRevolutions(),
+            )
+        } else if feature.hasSpeed {
+            revolutions = .wheel(WheelRevolutions(controlPoint: controlPoint))
+        } else {
+            revolutions = .crank(CrankRevolutions())
+        }
+        self.revolutions = revolutions
+
+        switch resolvedLocation {
+        case .unavailable:
+            location = .unavailable
+        case let .fixed(sensorLocation):
+            location = .fixed(sensorLocation)
+        case let .multiple(supported, current):
+            guard let controlPoint else {
+                throw ConnectError.serviceDiscoveryFailed(reason: "SC Control Point characteristic missing")
+            }
+            location = .multiple(
+                MultipleSensorLocations(
+                    supported: supported,
+                    current: current,
+                    controlPoint: controlPoint,
+                ),
+            )
+        }
+
+        let loopWheel: WheelRevolutions?
+        let loopCrank: CrankRevolutions?
+        switch revolutions {
+        case let .wheel(wheel):
+            loopWheel = wheel
+            loopCrank = nil
+        case let .crank(crank):
+            loopWheel = nil
+            loopCrank = crank
+        case let .wheelAndCrank(wheel, crank):
+            loopWheel = wheel
+            loopCrank = crank
+        }
+        wheelRevolutions = loopWheel
+        crankRevolutions = loopCrank
+
+        eventLoop = Task {
+            await Self.runMeasurementLoop(
+                events: centralEvents,
+                id: id,
+                wheelRevolutions: loopWheel,
+                crankRevolutions: loopCrank,
+            )
+        }
     }
 
     deinit {
-        loopOwner.cancel()
+        eventLoop.cancel()
     }
 
     /// Disconnects from the sensor and returns a ``DiscoveredSensor`` for reconnection.
     public func disconnect() async throws -> DiscoveredSensor {
-        loopOwner.cancel()
-        await controlPointSession.cancel()
+        eventLoop.cancel()
         await finishStreams()
+
+        let id = sensor.id
 
         try? await central.setNotifyValue(
             id: id,
@@ -82,7 +208,7 @@ public final class ConnectedSensor: Sendable {
             enabled: false,
         )
 
-        if controlPointIndicationsEnabled {
+        if controlPoint != nil {
             try? await central.setNotifyValue(
                 id: id,
                 serviceUUID: CSCS.serviceUUID,
@@ -94,31 +220,12 @@ public final class ConnectedSensor: Sendable {
         do {
             try await central.disconnect(id: id)
         } catch let error as BluetoothCentralError {
-            throw BluetoothCentralErrorMapping.disconnectError(from: error)
+            throw Self.disconnectError(from: error)
         } catch {
             throw DisconnectError.failed(reason: error.localizedDescription)
         }
 
-        let (hasSpeed, hasCadence) = Self.capabilityFlags(for: revolutions)
-        return DiscoveredSensor(
-            id: id,
-            name: name,
-            manufacturer: manufacturer,
-            hasSpeed: hasSpeed,
-            hasCadence: hasCadence,
-            central: central,
-        )
-    }
-
-    private static func capabilityFlags(for revolutions: RevolutionData) -> (hasSpeed: Bool, hasCadence: Bool) {
-        switch revolutions {
-        case .wheel:
-            return (true, false)
-        case .crank:
-            return (false, true)
-        case .wheelAndCrank:
-            return (true, true)
-        }
+        return sensor
     }
 
     private func finishStreams() async {
@@ -130,77 +237,131 @@ public final class ConnectedSensor: Sendable {
         }
     }
 
-    private static func runMeasurementLoop(
-        central: any BluetoothCentral,
-        id: UUID,
-        wheelRevolutions: WheelRevolutions?,
-        crankRevolutions: CrankRevolutions?,
-        stateBox: MeasurementStateBox,
-    ) async {
-        async let gattLoop: Void = consumeGATTEvents(
-            central: central,
-            id: id,
-            wheelRevolutions: wheelRevolutions,
-            crankRevolutions: crankRevolutions,
-            stateBox: stateBox,
-        )
-        async let connectionLoop: Void = consumeConnectionEvents(
-            central: central,
-            id: id,
-            wheelRevolutions: wheelRevolutions,
-            crankRevolutions: crankRevolutions,
-        )
-        _ = await (gattLoop, connectionLoop)
+    private enum ResolvedLocation {
+        case unavailable
+        case fixed(SensorLocation)
+        case multiple(supported: [SensorLocation], current: SensorLocation)
     }
 
-    private static func consumeGATTEvents(
+    private static func resolveLocation(
+        controlPoint: ControlPoint?,
         central: any BluetoothCentral,
         id: UUID,
-        wheelRevolutions: WheelRevolutions?,
-        crankRevolutions: CrankRevolutions?,
-        stateBox: MeasurementStateBox,
-    ) async {
-        let gattEvents = await central.gattEvents
-        for await event in gattEvents {
-            guard !Task.isCancelled else {
-                return
+        feature: CSCFeature,
+        sensorLocationAvailable: Bool,
+        controlPointAvailable: Bool,
+    ) async throws -> ResolvedLocation {
+        if feature.hasMultipleSensorLocations {
+            guard sensorLocationAvailable else {
+                throw ConnectError.serviceDiscoveryFailed(reason: "Sensor Location characteristic missing")
+            }
+            guard controlPointAvailable else {
+                throw ConnectError.serviceDiscoveryFailed(reason: "SC Control Point characteristic missing")
             }
 
-            guard case let .characteristicValue(
-                peripheralID,
-                serviceUUID,
-                characteristicUUID,
-                value,
-            ) = event,
-                peripheralID == id,
-                serviceUUID == CSCS.serviceUUID,
-                characteristicUUID == CSCS.measurementUUID
-            else {
-                continue
-            }
-
-            await processMeasurement(
-                value,
-                wheelRevolutions: wheelRevolutions,
-                crankRevolutions: crankRevolutions,
-                stateBox: stateBox,
+            let currentData = try await central.readValue(
+                id: id,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.sensorLocationUUID,
             )
+            guard let wireLocation = CSCSensorLocation.decode(currentData) else {
+                throw ConnectError.serviceDiscoveryFailed(reason: "Invalid Sensor Location value")
+            }
+            let current = SensorLocation(assignedNumber: wireLocation.assignedNumber)
+
+            let supported = try await requestSupportedSensorLocations(controlPoint: controlPoint)
+
+            guard supported.contains(current) else {
+                throw ConnectError.serviceDiscoveryFailed(reason: "Current sensor location is not supported")
+            }
+
+            return .multiple(supported: supported, current: current)
+        }
+
+        if sensorLocationAvailable {
+            let locationData = try await central.readValue(
+                id: id,
+                serviceUUID: CSCS.serviceUUID,
+                characteristicUUID: CSCS.sensorLocationUUID,
+            )
+            guard let wireLocation = CSCSensorLocation.decode(locationData) else {
+                throw ConnectError.serviceDiscoveryFailed(reason: "Invalid Sensor Location value")
+            }
+            return .fixed(SensorLocation(assignedNumber: wireLocation.assignedNumber))
+        }
+
+        return .unavailable
+    }
+
+    private static func requestSupportedSensorLocations(
+        controlPoint: ControlPoint?,
+    ) async throws -> [SensorLocation] {
+        guard let controlPoint else {
+            throw ConnectError.serviceDiscoveryFailed(reason: "SC Control Point characteristic missing")
+        }
+
+        let response: CSCControlPointResponse
+        do {
+            response = try await controlPoint.perform(.requestSupportedSensorLocations)
+        } catch let error as ControlPointError {
+            throw ConnectError.serviceDiscoveryFailed(reason: String(describing: error))
+        } catch {
+            throw ConnectError.serviceDiscoveryFailed(reason: error.localizedDescription)
+        }
+
+        return response.parameter.map { SensorLocation(assignedNumber: $0) }
+    }
+
+    private static func disconnectError(from error: BluetoothCentralError) -> DisconnectError {
+        switch error {
+        case .peripheralNotFound:
+            return .alreadyDisconnected
+        case let .disconnected(_, reason):
+            return .failed(reason: reason ?? "Disconnected")
+        case let .connectionFailed(_, reason):
+            return .failed(reason: reason)
+        case .notPoweredOn:
+            return .failed(reason: "Bluetooth is not powered on")
+        case let .serviceNotFound(_, serviceUUID):
+            return .failed(reason: "Service not found: \(serviceUUID)")
+        case let .characteristicNotFound(_, serviceUUID, characteristicUUID):
+            return .failed(reason: "Characteristic not found: \(characteristicUUID) on \(serviceUUID)")
+        case let .attApplicationError(code):
+            return .failed(reason: "ATT error \(code)")
         }
     }
 
-    private static func consumeConnectionEvents(
-        central: any BluetoothCentral,
+    private static func runMeasurementLoop(
+        events: AsyncStream<CentralEvent>,
         id: UUID,
         wheelRevolutions: WheelRevolutions?,
         crankRevolutions: CrankRevolutions?,
     ) async {
-        let connectionEvents = await central.connectionEvents
-        for await event in connectionEvents {
+        for await event in events {
             guard !Task.isCancelled else {
                 return
             }
 
-            if case let .disconnected(peripheralID, _) = event, peripheralID == id {
+            switch event {
+            case let .valueUpdated(peripheralID, serviceUUID, characteristicUUID, value):
+                guard peripheralID == id,
+                    serviceUUID == CSCS.serviceUUID,
+                    characteristicUUID == CSCS.measurementUUID
+                else {
+                    continue
+                }
+
+                await processMeasurement(
+                    value,
+                    wheelRevolutions: wheelRevolutions,
+                    crankRevolutions: crankRevolutions,
+                )
+
+            case let .disconnected(peripheralID):
+                guard peripheralID == id else {
+                    continue
+                }
+
                 if let wheelRevolutions {
                     await wheelRevolutions.finishStreams()
                 }
@@ -216,79 +377,29 @@ public final class ConnectedSensor: Sendable {
         _ data: Data,
         wheelRevolutions: WheelRevolutions?,
         crankRevolutions: CrankRevolutions?,
-        stateBox: MeasurementStateBox,
     ) async {
         guard let sample = CSCMeasurement.decode(data) else {
             return
         }
 
-        let context = stateBox.readMeasurementContext()
-        var state = context.state
-
-        let wheelDelta = wheelRevolutions != nil
-            ? CSCMeasurementParser.wheelDelta(
-                from: sample,
-                previous: &state,
-                circumferenceMeters: context.circumferenceMeters,
-            )
-            : nil
-        let crankDelta = crankRevolutions != nil
-            ? CSCMeasurementParser.crankDelta(from: sample, previous: &state)
-            : nil
-
-        stateBox.writeMeasurementState(state)
-
-        if let wheelDelta, let wheelRevolutions {
-            let speed = CSCMeasurementParser.speed(
-                from: wheelDelta,
-                circumferenceMeters: context.circumferenceMeters,
-            )
-            await wheelRevolutions.yieldSpeed(speed)
-            await wheelRevolutions.yieldWheelSample(
-                WheelSample(
-                    deltaDistance: Measurement(
-                        value: Double(wheelDelta.deltaRevolutions) * context.circumferenceMeters,
-                        unit: .meters,
-                    ),
-                    deltaTime: Measurement(value: wheelDelta.deltaTimeSeconds, unit: .seconds),
-                ),
-            )
+        if let wheelRevolutions,
+           let revolutions = sample.cumulativeWheelRevolutions,
+           let eventTime = sample.lastWheelEventTime
+        {
+            await wheelRevolutions.receive(revolutions: revolutions, eventTime: eventTime)
         }
 
-        if let crankDelta, let crankRevolutions {
-            await crankRevolutions.yieldCadence(CSCMeasurementParser.cadence(from: crankDelta))
-            await crankRevolutions.yieldCrankSample(
-                CrankSample(
-                    deltaRevolutions: Int(crankDelta.deltaRevolutions),
-                    deltaTime: Measurement(value: crankDelta.deltaTimeSeconds, unit: .seconds),
-                ),
-            )
+        if let crankRevolutions,
+           let revolutions = sample.cumulativeCrankRevolutions,
+           let eventTime = sample.lastCrankEventTime
+        {
+            await crankRevolutions.receive(revolutions: revolutions, eventTime: eventTime)
         }
     }
+}
 
-    private final class MeasurementLoopOwner: @unchecked Sendable {
-        private let task: Task<Void, Never>
-
-        init(
-            central: any BluetoothCentral,
-            id: UUID,
-            wheelRevolutions: WheelRevolutions?,
-            crankRevolutions: CrankRevolutions?,
-            stateBox: MeasurementStateBox,
-        ) {
-            task = Task {
-                await ConnectedSensor.runMeasurementLoop(
-                    central: central,
-                    id: id,
-                    wheelRevolutions: wheelRevolutions,
-                    crankRevolutions: crankRevolutions,
-                    stateBox: stateBox,
-                )
-            }
-        }
-
-        func cancel() {
-            task.cancel()
-        }
-    }
+private extension CSCFeature {
+    var hasSpeed: Bool { contains(.wheelRevolutionData) }
+    var hasCadence: Bool { contains(.crankRevolutionData) }
+    var hasMultipleSensorLocations: Bool { contains(.multipleSensorLocations) }
 }

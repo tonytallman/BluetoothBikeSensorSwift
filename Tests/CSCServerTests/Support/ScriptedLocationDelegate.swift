@@ -1,8 +1,7 @@
 import CSCServer
 import Foundation
-import os
 
-final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecked Sendable {
+final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, Sendable {
     private struct State {
         var supported: [SensorLocationKind]
         let current: SensorLocationKind
@@ -17,35 +16,40 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
         var cancellationWaiters: [CheckedContinuation<Void, Never>] = []
     }
 
-    private let state: OSAllocatedUnfairLock<State>
+    private let lock = NSLock()
+    private nonisolated(unsafe) var state: State
 
     init(supported: [SensorLocationKind], current: SensorLocationKind) {
-        state = OSAllocatedUnfairLock(initialState: State(supported: supported, current: current))
+        state = State(supported: supported, current: current)
+    }
+
+    private func withState<R>(_ body: (inout State) -> R) -> R {
+        lock.withLock { body(&state) }
     }
 
     var supported: [SensorLocationKind] {
-        state.withLock { $0.supported }
+        withState { $0.supported }
     }
 
     var current: SensorLocationKind {
-        state.withLock { $0.current }
+        withState { $0.current }
     }
 
     var recordedUpdateKinds: [SensorLocationKind] {
-        state.withLock { $0.recordedKinds }
+        withState { $0.recordedKinds }
     }
 
     var updateInvocationCount: Int {
-        state.withLock { $0.updateCount }
+        withState { $0.updateCount }
     }
 
     func setSupported(_ locations: [SensorLocationKind]) {
-        state.withLock { $0.supported = locations }
+        withState { $0.supported = locations }
     }
 
     func waitUntilUpdateCount(_ count: Int) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            state.withLock { locked in
+            withState { locked in
                 if locked.updateCount >= count {
                     continuation.resume()
                     return
@@ -56,12 +60,12 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
     }
 
     func armParkForNextCall() {
-        state.withLock { $0.parkArmed = true }
+        withState { $0.parkArmed = true }
     }
 
     /// The next call parks until ``release()``; cancellation is only recorded.
     func armParkIgnoringCancellationForNextCall() {
-        state.withLock { locked in
+        withState { locked in
             locked.parkArmed = true
             locked.parkIgnoresCancellation = true
         }
@@ -69,7 +73,7 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
 
     func waitUntilCancellationRequested() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            state.withLock { locked in
+            withState { locked in
                 if locked.cancellationRequested {
                     continuation.resume()
                     return
@@ -80,11 +84,11 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
     }
 
     func setShouldThrow(_ value: Bool) {
-        state.withLock { $0.shouldThrow = value }
+        withState { $0.shouldThrow = value }
     }
 
     func release() {
-        let continuation = state.withLock { locked -> CheckedContinuation<Void, Error>? in
+        let continuation = withState { locked -> CheckedContinuation<Void, Error>? in
             guard let continuation = locked.parkedContinuation else {
                 return nil
             }
@@ -95,7 +99,7 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
     }
 
     func update(_ location: SensorLocationKind) async throws {
-        let (willPark, ignoresCancellation) = state.withLock { locked -> (Bool, Bool) in
+        let (willPark, ignoresCancellation) = withState { locked -> (Bool, Bool) in
             if locked.shouldThrow {
                 return (false, false)
             }
@@ -111,7 +115,7 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
         if willPark {
             try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    state.withLock { locked in
+                    withState { locked in
                         locked.recordedKinds.append(location)
                         locked.updateCount += 1
                         locked.parkedContinuation = continuation
@@ -128,7 +132,7 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
             return
         }
 
-        let shouldThrow = state.withLock { locked -> Bool in
+        let shouldThrow = withState { locked -> Bool in
             locked.recordedKinds.append(location)
             locked.updateCount += 1
             let throwNow = locked.shouldThrow
@@ -142,7 +146,7 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
     }
 
     private func recordCancellationRequested() {
-        let waiters = state.withLock { locked -> [CheckedContinuation<Void, Never>] in
+        let waiters = withState { locked -> [CheckedContinuation<Void, Never>] in
             locked.cancellationRequested = true
             let waiters = locked.cancellationWaiters
             locked.cancellationWaiters.removeAll()
@@ -154,7 +158,7 @@ final class ScriptedLocationDelegate: MultipleSensorLocationsDelegate, @unchecke
     }
 
     private func cancelPark() {
-        let continuation = state.withLock { locked -> CheckedContinuation<Void, Error>? in
+        let continuation = withState { locked -> CheckedContinuation<Void, Error>? in
             guard let continuation = locked.parkedContinuation else {
                 return nil
             }

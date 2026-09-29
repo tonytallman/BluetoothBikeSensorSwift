@@ -1,24 +1,42 @@
 internal import CSCWire
 import Foundation
 
+package struct Timeouts: Sendable {
+    package let bluetoothPowerOn: Duration
+    package let connect: Duration
+    package let controlPointProcedure: Duration
+
+    package init(
+        bluetoothPowerOn: Duration = .seconds(2),
+        connect: Duration = .seconds(10),
+        controlPointProcedure: Duration = .seconds(30),
+    ) {
+        self.bluetoothPowerOn = bluetoothPowerOn
+        self.connect = connect
+        self.controlPointProcedure = controlPointProcedure
+    }
+}
+
 /// Entry point for discovering CSCS (Cycling Speed and Cadence Service) sensors.
 ///
 /// Create a `Scanner`, call ``scan()`` to receive ``DiscoveredSensor`` values, then
 /// connect to read live measurements. The library is not MainActor-bound; update UI on
 /// the main actor in your app.
 public struct Scanner: Sendable {
-    private static let poweredOnTimeoutNanoseconds: UInt64 = 2_000_000_000
-
     private let central: any BluetoothCentral
+    private let timeouts: Timeouts
 
     /// Client entry point. Production dependencies are wired here.
+    #if canImport(CoreBluetooth)
     public init() {
         self.init(central: CoreBluetoothCentral())
     }
+    #endif
 
     /// Test and same-package injection only.
-    package init(central: any BluetoothCentral) {
+    package init(central: any BluetoothCentral, timeouts: Timeouts = Timeouts()) {
         self.central = central
+        self.timeouts = timeouts
     }
 
     /// Scans for CSCS-capable sensors filtered to service UUID `0x1816`.
@@ -31,7 +49,7 @@ public struct Scanner: Sendable {
 
         return AsyncStream { continuation in
             let scanTask = Task {
-                guard await Self.waitForPoweredOn(central: central) else {
+                guard await Self.waitForPoweredOn(central: central, timeouts: timeouts) else {
                     continuation.finish()
                     return
                 }
@@ -41,15 +59,11 @@ public struct Scanner: Sendable {
 
                 var seenIDs: Set<UUID> = []
 
-                for await event in discoveries {
-                    guard !Task.isCancelled else { break }
-                    guard let sensor = DiscoveredSensorMapper.map(event, central: central) else { continue }
+                for await event in discoveries where event.serviceUUIDs.contains(CSCS.serviceUUID) {
+                    let sensor = DiscoveredSensor(event, central: central, timeouts: timeouts)
                     guard seenIDs.insert(sensor.id).inserted else { continue }
                     continuation.yield(sensor)
                 }
-
-                await central.stopScanning()
-                continuation.finish()
             }
 
             continuation.onTermination = { _ in
@@ -61,10 +75,10 @@ public struct Scanner: Sendable {
         }
     }
 
-    private static func waitForPoweredOn(central: any BluetoothCentral) async -> Bool {
+    private static func waitForPoweredOn(central: any BluetoothCentral, timeouts: Timeouts) async -> Bool {
         let unavailableStates: Set<BluetoothState> = [.unsupported, .unauthorized, .poweredOff]
 
-        let initialState = await central.currentState
+        let (stateUpdates, initialState) = await central.stateSubscriptionSnapshot()
         if initialState == .poweredOn {
             return true
         }
@@ -74,7 +88,6 @@ public struct Scanner: Sendable {
 
         return await withTaskGroup(of: Bool.self) { group in
             group.addTask {
-                let stateUpdates = await central.stateUpdates
                 for await state in stateUpdates {
                     if state == .poweredOn {
                         return true
@@ -87,7 +100,7 @@ public struct Scanner: Sendable {
             }
 
             group.addTask {
-                try? await Task.sleep(nanoseconds: poweredOnTimeoutNanoseconds)
+                try? await Task.sleep(for: timeouts.bluetoothPowerOn)
                 return await central.currentState == .poweredOn
             }
 

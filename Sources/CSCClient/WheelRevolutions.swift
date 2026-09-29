@@ -1,19 +1,43 @@
 internal import CSCWire
 import Foundation
 
+/// Instantaneous speed from a CSCS sensor, as ``Measurement`` in ``UnitSpeed``.
+public typealias Speed = Measurement<UnitSpeed>
+
+/// A wheel rotation delta between two CSC measurement notifications.
+///
+/// `deltaDistance` is derived from revolution count and the client-managed
+/// ``WheelRevolutions/wheelCircumference`` at emission time. `deltaTime` comes
+/// from CSC last-wheel-event timestamps (1/1024 s resolution), not BLE arrival time.
+public struct WheelSample: Sendable, Equatable {
+    /// Distance traveled during this interval, always in meters.
+    public let deltaDistance: Measurement<UnitLength>
+
+    /// Elapsed time between CSC wheel event timestamps for this interval.
+    public let deltaTime: Measurement<UnitDuration>
+}
+
 /// Live wheel revolution measurements from a connected CSCS sensor.
 public final class WheelRevolutions: Sendable {
-    package static let defaultWheelCircumference = Measurement(value: 2.105, unit: UnitLength.meters)
+    static let defaultWheelCircumference = Measurement(value: 2.105, unit: UnitLength.meters)
 
     private let speedBroadcaster = StreamBroadcaster<Speed>()
     private let wheelSampleBroadcaster = StreamBroadcaster<WheelSample>()
-    private let stateBox: MeasurementStateBox
-    private let controlPointSession: CSCControlPointSession
+    private let controlPoint: ControlPoint?
+    private let lock = NSLock()
+    private nonisolated(unsafe) var circumference = defaultWheelCircumference
+    private nonisolated(unsafe) var baseline = RevolutionBaseline<UInt32>()
 
     /// Wheel circumference used for speed calculation. Client-managed; not persisted by the library.
     public var wheelCircumference: Measurement<UnitLength> {
-        get { stateBox.readWheelCircumference() }
-        set { stateBox.writeWheelCircumference(newValue) }
+        get {
+            lock.withLock { circumference }
+        }
+        set {
+            lock.withLock {
+                circumference = newValue
+            }
+        }
     }
 
     /// Live speed stream. Emits ``Speed`` values while connected. The stream finishes on disconnect.
@@ -30,12 +54,31 @@ public final class WheelRevolutions: Sendable {
         }
     }
 
-    package init(
-        stateBox: MeasurementStateBox,
-        controlPointSession: CSCControlPointSession,
-    ) {
-        self.stateBox = stateBox
-        self.controlPointSession = controlPointSession
+    init(controlPoint: ControlPoint?) {
+        self.controlPoint = controlPoint
+    }
+
+    func receive(revolutions: UInt32, eventTime: UInt16) async {
+        let sample: WheelSample? = lock.withLock {
+            guard let delta = baseline.delta(revolutions: revolutions, eventTime: eventTime) else {
+                return nil
+            }
+            let circumferenceMeters = circumference.converted(to: .meters).value
+            return Self.sample(
+                revolutions: delta.revolutions,
+                seconds: delta.seconds,
+                circumferenceMeters: circumferenceMeters,
+            )
+        }
+
+        guard let sample else {
+            return
+        }
+
+        let speedMetersPerSecond = sample.deltaDistance.converted(to: .meters).value
+            / sample.deltaTime.converted(to: .seconds).value
+        await speedBroadcaster.yield(Measurement(value: speedMetersPerSecond, unit: .metersPerSecond))
+        await wheelSampleBroadcaster.yield(sample)
     }
 
     /// Sets the sensor's cumulative wheel revolutions via the SC Control Point.
@@ -43,25 +86,35 @@ public final class WheelRevolutions: Sendable {
     /// Success clears the local wheel delta baseline so the next measurement establishes a new baseline.
     /// Throws ``ControlPointError/controlPointUnavailable`` when SC Control Point was not discovered.
     public func setCumulativeRevolutions(_ value: UInt32) async throws {
-        let stateBox = stateBox
-        try await controlPointSession.perform(
-            request: CSCControlPointRequest.setCumulativeValue(value).encode(),
-            expectedRequestOpcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
-        ) { _ in
-            stateBox.resetWheelBaseline()
+        guard let controlPoint else {
+            throw ControlPointError.controlPointUnavailable
+        }
+        _ = try await controlPoint.perform(.setCumulativeValue(value))
+        lock.withLock {
+            baseline.reset()
         }
     }
 
-    package func finishStreams() async {
+    package static func sample(
+        revolutions: UInt32,
+        seconds: Double,
+        circumferenceMeters: Double,
+    ) -> WheelSample? {
+        let speed = Double(revolutions) * circumferenceMeters / seconds
+        guard speed <= 50 else {
+            return nil
+        }
+        return WheelSample(
+            deltaDistance: Measurement(
+                value: Double(revolutions) * circumferenceMeters,
+                unit: .meters,
+            ),
+            deltaTime: Measurement(value: seconds, unit: .seconds),
+        )
+    }
+
+    func finishStreams() async {
         await speedBroadcaster.finish()
         await wheelSampleBroadcaster.finish()
-    }
-
-    package func yieldSpeed(_ speed: Speed) async {
-        await speedBroadcaster.yield(speed)
-    }
-
-    package func yieldWheelSample(_ sample: WheelSample) async {
-        await wheelSampleBroadcaster.yield(sample)
     }
 }
