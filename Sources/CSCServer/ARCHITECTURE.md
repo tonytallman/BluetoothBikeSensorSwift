@@ -43,10 +43,12 @@ graph TD
 ```
 
 - **`ServerBuilder`** — a type-state builder (`ServerWheel`/`ServerCrank`/`ServerLocation`
-  marker generics) that pushes "static and multiple locations are mutually exclusive" to compile
-  time. "At least one revolution source" is *not* type-state enforced: `build()` has no
-  constraint requiring wheel or crank to be selected, and the underlying requirement is a runtime
-  `precondition` inside `ServerConfiguration`'s initializer instead.
+  marker generics) that pushes "static and multiple locations are mutually exclusive" and "at least
+  one revolution source" to compile time: `build()` exists only for wheel-only, crank-only, and
+  wheel-and-crank configurations (at any location marker state); a builder with neither wheel nor
+  crank selected has no `build()`. `ServerConfiguration`'s initializer still
+  `precondition`s "at least one revolution source" as a backstop because the markers are not
+  stored on the optional revolution fields.
 - **`ServerConfiguration`** (`Internal/`) — the one place that turns a finished builder
   configuration into the pieces a `Server` needs: computes the CSC Feature bits and the fixed
   characteristic inventory. Everything decided here is fixed for that `Server`'s lifetime —
@@ -332,8 +334,8 @@ exercises `ServerSession`'s write handling, the outbound pump, and often `Server
   now owns an entirely independent `ServerLifecycle`, and multiple servers may start, run, and
   stop concurrently. If a future requirement reintroduces a shared-resource constraint (e.g. a
   hardware limitation), it belongs at this layer, not assumed away.
-- **"At least one revolution source" is a runtime precondition, not a type-state guarantee.**
-  `ServerBuilder.build()` is unconstrained by `Wheel`/`Crank`, unlike `staticSensorLocation`/
-  `multipleSensorLocations`, which the type-state markers do make mutually exclusive at compile
-  time. A caller that never selects wheel or crank data will not fail to compile; it will crash
-  via `precondition` inside `ServerConfiguration.init` at `build()` time instead.
+- **"At least one revolution source" is type-state enforced on `build()`.** Only wheel-only,
+  crank-only, and wheel-and-crank `ServerBuilder` specializations expose `build()` (for any
+  `ServerLocation` marker), alongside the existing compile-time rules for static vs. multiple
+  locations. `ServerConfiguration.init` still `precondition`s the same requirement as defense in
+  depth because the wheel/crank markers are not reflected in the stored optionals.
