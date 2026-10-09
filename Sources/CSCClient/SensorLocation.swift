@@ -81,8 +81,6 @@ public struct SensorLocation: Sendable, Hashable {
             }
         }
 
-        /// GATT Sensor Location assigned numbers 0...16. Any other byte is ``Kind/reserved(_:)``,
-        /// whose ``Kind/displayName`` is `Unknown (n)`.
         init(assignedNumber: UInt8) {
             switch assignedNumber {
             case 0: self = .other
@@ -119,14 +117,12 @@ public struct SensorLocation: Sendable, Hashable {
 }
 
 /// Multiple sensor locations supported by a connected CSCS sensor.
-/// Multiple sensor locations for one connection.
 ///
 /// `current` is guarded by `lock` and stored `nonisolated(unsafe)` so this `Sendable` class
 /// can be read from any thread while ``update(_:)`` writes it. The lock is not held across
 /// the control-point await.
 public final class MultipleSensorLocations: Sendable {
     private let lock = NSLock()
-
     /// This connection's ``ControlPoint``. ``WheelRevolutions`` holds the same actor when the
     /// connection also has wheel data. Exposed so tests can ``ControlPoint/waitUntilIdle()``
     /// after a procedure that timed out with its write still outstanding.

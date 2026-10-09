@@ -32,9 +32,9 @@ public enum ControlPointError: Error, Sendable, Equatable {
 /// One SC Control Point procedure at a time for one peripheral.
 ///
 /// ``perform(_:)`` writes the request, then waits for the matching indication on
-/// ``BluetoothCentral/events`` or for `timeout`. Every helper captures `procedure` at start.
-/// A late timeout, indication, or write completion whose id no longer matches is ignored, so
-/// it cannot complete or clear the next procedure.
+/// ``BluetoothCentral/events`` or for `timeout`. Each helper captures `procedure` when it
+/// starts. A timeout, write completion, or ``resolve(id:result:)`` whose id no longer matches
+/// does not complete or clear the current procedure.
 ///
 /// `isBusy` is the gate callers see (``ControlPointError/procedureInProgress``). A failure
 /// leaves it set until `writeInFlight` is also clear, so a timeout that fires while the write
@@ -50,24 +50,18 @@ package actor ControlPoint {
     /// Set when ``perform(_:)`` accepts a procedure. Cleared when that procedure's indication
     /// succeeds, or when a failed procedure's write has also finished.
     private var isBusy = false
-
-    /// Bumped with wrapping add on every ``perform(_:)`` so a long-lived connection cannot
-    /// trap. Helpers compare against this. A wrapped id could alias a helper that is still
-    /// running; that collision is accepted as unreachable.
+    /// Wrapping add after the `isBusy` guard passes. A rejected ``perform(_:)`` does not bump
+    /// it. Helpers compare against this. A wrapped id could alias a still-running helper; that
+    /// collision is accepted as unreachable.
     private var procedure: UInt = 0
-
     /// The single waiter for the in-flight indication. Cleared when ``resolve(id:result:)``
-    /// resumes it. A second indication, or a late timeout, sees `nil` or a mismatched id and
-    /// is dropped.
+    /// resumes it. A later call for this procedure sees `nil` and returns.
     private var waiter: CheckedContinuation<Data, Error>?
-
     /// Listener and timeout tasks for the current procedure. Cancelled when it ends.
     private var helpers: [Task<Void, Never>] = []
-
     /// True from ``start(id:requestData:events:)`` until ``writeFinished(procedureID:)`` for
     /// that same id. A failed resolve leaves `isBusy` set while this is true.
     private var writeInFlight = false
-
     /// Parked ``waitUntilIdle()`` callers. Resumed only when `isBusy` and `writeInFlight` are
     /// both false.
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
@@ -118,8 +112,7 @@ package actor ControlPoint {
     }
 
     /// Test hook. Returns immediately when no procedure and no write are outstanding; otherwise
-    /// parks until both are clear. Rechecks inside the continuation so a procedure that finished
-    /// as the waiter was recorded is not left parked.
+    /// parks until both are clear.
     package func waitUntilIdle() async {
         if !isBusy, !writeInFlight {
             return
@@ -130,8 +123,7 @@ package actor ControlPoint {
         }
     }
 
-    /// Arms the listener and the timeout, then writes. `writeInFlight` is set before either
-    /// task is created so a fast failure cannot observe a procedure that looks idle.
+    /// Sets `writeInFlight`, then arms the listener, the timeout, and the write.
     private func start(id: UInt, requestData: Data, events: AsyncStream<CentralEvent>) {
         writeInFlight = true
 
@@ -245,8 +237,9 @@ package actor ControlPoint {
     /// caller's continuation until this actor turn ends, so ``writeFinished(procedureID:)`` on
     /// the write-failure path still runs before the caller can start another procedure.
     ///
-    /// A stale id returns without touching the current waiter. That is what drops an indication
-    /// that arrives after ``ControlPointError/timedOut``.
+    /// A mismatched id returns without resolving or clearing the current procedure. The next
+    /// procedure's listener captured the new id and accepts a late indication when the opcode
+    /// matches. With no new procedure, the drop is `waiter == nil` and the cancelled listener.
     private func resolve(id: UInt, result: Result<Data, Error>) {
         guard id == procedure, let waiter else {
             return

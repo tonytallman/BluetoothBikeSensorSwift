@@ -6,15 +6,17 @@ import Foundation
 ///
 /// Delegate callbacks arrive on `queue` (`com.bluetoothbikesensor.central`), not on this actor.
 /// ``CentralDelegateBridge`` turns each callback into a ``CentralDelegateEvent`` and yields it
-/// on one FIFO stream. A single task drains that stream into ``handle(_:)``, which is what keeps
-/// callback order. Direct `CBCentralManager` and `CBPeripheral` calls run inside `queue.sync`
-/// from actor methods. The actor is blocked for the duration of `sync`, and the serial queue
-/// cannot deliver another callback until `sync` returns, so commands and callbacks do not
-/// interleave.
+/// on one FIFO stream. A single task drains that stream into ``handle(_:)``, which is the only
+/// code that yields on the three broadcasters, so those streams stay in callback order.
+///
+/// `CBCentralManager` and `CBPeripheral` calls run inside `queue.sync` from actor methods.
+/// `sync` keeps another delegate callback from running on `queue` until it returns. ``handle(_:)``
+/// and those commands both suspend at `await`, so a drained event can run between two commands. Cancel teardown uses the ``PeripheralConnectionSnapshot``
+/// taken in the callback, not a later read of `CBPeripheral.state`.
 ///
 /// In-flight GATT and connection calls each hold one continuation in `pending`, keyed by
 /// ``Request``. A second call with the same key fails immediately instead of queueing.
-/// Connect cancellation is separate from that map: the waiter is failed as soon as the task
+/// Connect cancellation is separate from that map: the waiter is failed when the connect task
 /// is cancelled, and ``ConnectCancelCoordinator`` remembers that the radio may still be
 /// tearing the link down.
 actor CoreBluetoothCentral: BluetoothCentral {
@@ -24,24 +26,19 @@ actor CoreBluetoothCentral: BluetoothCentral {
     private let delegateEvents: AsyncStream<CentralDelegateEvent>.Continuation
 
     private var state: BluetoothState = .unknown
-
     /// Continuations for calls that have not yet seen their callback. Connect, disconnect, and
     /// the two discovery calls are keyed by peripheral only. Read, write, and set-notify also
     /// include the service and characteristic.
     private var pending: [Request: CheckedContinuation<Data, Error>] = [:]
-
     /// Peripherals for which `CBCentralManager.connect` has been issued and has not yet
     /// completed, failed, or been cancelled. A `didConnect` whose id is absent here is ignored,
     /// so a late callback cannot complete a connect that already returned or was cancelled.
     private var pendingConnect: Set<UUID> = []
-
     private var connectCancel = ConnectCancelCoordinator()
-
     /// Session id passed to the `startScanning` that last turned the radio on. `0` means this
     /// central is not scanning. A `stopScanning` whose session does not match leaves the radio
     /// alone.
     private var activeScanSession: UInt64 = 0
-
     /// Highest session id for which `stopScanning` has been asked. `startScanning` ignores a
     /// session at or below this, which is how a stop that wins the race with its own start
     /// never turns the radio on, and how a stale start cannot restart a scan that already stopped.
@@ -51,9 +48,6 @@ actor CoreBluetoothCentral: BluetoothCentral {
     private let discoveryBroadcaster = StreamBroadcaster<DiscoveredPeripheral>()
     private let eventsBroadcaster = StreamBroadcaster<CentralEvent>()
 
-    /// Wires the delegate bridge to a FIFO stream drained by one actor-isolated task, so
-    /// callbacks that fire on `queue` are serialized onto the actor in arrival order before
-    /// ``handle(_:)`` touches any state.
     init() {
         let (stream, continuation) = AsyncStream.makeStream(of: CentralDelegateEvent.self)
         let bridge = CentralDelegateBridge(events: continuation)
@@ -324,8 +318,8 @@ actor CoreBluetoothCentral: BluetoothCentral {
     }
 
     /// A nil `errorReason` completes the request successfully. A string fails it as
-    /// ``BluetoothCentralError/connectionFailed``. Used for discovery and notify callbacks,
-    /// whose CoreBluetooth errors arrive as text rather than an ATT code.
+    /// ``BluetoothCentralError/connectionFailed``. Used for discovery, read, and notify
+    /// callbacks, whose CoreBluetooth errors arrive as text rather than an ATT code.
     private func complete(_ request: Request, id: UUID, errorReason: String?) {
         if let errorReason {
             complete(request, throwing: BluetoothCentralError.connectionFailed(id, reason: errorReason))
@@ -379,7 +373,7 @@ actor CoreBluetoothCentral: BluetoothCentral {
         }
     }
 
-    /// Called on `queue` from ``connect(id:)``.
+    /// Called on `queue` from ``connect(id:)`` and ``issueConnectIfPending(id:)``.
     ///
     /// If a cancel is still pending, returns without calling `connect` and without completing
     /// `request`. The continuation stays in `pending` until teardown retries it. If the
@@ -410,13 +404,14 @@ actor CoreBluetoothCentral: BluetoothCentral {
         centralManager.cancelPeripheralConnection(peripheral)
     }
 
-    /// Fails the in-flight connect waiter, if one is still pending, and asks the radio to drop
-    /// the link when it is not already `.disconnected`.
+    /// If a connect continuation is still in `pending`, removes it, resumes it with
+    /// `CancellationError`, and asks the radio to drop the link when the peripheral is not
+    /// already `.disconnected`.
     ///
-    /// The waiter is removed from `pending` and resumed with `CancellationError` before this
-    /// returns, so the caller unblocks while the peripheral may still be `.connecting` or
-    /// `.connected`. ``ConnectCancelCoordinator`` stays set in that case. A callback that
-    /// arrives with no waiter left (the connect already completed) does nothing.
+    /// Returns without touching the radio when no connect waiter is pending, which is how an
+    /// `onCancel` task behaves after the connect has already completed. When a waiter was
+    /// pending, the caller unblocks while the peripheral may still be `.connecting` or
+    /// `.connected`, and ``ConnectCancelCoordinator`` stays set until teardown finishes.
     private func cancelConnect(id: UUID) {
         let request = Request.connect(id)
         guard let continuation = pending.removeValue(forKey: request) else {
@@ -491,8 +486,8 @@ actor CoreBluetoothCentral: BluetoothCentral {
 
     /// Runs ``ConnectCancelCoordinator/teardownOutcome(for:snapshot:)`` for a fail or disconnect
     /// that arrived while a cancel was outstanding, and performs the cancel-again or
-    /// retry-connect side effect. Returns without yielding ``CentralEvent/disconnected``; that
-    /// event is for a link drop the client did not ask for.
+    /// retry-connect side effect. Does not yield ``CentralEvent/disconnected``: a cancelled
+    /// connect never became a connected sensor, so nothing is listening for that id.
     private func handleConnectCancelTeardown(
         id: UUID,
         peripheralState: PeripheralConnectionSnapshot,
@@ -553,15 +548,13 @@ actor CoreBluetoothCentral: BluetoothCentral {
             .first(where: { $0.uuid.foundationUUID == characteristicUUID })
     }
 
-    /// Applies one delegate callback. This is the only writer of connection bookkeeping and the
-    /// only yielder on the three broadcasters, so those streams stay in callback order.
+    /// Applies one delegate callback. This is the only yielder on the three broadcasters.
     ///
     /// `.poweredOff`, `.resetting`, `.unauthorized`, and `.unsupported` clear every
     /// cancel-pending id and fail in-flight connects before the state is yielded. A
     /// `didFailToConnect` or `didDisconnect` whose peripheral is still `.connected`, and whose
     /// id is not pending cancel, is ignored so a stale callback cannot tear down a live link.
-    /// When a cancel is pending, those two callbacks go through ``handleConnectCancelTeardown``
-    /// and do not fail the replacement connect or emit ``CentralEvent/disconnected``.
+    /// When a cancel is pending, those two callbacks go through ``handleConnectCancelTeardown``.
     private func handle(_ event: CentralDelegateEvent) async {
         switch event {
         case let .stateUpdated(newState):
@@ -772,8 +765,7 @@ private enum PeripheralConnectionSnapshot: Sendable {
     }
 }
 
-/// What ``CentralDelegateBridge`` can observe, as `Sendable` values with no CoreBluetooth
-/// types. One task delivers these to ``CoreBluetoothCentral/handle(_:)`` in yield order.
+/// What ``CentralDelegateBridge`` can observe, as `Sendable` values with no CoreBluetooth types.
 private enum CentralDelegateEvent: Sendable {
     case stateUpdated(BluetoothState)
     case discovered(DiscoveredPeripheral)
@@ -806,11 +798,8 @@ private enum CentralDelegateEvent: Sendable {
 
 /// `CBCentralManager` / `CBPeripheral` delegate. Callbacks run on the central's serial queue.
 ///
-/// The peripheral map is lock-protected because actor methods read it from `queue.sync` and
-/// discovery writes it from the delegate callback on that same queue; the lock covers reads
-/// that happen off the queue as well (`peripheral(for:)` from the actor before `sync`).
-/// Events are yielded onto the FIFO stream and not applied here. The bridge retains discovered
-/// peripherals so CoreBluetooth does not drop them before connect.
+/// The peripheral map is locked because the actor reads it off `queue` through `peripheral(for:)`.
+/// Discovered peripherals are inserted and never removed.
 ///
 /// Failure callbacks copy CoreBluetooth's error text into a reason string. ATT write errors in
 /// the ATT domain keep the numeric code when it fits in `UInt8` and is not success, so CSC

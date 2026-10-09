@@ -10,7 +10,8 @@ public enum DisconnectError: Error, Sendable, Equatable {
     ///
     /// `reason` is diagnostic text, not user-facing copy.
     case failed(reason: String)
-    /// The central no longer has this peripheral. A peripheral that is already
+    /// The id is unknown to the central, or a test double was scripted with
+    /// ``BluetoothCentralError/peripheralNotFound``. A peripheral that is already
     /// `.disconnected` but still known returns success instead of this case.
     case alreadyDisconnected
 }
@@ -51,7 +52,7 @@ public enum RevolutionData: Sendable {
 /// ``WheelRevolutions/wheelCircumference`` before or during streaming so speed matches the wheel.
 ///
 /// Releasing the instance finishes the measurement streams. It does not disconnect the radio —
-/// ``deinit`` cannot await, so it only cancels the measurement task. Call ``disconnect()`` to
+/// `deinit` cannot await, so it only cancels the measurement task. Call ``disconnect()`` to
 /// drop the link. An unexpected disconnect also finishes the streams and does not throw.
 public final class ConnectedSensor: Sendable {
     /// Supported revolution data and live measurement streams.
@@ -222,10 +223,10 @@ public final class ConnectedSensor: Sendable {
     ///
     /// Cancels the measurement loop and finishes speed, cadence, and sample streams before
     /// touching the radio, so consumers unblock even if notify teardown is slow. Disabling
-    /// notifications is best-effort: errors are ignored, and a peripheral that has already
-    /// dropped fails that call immediately. If the central no longer knows the peripheral, this
-    /// throws ``DisconnectError/alreadyDisconnected``. A peripheral that is already disconnected
-    /// but still known is success.
+    /// notifications is best-effort: errors are ignored, and a peripheral that is no longer
+    /// `.connected` fails that call immediately. An unknown id, or a test double scripted with
+    /// ``BluetoothCentralError/peripheralNotFound``, throws ``DisconnectError/alreadyDisconnected``.
+    /// A peripheral that is already `.disconnected` but still known is success.
     public func disconnect() async throws -> DiscoveredSensor {
         eventLoop.cancel()
         await finishStreams()
@@ -349,8 +350,8 @@ public final class ConnectedSensor: Sendable {
         return response.parameter.map { SensorLocation(assignedNumber: $0) }
     }
 
-    /// ``BluetoothCentralError/peripheralNotFound`` means the central already dropped the
-    /// peripheral, which ``disconnect()`` reports as ``DisconnectError/alreadyDisconnected``.
+    /// ``BluetoothCentralError/peripheralNotFound`` is an unknown id, or a scripted fake error.
+    /// ``disconnect()`` reports that as ``DisconnectError/alreadyDisconnected``.
     /// Every other central error becomes ``DisconnectError/failed(reason:)`` with diagnostic text.
     private static func disconnectError(from error: BluetoothCentralError) -> DisconnectError {
         switch error {
@@ -376,7 +377,7 @@ public final class ConnectedSensor: Sendable {
     /// id's CSC Measurement values.
     ///
     /// An unexpected `.disconnected` for this id finishes the measurement streams and returns.
-    /// Cancellation, from ``disconnect()`` or ``deinit``, does the same on the way out, including
+    /// Cancellation, from ``disconnect()`` or `deinit`, does the same on the way out, including
     /// when the loop is parked waiting for the next event. ``disconnect()`` also finishes the
     /// streams itself; finishing twice is safe.
     private static func runMeasurementLoop(
@@ -459,8 +460,6 @@ public final class ConnectedSensor: Sendable {
     }
 }
 
-/// Feature-bit names used at connect. Wheel support is the wheel-revolution bit; cadence is
-/// the crank-revolution bit.
 private extension CSCFeature {
     var hasSpeed: Bool { contains(.wheelRevolutionData) }
     var hasCadence: Bool { contains(.crankRevolutionData) }

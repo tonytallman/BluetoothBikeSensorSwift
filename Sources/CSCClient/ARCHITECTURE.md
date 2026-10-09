@@ -98,32 +98,37 @@ Three actors own the mutable protocol state: `CoreBluetoothCentral` (or `FakeBlu
 `ControlPoint`, and every `StreamBroadcaster`. `Scanner`, `DiscoveredSensor`, and the value types
 are `Sendable` and hold no mutable shared state of their own.
 
-Two long-running unstructured tasks sit beside those actors:
+Three long-running unstructured tasks sit beside those actors:
 
+- `CoreBluetoothCentral` drains delegate events into `handle(_:)` on one task.
 - `Scanner.scan()` runs its power wait, discovery loop, and dedupe inside the stream's task.
   Cancelling the stream cancels that task. `onTermination` cannot await, so `stopScanning` is
-  scheduled on a detached task. The session id makes a late stop safe.
+  scheduled with `Task { }`. The session id makes a late stop safe.
 - `ConnectedSensor` runs one measurement loop task. `deinit` can only cancel that task. It
   cannot await `disconnect()`, so releasing a connected sensor finishes measurement streams and
   leaves the radio link up until someone calls `disconnect()`.
 
 CoreBluetooth delegate callbacks arrive on `CoreBluetoothCentral`'s serial queue
-(`com.bluetoothbikesensor.central`), not on the actor. `CentralDelegateBridge` (a lock-protected
-`NSObject`) retains discovered `CBPeripheral`s and yields `Sendable` events onto one FIFO stream.
-One task drains that stream into `handle(_:)`, which is the only place that mutates connection
-bookkeeping and the only place that yields to the three broadcasters. That is what preserves
-callback order. Manager and peripheral calls run inside `queue.sync` from actor methods. The
-actor is blocked for the duration, and the serial queue cannot deliver another callback until
-`sync` returns, so a command and a callback do not interleave.
+(`com.bluetoothbikesensor.central`), not on the actor. `CentralDelegateBridge` retains discovered
+`CBPeripheral`s (inserted, never removed) and yields `Sendable` events onto one FIFO stream.
+`handle(_:)` is the only code that yields on the three broadcasters, so those streams stay in
+callback order. `pending`, `pendingConnect`, and `ConnectCancelCoordinator` are also written from
+`connect`, `connectPeripheral`, `cancelConnect`, and `issueConnectIfPending`. Manager and
+peripheral calls run inside `queue.sync` from actor methods. `sync` keeps another delegate
+callback from running on that queue until it returns. `handle` and those commands both suspend
+at `await`, so a drained event can run between two commands. Cancel
+teardown uses the `PeripheralConnectionSnapshot` taken in the callback, not a later read of
+`CBPeripheral.state`.
 
 `deinit` of the central finishes the delegate stream and does not call `queue.sync` (that could
 block teardown on the manager queue) and does not resume in-flight continuations. A discovered
 or connected sensor retains the central for the lifetime of an in-flight connect or GATT call.
 
 `WheelRevolutions`, `CrankRevolutions`, and `MultipleSensorLocations` are `Sendable` classes, not
-actors. Circumference, baselines, and `current` location are `nonisolated(unsafe)` and guarded by
-an `NSLock`, because the measurement loop and arbitrary caller threads both touch them, and the
-lock must not be held across a `StreamBroadcaster` or `ControlPoint` await. `ScanSessionID` uses
+actors. Circumference, the two baselines, and `current` location are `nonisolated(unsafe)` behind
+an `NSLock` that is not held across a `StreamBroadcaster` or `ControlPoint` await. Callers write
+wheel circumference, and `setCumulativeRevolutions` resets the wheel baseline. Only the
+measurement loop touches the crank baseline. `update(_:)` writes `current`. `ScanSessionID` uses
 the same lock pattern for a different reason: `issue()` runs outside the central actor, before
 `startScanning` / `stopScanning`.
 
@@ -152,7 +157,7 @@ completion arriving after the next `perform` has already bumped the procedure id
    `scan()` after the user answers. This is intentionally unlike `CSCServer`, which waits
    through `.unknown` with no deadline.
 2. If the stream was cancelled during that wait, or while subscribing to `discoveries`, return
-   without `startScanning`. `onTermination` has already recorded this session as stopped, so a
+   without `startScanning`. `onTermination` has already asked this session to stop, so a
    start that loses the race never turns the radio on.
 3. Subscribe to `discoveries`, then `startScanning` for `0x1816`. The production central
    disallows duplicate discoveries; iOS may also coalesce background discoveries. The extra
@@ -179,8 +184,8 @@ central, and each gets its own discovery subscription.
 
 1. If `currentState` is anything other than `.poweredOn`, throw `ConnectError.notPoweredOn`.
    Connect does not wait for power.
-2. Race `BluetoothCentral.connect` against the 10-second deadline. The first result wins and
-   the other task is cancelled. `ConnectError.timeout` cancels the connect task. The production
+2. Race `BluetoothCentral.connect` against `timeouts.connect` (10 seconds by default). The first
+   result wins and the other task is cancelled. `ConnectError.timeout` cancels the connect task. The production
    central's cancellation handler schedules `cancelConnect` on the actor. That method resumes
    the connect continuation with `CancellationError` and, if the peripheral is not already
    `.disconnected`, calls `cancelPeripheralConnection` and sets the cancel-pending flag.
@@ -216,8 +221,9 @@ that fails.
 
 `disconnect()` cancels the loop and finishes those streams before it touches the radio, so
 consumers unblock even when notify teardown is slow. Disabling notifications is best-effort.
-A peripheral the central has already dropped makes `disconnect()` throw
-`DisconnectError.alreadyDisconnected`. A peripheral that is already `.disconnected` but still
+An unknown id, or a test double scripted with `BluetoothCentralError.peripheralNotFound`, makes
+`disconnect()` throw `DisconnectError.alreadyDisconnected`. Production inserts discovered
+peripherals and never removes them. A peripheral that is already `.disconnected` but still
 known is success, and the production central does not emit another `.disconnected` event for
 that call. The returned `DiscoveredSensor` is the one `connect()` was given, so the caller can
 connect again.
@@ -249,9 +255,9 @@ sequenceDiagram
 
 `RevolutionBaseline` stores the previous cumulative count and last-event time. The first sample
 only seeds it. Later samples use wrapping subtraction. Event time is `UInt16` at 1/1024 second
-and wraps every 64 seconds, so a silent gap longer than that looks like a short interval. One
-revolution across that short interval is still under the speed cap, and a sample is emitted with
-that short `deltaTime`. The library does not reconstruct wall-clock time. A zero event-time
+and wraps every 64 seconds, so a silent gap longer than that yields a short `deltaTime`. The
+speed cap may or may not drop that sample, depending on the revolution count. The library does
+not reconstruct wall-clock time. A zero event-time
 delta emits nothing and still advances the baseline, so the next interval starts at the
 duplicate.
 
@@ -276,11 +282,13 @@ Location (and Request Supported Sensor Locations during connect) all go through 
 
 1. If `isBusy` is set, throw `ControlPointError.procedureInProgress` without writing.
 2. Bump `procedure` (wrapping add) and capture it. Subscribe to `events` before the write.
-3. Arm a listener and a timeout task, set `writeInFlight`, and write the request with response.
+3. Set `writeInFlight`, then arm the listener, the timeout, and the write.
 4. The listener resolves on this peripheral's control-point indication, or fails the procedure
    on this peripheral's disconnect. Measurement traffic on the same stream is ignored.
-5. `resolve` ignores a stale procedure id. That drops an indication that shows up after
-   `.timedOut`, so the next procedure cannot consume it.
+5. `resolve` ignores a stale procedure id, so an old listener, timer, or write completion cannot
+   resolve or clear the current procedure. The next procedure's listener captured the new id and
+   accepts a late indication when the opcode matches. With no new procedure, the drop is an empty
+   waiter and the cancelled listener.
 6. Success clears `isBusy` even if the write call has not returned. The next `perform` may
    start. The previous write's later completion sees a mismatched id and does not clear the new
    procedure's `writeInFlight`.
@@ -340,8 +348,8 @@ never `@testable import` — and reach test-only surface through `package` visib
   timeouts and overlap without real Bluetooth timing. Scan-session ids match production. The
   fake does not model cancel-pending, the powered-on check inside `connect`, or the
   already-connected short circuit. `disconnect` on the fake yields `.disconnected` even when
-  the id was not connected; production returns early and does not yield. `waitUntil(_:)` is the
-  single generic park, same idea as the server fake.
+  the id was not connected; production returns early and does not yield. `waitUntil(_:)` parks
+  on a predicate. Hung connect, write, and set-notify are separate one-shot parks.
 - **`Timeouts`** on `Scanner.init(central:timeouts:)` shortens the 2-second, 10-second, and
   30-second deadlines so tests do not sleep for the production budgets.
 - **`ConnectCancelCoordinator`** is tested as a value. The production central is the

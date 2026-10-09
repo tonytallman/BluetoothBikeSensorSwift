@@ -3,10 +3,10 @@ import Foundation
 
 /// Errors thrown by ``DiscoveredSensor/connect()``.
 public enum ConnectError: Error, Sendable, Equatable {
-    /// Bluetooth was not `.poweredOn` when connect was attempted. Connect does not wait for
-    /// power; `.unknown`, `.unauthorized`, `.unsupported`, and `.poweredOff` all take this case.
+    /// Bluetooth was not `.poweredOn` when connect was attempted. Connect does not wait for power.
     case notPoweredOn
-    /// The link did not come up within 10 seconds. The in-flight connect is cancelled.
+    /// The link did not come up within `timeouts.connect` (10 seconds by default). The in-flight
+    /// connect is cancelled.
     case timeout
     /// The link failed, or connect was cancelled, for a reason other than the cases above.
     ///
@@ -68,9 +68,9 @@ public struct DiscoveredSensor: Sendable {
 
     /// Connects, discovers CSC characteristics, and returns a sensor that is already notifying.
     ///
-    /// Races the link against a 10-second deadline. Whichever finishes first wins and the other
-    /// task is cancelled. A timeout cancels the in-flight connect so the radio does not stay
-    /// connecting, and throws ``ConnectError/timeout``. A cancelled caller surfaces as
+    /// Races the link against `timeouts.connect` (10 seconds by default). Whichever finishes first
+    /// wins and the other task is cancelled. A timeout cancels the in-flight connect so the radio
+    /// does not stay connecting, and throws ``ConnectError/timeout``. A cancelled caller surfaces as
     /// ``ConnectError/failed(reason:)``.
     ///
     /// Does not wait for Bluetooth power. Anything other than `.poweredOn` throws
@@ -112,12 +112,13 @@ public struct DiscoveredSensor: Sendable {
         }
     }
 
-    /// Setup failures that escape ``ConnectedSensor``'s initializer, mapped into ``ConnectError``.
+    /// Fallback for setup failures that escape ``ConnectedSensor``'s initializer.
     ///
-    /// ``ControlPointError`` from Request Supported Sensor Locations becomes
-    /// ``ConnectError/serviceDiscoveryFailed`` because that procedure is part of connect.
+    /// Request Supported Sensor Locations already maps ``ControlPointError`` to
+    /// ``ConnectError/serviceDiscoveryFailed`` before it leaves the initializer. A
+    /// ``ControlPointError`` that still arrives here takes the same case.
     /// ``BluetoothCentralError`` goes through ``BluetoothCentralConnectErrorMapping``. Any other
-    /// error uses its description (`"\(error)"`), which keeps the type and associated values.
+    /// error uses `"\(error)"`.
     private static func mapSetupError(_ error: Error) -> ConnectError {
         if let error = error as? ConnectError {
             return error

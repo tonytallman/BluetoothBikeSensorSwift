@@ -28,9 +28,8 @@ public struct CrankSample: Sendable, Equatable {
 
 /// Live crank revolution measurements from a connected CSCS sensor.
 ///
-/// The baseline sits behind `lock`, and the property is `nonisolated(unsafe)`, for the same
-/// reason as ``WheelRevolutions``: the measurement loop and any caller share this `Sendable`
-/// class, and the lock is not held across the broadcaster awaits.
+/// The baseline is `nonisolated(unsafe)` behind `lock` so this `Sendable` class can store it.
+/// Only the measurement loop touches it. The lock is not held across the broadcaster awaits.
 ///
 /// The first sample only seeds the baseline. A later sample is emitted when the event-time
 /// delta is nonzero and the implied cadence is at most 300 rpm. A faster delta is not emitted,

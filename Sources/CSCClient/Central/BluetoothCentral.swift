@@ -1,6 +1,6 @@
 import Foundation
 
-/// Mirrors `CBManagerState` without depending on CoreBluetooth, so tests and the public client
+/// Mirrors `CBManagerState` without depending on CoreBluetooth, so this package and its tests
 /// share one enum. `.unknown` and `.resetting` are transient. ``Scanner`` waits briefly through
 /// them. `.unsupported`, `.unauthorized`, and `.poweredOff` are terminal for that wait.
 package enum BluetoothState: Sendable, Equatable {
@@ -17,8 +17,9 @@ package enum BluetoothState: Sendable, Equatable {
 package enum BluetoothCentralError: Error, Sendable, Equatable {
     case peripheralNotFound(UUID)
     case notPoweredOn
-    /// The operation failed before a connection existed, or a duplicate in-flight request was
-    /// rejected. `reason` is diagnostic text.
+    /// A failure reported as text: CoreBluetooth error text on any operation (including discovery,
+    /// notify, read, and write on a connected peripheral), or a rejected duplicate request.
+    /// `reason` is diagnostic text. The test double uses this case when a hung write is released.
     case connectionFailed(UUID, reason: String)
     /// The link dropped. `reason` is nil when CoreBluetooth reported no error, which an
     /// intentional disconnect looks like.
@@ -71,7 +72,7 @@ package enum CentralEvent: Sendable, Equatable {
 /// split per peripheral.
 ///
 /// Scan sessions are ordered `UInt64`s from ``ScanSessionID``. `startScanning` is ignored when
-/// `session` is older than the newest session already stopped. `stopScanning` stops the radio
+/// `session` is at or below the newest session already stopped. `stopScanning` stops the radio
 /// only when `session` is the one that last started it.
 package protocol BluetoothCentral: Sendable {
     var stateUpdates: AsyncStream<BluetoothState> { get async }

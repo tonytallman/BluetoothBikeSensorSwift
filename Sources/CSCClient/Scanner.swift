@@ -5,9 +5,8 @@ import Foundation
 ///
 /// Production ``Scanner/init()`` uses the defaults: 2 seconds for Bluetooth to leave `.unknown`
 /// or `.resetting` before a scan finishes empty, 10 seconds for the link to come up, and 30
-/// seconds for one SC Control Point procedure. CSCS bounds procedure duration, and CoreBluetooth
-/// never reports the ATT confirmation for an indication, so that last budget is the client's
-/// own. Tests pass shorter values. Not part of the public API.
+/// seconds for one SC Control Point procedure. Tests pass shorter values. Not part of the
+/// public API.
 package struct Timeouts: Sendable {
     package let bluetoothPowerOn: Duration
     package let connect: Duration
