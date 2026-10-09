@@ -24,19 +24,52 @@ public enum ControlPointError: Error, Sendable, Equatable {
     /// The procedure did not complete before the CSCS timeout elapsed.
     case timedOut
     /// The procedure failed for another reason.
+    ///
+    /// `reason` is diagnostic text, not user-facing copy.
     case failed(reason: String)
 }
 
+/// One SC Control Point procedure at a time for one peripheral.
+///
+/// ``perform(_:)`` writes the request, then waits for the matching indication on
+/// ``BluetoothCentral/events`` or for `timeout`. Every helper captures `procedure` at start.
+/// A late timeout, indication, or write completion whose id no longer matches is ignored, so
+/// it cannot complete or clear the next procedure.
+///
+/// `isBusy` is the gate callers see (``ControlPointError/procedureInProgress``). A failure
+/// leaves it set until `writeInFlight` is also clear, so a timeout that fires while the write
+/// is still outstanding keeps rejecting new procedures until that write returns. A successful
+/// indication clears `isBusy` immediately, even if the write has not returned; the next
+/// procedure may start, and the previous write's completion is ignored because its id no
+/// longer matches.
 package actor ControlPoint {
     private let central: any BluetoothCentral
     private let peripheralID: UUID
     private let timeout: Duration
 
+    /// Set when ``perform(_:)`` accepts a procedure. Cleared when that procedure's indication
+    /// succeeds, or when a failed procedure's write has also finished.
     private var isBusy = false
+
+    /// Bumped with wrapping add on every ``perform(_:)`` so a long-lived connection cannot
+    /// trap. Helpers compare against this. A wrapped id could alias a helper that is still
+    /// running; that collision is accepted as unreachable.
     private var procedure: UInt = 0
+
+    /// The single waiter for the in-flight indication. Cleared when ``resolve(id:result:)``
+    /// resumes it. A second indication, or a late timeout, sees `nil` or a mismatched id and
+    /// is dropped.
     private var waiter: CheckedContinuation<Data, Error>?
+
+    /// Listener and timeout tasks for the current procedure. Cancelled when it ends.
     private var helpers: [Task<Void, Never>] = []
+
+    /// True from ``start(id:requestData:events:)`` until ``writeFinished(procedureID:)`` for
+    /// that same id. A failed resolve leaves `isBusy` set while this is true.
     private var writeInFlight = false
+
+    /// Parked ``waitUntilIdle()`` callers. Resumed only when `isBusy` and `writeInFlight` are
+    /// both false.
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
@@ -49,6 +82,12 @@ package actor ControlPoint {
         self.timeout = timeout
     }
 
+    /// Writes `request` and waits for its indication.
+    ///
+    /// Subscribes to ``BluetoothCentral/events`` before the write. The stream does not replay.
+    /// The listener, the timeout, and the write all capture the same procedure id. Cancelling
+    /// the caller resolves that id with `CancellationError`, which ``mapError(_:)`` turns into
+    /// ``ControlPointError/failed(reason:)``.
     func perform(_ request: CSCControlPointRequest) async throws -> CSCControlPointResponse {
         guard !isBusy else {
             throw ControlPointError.procedureInProgress
@@ -78,6 +117,9 @@ package actor ControlPoint {
         return try Self.validateResponse(indicationData, expectedRequestOpcode: expectedOpcode)
     }
 
+    /// Test hook. Returns immediately when no procedure and no write are outstanding; otherwise
+    /// parks until both are clear. Rechecks inside the continuation so a procedure that finished
+    /// as the waiter was recorded is not left parked.
     package func waitUntilIdle() async {
         if !isBusy, !writeInFlight {
             return
@@ -88,6 +130,8 @@ package actor ControlPoint {
         }
     }
 
+    /// Arms the listener and the timeout, then writes. `writeInFlight` is set before either
+    /// task is created so a fast failure cannot observe a procedure that looks idle.
     private func start(id: UInt, requestData: Data, events: AsyncStream<CentralEvent>) {
         writeInFlight = true
 
@@ -130,6 +174,9 @@ package actor ControlPoint {
         timeoutProcedure(procedureID: procedureID)
     }
 
+    /// Ignores every event that is not this peripheral's SC Control Point indication or its
+    /// disconnect. Measurement notifications travel on the same ``BluetoothCentral/events``
+    /// stream and are left for the measurement loop.
     private func handleControlPointEvent(procedureID: UInt, event: CentralEvent) {
         switch event {
         case let .valueUpdated(
@@ -174,6 +221,10 @@ package actor ControlPoint {
         writeFinished(procedureID: procedureID)
     }
 
+    /// Clears `writeInFlight` only when `procedureID` is still current. An older write returning
+    /// after a newer ``perform(_:)`` has started must not clear the new procedure's flag. If the
+    /// waiter is already gone and the procedure is still marked busy, this write was the last
+    /// thing holding the gate (timeout while the write was stuck) and clearing it opens the gate.
     private func writeFinished(procedureID: UInt) {
         guard procedureID == procedure else {
             return
@@ -185,6 +236,17 @@ package actor ControlPoint {
         resumeIdleWaitersIfNeeded()
     }
 
+    /// Completes the current procedure's waiter when `id` still owns it.
+    ///
+    /// Success clears `isBusy` even when the write is still in flight. Failure clears `isBusy`
+    /// only when the write has already finished; otherwise ``writeFinished(procedureID:)`` clears
+    /// it later, and ``perform(_:)`` keeps throwing ``ControlPointError/procedureInProgress`` in
+    /// between. Either path cancels the helper tasks. Resuming the waiter does not run the
+    /// caller's continuation until this actor turn ends, so ``writeFinished(procedureID:)`` on
+    /// the write-failure path still runs before the caller can start another procedure.
+    ///
+    /// A stale id returns without touching the current waiter. That is what drops an indication
+    /// that arrives after ``ControlPointError/timedOut``.
     private func resolve(id: UInt, result: Result<Data, Error>) {
         guard id == procedure, let waiter else {
             return
@@ -215,6 +277,9 @@ package actor ControlPoint {
         waiters.forEach { $0.resume() }
     }
 
+    /// Decodes the indication, checks that it answers this request's opcode, and maps the CSCS
+    /// response value onto ``ControlPointError``. An unknown response value is
+    /// ``ControlPointError/failed(reason:)``.
     private static func validateResponse(
         _ indication: Data,
         expectedRequestOpcode: UInt8,
@@ -241,6 +306,14 @@ package actor ControlPoint {
         }
     }
 
+    /// Collapses transport failures into ``ControlPointError``.
+    ///
+    /// `CancellationError` becomes ``ControlPointError/failed(reason:)`` with reason `"Cancelled"`.
+    /// ATT application error `0x80` is ``ControlPointError/procedureInProgress`` and `0x81` is
+    /// ``ControlPointError/cccdImproperlyConfigured``; any other ATT code keeps the numeric code
+    /// in the diagnostic reason. ``BluetoothCentralError/disconnected`` becomes a failed
+    /// procedure with reason `"Disconnected"`; the central error's reason string is not passed
+    /// through.
     private static func mapError(_ error: Error) -> ControlPointError {
         if let controlPointError = error as? ControlPointError {
             return controlPointError

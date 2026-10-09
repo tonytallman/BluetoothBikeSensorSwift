@@ -3,15 +3,23 @@ import Foundation
 
 /// Errors thrown by ``DiscoveredSensor/connect()``.
 public enum ConnectError: Error, Sendable, Equatable {
-    /// Bluetooth is not powered on.
+    /// Bluetooth was not `.poweredOn` when connect was attempted. Connect does not wait for
+    /// power; `.unknown`, `.unauthorized`, `.unsupported`, and `.poweredOff` all take this case.
     case notPoweredOn
-    /// Connection did not complete within the timeout.
+    /// The link did not come up within 10 seconds. The in-flight connect is cancelled.
     case timeout
-    /// Connection failed for another reason.
+    /// The link failed, or connect was cancelled, for a reason other than the cases above.
+    ///
+    /// `reason` is diagnostic text (the underlying error's description, or a short literal).
+    /// It is not user-facing copy.
     case failed(reason: String)
     /// The peripheral could not be found.
     case peripheralNotFound
-    /// CSC service or characteristic discovery failed.
+    /// CSC service, characteristic, or connect-time control-point setup failed.
+    ///
+    /// `reason` is diagnostic text, not user-facing copy. Request Supported Sensor Locations
+    /// runs during connect for a multiple-location sensor; a failure there is this case, not
+    /// a ``ControlPointError`` for the caller.
     case serviceDiscoveryFailed(reason: String)
 }
 
@@ -42,6 +50,8 @@ public struct DiscoveredSensor: Sendable {
         self.timeouts = timeouts
     }
 
+    /// Same-package construction when there is no discovery event, so tests can connect a
+    /// chosen id through an injected central.
     package init(
         id: UUID,
         name: String?,
@@ -56,7 +66,18 @@ public struct DiscoveredSensor: Sendable {
         self.timeouts = timeouts
     }
 
-    /// Connects to the sensor, discovers CSC characteristics, and enables notifications.
+    /// Connects, discovers CSC characteristics, and returns a sensor that is already notifying.
+    ///
+    /// Races the link against a 10-second deadline. Whichever finishes first wins and the other
+    /// task is cancelled. A timeout cancels the in-flight connect so the radio does not stay
+    /// connecting, and throws ``ConnectError/timeout``. A cancelled caller surfaces as
+    /// ``ConnectError/failed(reason:)``.
+    ///
+    /// Does not wait for Bluetooth power. Anything other than `.poweredOn` throws
+    /// ``ConnectError/notPoweredOn`` before a connect is attempted.
+    ///
+    /// If the link comes up and later GATT setup throws, the peripheral is disconnected before
+    /// that error propagates, so a failed connect does not leave the link open.
     public func connect() async throws -> ConnectedSensor {
         guard await central.currentState == .poweredOn else {
             throw ConnectError.notPoweredOn
@@ -91,6 +112,12 @@ public struct DiscoveredSensor: Sendable {
         }
     }
 
+    /// Setup failures that escape ``ConnectedSensor``'s initializer, mapped into ``ConnectError``.
+    ///
+    /// ``ControlPointError`` from Request Supported Sensor Locations becomes
+    /// ``ConnectError/serviceDiscoveryFailed`` because that procedure is part of connect.
+    /// ``BluetoothCentralError`` goes through ``BluetoothCentralConnectErrorMapping``. Any other
+    /// error uses its description (`"\(error)"`), which keeps the type and associated values.
     private static func mapSetupError(_ error: Error) -> ConnectError {
         if let error = error as? ConnectError {
             return error
@@ -115,6 +142,9 @@ public struct DiscoveredSensor: Sendable {
         0x0157: "SRAM",
     ]
 
+    /// The first two bytes of Manufacturer Specific Data are the Bluetooth SIG company id,
+    /// little-endian. Only ids in ``companyNames`` become a string. A short buffer or an
+    /// unlisted id is `nil`, not a formatted unknown name.
     private static func manufacturerName(from manufacturerData: Data?) -> String? {
         guard let manufacturerData, manufacturerData.count >= 2 else {
             return nil

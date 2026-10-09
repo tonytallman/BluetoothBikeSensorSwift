@@ -2,10 +2,16 @@ internal import CSCWire
 import Foundation
 
 /// Errors thrown by ``ConnectedSensor/disconnect()``.
+///
+/// An unexpected link loss does not throw. It finishes the measurement streams. Only an
+/// explicit ``ConnectedSensor/disconnect()`` that fails throws.
 public enum DisconnectError: Error, Sendable, Equatable {
-    /// Disconnect failed for a reason other than already being disconnected.
+    /// Disconnect failed for a reason other than the peripheral already being gone.
+    ///
+    /// `reason` is diagnostic text, not user-facing copy.
     case failed(reason: String)
-    /// The sensor was already disconnected.
+    /// The central no longer has this peripheral. A peripheral that is already
+    /// `.disconnected` but still known returns success instead of this case.
     case alreadyDisconnected
 }
 
@@ -40,9 +46,13 @@ public enum RevolutionData: Sendable {
 
 /// A connected CSCS sensor emitting live speed and/or cadence measurements.
 ///
-/// Created only by ``DiscoveredSensor/connect()``. Set ``WheelRevolutions/wheelCircumference``
-/// before or during streaming so speed values reflect your wheel size. Streams finish when the
-/// sensor disconnects unexpectedly; call ``disconnect()`` to release the connection.
+/// Created only by ``DiscoveredSensor/connect()``. Wheel, crank, and location support come from
+/// CSC Feature (`0x2A5C`) read at connect time. Advertisement data is not a fallback. Set
+/// ``WheelRevolutions/wheelCircumference`` before or during streaming so speed matches the wheel.
+///
+/// Releasing the instance finishes the measurement streams. It does not disconnect the radio —
+/// ``deinit`` cannot await, so it only cancels the measurement task. Call ``disconnect()`` to
+/// drop the link. An unexpected disconnect also finishes the streams and does not throw.
 public final class ConnectedSensor: Sendable {
     /// Supported revolution data and live measurement streams.
     public let revolutions: RevolutionData
@@ -58,6 +68,16 @@ public final class ConnectedSensor: Sendable {
     private let wheelRevolutions: WheelRevolutions?
     private let crankRevolutions: CrankRevolutions?
 
+    /// Discovers CSCS, enables the notifications this sensor needs, then starts the measurement loop.
+    ///
+    /// Control-point indications are turned on before Request Supported Sensor Locations, because
+    /// that procedure's result arrives as an indication. ``BluetoothCentral/events`` is subscribed
+    /// before measurement notifications are enabled. The stream does not replay, and it buffers
+    /// until the loop iterates, so a notification that arrives during the rest of setup is kept.
+    ///
+    /// A missing SC Control Point is allowed when the multiple-locations bit is clear. Set
+    /// Cumulative Value then throws ``ControlPointError/controlPointUnavailable``. Multiple
+    /// locations still require both Sensor Location and SC Control Point.
     init(connecting sensor: DiscoveredSensor) async throws {
         self.sensor = sensor
         central = sensor.central
@@ -192,11 +212,20 @@ public final class ConnectedSensor: Sendable {
         }
     }
 
+    /// Cancels the measurement loop so its streams finish. Does not disconnect; see the type
+    /// comment.
     deinit {
         eventLoop.cancel()
     }
 
-    /// Disconnects from the sensor and returns a ``DiscoveredSensor`` for reconnection.
+    /// Disconnects and returns the same ``DiscoveredSensor`` for a later ``DiscoveredSensor/connect()``.
+    ///
+    /// Cancels the measurement loop and finishes speed, cadence, and sample streams before
+    /// touching the radio, so consumers unblock even if notify teardown is slow. Disabling
+    /// notifications is best-effort: errors are ignored, and a peripheral that has already
+    /// dropped fails that call immediately. If the central no longer knows the peripheral, this
+    /// throws ``DisconnectError/alreadyDisconnected``. A peripheral that is already disconnected
+    /// but still known is success.
     public func disconnect() async throws -> DiscoveredSensor {
         eventLoop.cancel()
         await finishStreams()
@@ -245,6 +274,10 @@ public final class ConnectedSensor: Sendable {
         case multiple(supported: [SensorLocation], current: SensorLocation)
     }
 
+    /// Multiple-locations requires Sensor Location and SC Control Point, reads the current
+    /// location, then Request Supported Sensor Locations. Connect fails if the current value is
+    /// not in that supported list. Without the multiple-locations bit, a present Sensor Location
+    /// characteristic is ``ResolvedLocation/fixed``; a missing one is ``ResolvedLocation/unavailable``.
     private static func resolveLocation(
         controlPoint: ControlPoint?,
         central: any BluetoothCentral,
@@ -295,6 +328,8 @@ public final class ConnectedSensor: Sendable {
         return .unavailable
     }
 
+    /// Runs the connect-time supported-locations procedure. ``ControlPointError`` is rewritten
+    /// into ``ConnectError/serviceDiscoveryFailed`` so connect has one error type.
     private static func requestSupportedSensorLocations(
         controlPoint: ControlPoint?,
     ) async throws -> [SensorLocation] {
@@ -314,6 +349,9 @@ public final class ConnectedSensor: Sendable {
         return response.parameter.map { SensorLocation(assignedNumber: $0) }
     }
 
+    /// ``BluetoothCentralError/peripheralNotFound`` means the central already dropped the
+    /// peripheral, which ``disconnect()`` reports as ``DisconnectError/alreadyDisconnected``.
+    /// Every other central error becomes ``DisconnectError/failed(reason:)`` with diagnostic text.
     private static func disconnectError(from error: BluetoothCentralError) -> DisconnectError {
         switch error {
         case .peripheralNotFound:
@@ -333,6 +371,14 @@ public final class ConnectedSensor: Sendable {
         }
     }
 
+    /// One task per connection. ``BluetoothCentral/events`` is shared by every peripheral on
+    /// this central and by every in-flight control-point listener, so this loop keeps only this
+    /// id's CSC Measurement values.
+    ///
+    /// An unexpected `.disconnected` for this id finishes the measurement streams and returns.
+    /// Cancellation, from ``disconnect()`` or ``deinit``, does the same on the way out, including
+    /// when the loop is parked waiting for the next event. ``disconnect()`` also finishes the
+    /// streams itself; finishing twice is safe.
     private static func runMeasurementLoop(
         events: AsyncStream<CentralEvent>,
         id: UUID,
@@ -384,6 +430,10 @@ public final class ConnectedSensor: Sendable {
         }
     }
 
+    /// Drops a payload that does not decode. Each present half is delivered to its
+    /// ``WheelRevolutions`` or ``CrankRevolutions``; a combined notification can update one
+    /// side, both, or neither, depending on which fields the payload carries and which sides
+    /// this connection exposes.
     private static func processMeasurement(
         _ data: Data,
         wheelRevolutions: WheelRevolutions?,
@@ -409,6 +459,8 @@ public final class ConnectedSensor: Sendable {
     }
 }
 
+/// Feature-bit names used at connect. Wheel support is the wheel-revolution bit; cadence is
+/// the crank-revolution bit.
 private extension CSCFeature {
     var hasSpeed: Bool { contains(.wheelRevolutionData) }
     var hasCadence: Bool { contains(.crankRevolutionData) }
