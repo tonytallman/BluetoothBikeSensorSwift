@@ -36,6 +36,10 @@ actor StreamBroadcaster<Element: Sendable> {
         }
     }
 
+    /// Finishes every current subscriber. A later ``makeStream()`` returns an already-finished
+    /// stream, which is how a speed or cadence subscription taken after disconnect ends
+    /// immediately. A second call does nothing. ``yield(_:)`` after this drops the value
+    /// because the subscriber map is empty.
     func finish() {
         guard !finished else {
             return

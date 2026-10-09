@@ -1,7 +1,19 @@
 internal import CSCWire
 import Foundation
 
-/// Controllable `BluetoothCentral` for unit tests. Not intended for production use.
+/// Controllable ``BluetoothCentral`` for unit tests. Not intended for production use.
+///
+/// Scan-session gating matches ``CoreBluetoothCentral``: a stop records its id even when it
+/// is not the active scan, and a later start at or below that id does not record
+/// `startScanning`. The fake does not otherwise model the radio. `connect` does not consult
+/// ``ConnectCancelCoordinator`` or Bluetooth power; cancellation of a hung connect throws
+/// `CancellationError` from the sleep. Scripted failures, hangs, and held control-point
+/// indications are one-shot unless a count says otherwise.
+///
+/// ``waitUntil(_:)`` reevaluates every parked predicate after each state-changing call.
+/// Predicates run on this actor, so they may read actor-isolated state such as `recordedCalls`
+/// directly. Discover, notify, read, and write throw ``BluetoothCentralError/disconnected``
+/// when the id is not connected, and they do that before any scripted hang.
 package actor FakeBluetoothCentral: BluetoothCentral {
     package enum Operation: Hashable, Sendable {
         case connect
@@ -35,6 +47,8 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         )
     }
 
+    /// Same roles as on ``CoreBluetoothCentral``. Kept in lockstep so ``Scanner`` tests exercise
+    /// the real session rules against this double.
     private var activeScanSession: UInt64 = 0
     private var highestStoppedScanSession: UInt64 = 0
     private var state: BluetoothState
@@ -81,6 +95,9 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         self.supportedSensorLocationBytes = supportedSensorLocationBytes
     }
 
+    /// Counts subscribers from this property and from ``stateSubscriptionSnapshot()``, so a test
+    /// can ``waitForStateUpdatesSubscriber()`` before ``setState(_:)``. A state yielded before
+    /// anyone is listening is gone; these streams do not replay.
     package var stateUpdates: AsyncStream<BluetoothState> {
         get async {
             stateUpdatesSubscriberCount += 1
@@ -121,6 +138,9 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         }
     }
 
+    /// Records the call, then either parks until cancelled (`hangNextConnect`), throws a
+    /// scripted error, or marks `id` connected. Does not model an already-connected short
+    /// circuit or cancel-pending teardown.
     package func connect(id: UUID) async throws {
         appendRecordedCall(.connect(id: id))
 
@@ -140,6 +160,9 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         connectedPeripheralIDs.insert(id)
     }
 
+    /// Always yields ``CentralEvent/disconnected`` after a successful return, including when
+    /// `id` was not connected. Production returns early for an already-disconnected peripheral
+    /// and does not yield that event.
     package func disconnect(id: UUID) async throws {
         appendRecordedCall(.disconnect(id: id))
 
@@ -158,6 +181,8 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         }
     }
 
+    /// Throws ``BluetoothCentralError/disconnected`` when `id` is not in the connected set, so
+    /// a GATT call after a link-loss event fails immediately instead of hanging.
     package func discoverServices(id: UUID, serviceUUIDs: [UUID]?) async throws {
         guard connectedPeripheralIDs.contains(id) else {
             throw BluetoothCentralError.disconnected(id, reason: nil)
@@ -194,6 +219,9 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         return discoveredCharacteristicUUIDs
     }
 
+    /// When `hangNextSetNotify` is armed, parks after the connected-id check. A peripheral that
+    /// is already disconnected throws before that park, which is what
+    /// ``ConnectedSensor/disconnect()`` relies on to avoid waiting out a notify teardown.
     package func setNotifyValue(
         id: UUID,
         serviceUUID: UUID,
@@ -257,6 +285,14 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         return Data()
     }
 
+    /// Control-point writes synthesize an indication on ``events`` unless a hold or hang says
+    /// otherwise.
+    ///
+    /// `hangNextWrite` parks before any indication and, when released, throws
+    /// ``BluetoothCentralError/connectionFailed``. `hangWriteAfterIndicating` yields the
+    /// indication first, then parks, and returns success when released, so the procedure can
+    /// finish while this call is still outstanding. `holdNextControlPointIndication` returns
+    /// success and keeps the indication until ``releaseHeldControlPointIndication()``.
     package func writeValue(
         id: UUID,
         serviceUUID: UUID,
@@ -336,6 +372,8 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         changed()
     }
 
+    /// Yields `event`. ``CentralEvent/disconnected`` also removes that id from the connected
+    /// set, so a later GATT call throws ``BluetoothCentralError/disconnected`` immediately.
     package func emit(_ event: CentralEvent) async {
         if case let .disconnected(peripheralID) = event {
             connectedPeripheralIDs.remove(peripheralID)
@@ -354,16 +392,21 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         changed()
     }
 
+    /// Next ``connect(id:)`` sleeps until cancelled, then throws `CancellationError`.
     package func hangNextConnect() {
         shouldHangNextConnect = true
         changed()
     }
 
+    /// Next ``writeValue(id:serviceUUID:characteristicUUID:value:)`` parks before any indication,
+    /// then throws when released. The park is not limited to the control-point characteristic.
     package func hangNextWrite() {
         shouldHangNextWrite = true
         changed()
     }
 
+    /// Next `count` control-point writes yield their indication, then park, then return
+    /// success. `count` accumulates across calls.
     package func hangWriteAfterIndicating(count: Int = 1) {
         hangWriteAfterIndicationCount += count
         changed()
@@ -374,6 +417,9 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         changed()
     }
 
+    /// Resumes the oldest parked write or post-indication hang. One call releases one waiter.
+    /// Shared by ``hangNextWrite()`` and ``hangWriteAfterIndicating(count:)``; which behavior
+    /// follows the resume depends on which arm parked the waiter.
     package func releaseHungWrite() async {
         guard !hungWriteWaiters.isEmpty else {
             return
@@ -382,6 +428,8 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         changed()
     }
 
+    /// Next control-point write succeeds without yielding the indication. The procedure stays
+    /// in flight until ``releaseHeldControlPointIndication()``.
     package func holdNextControlPointIndication() {
         shouldHoldNextControlPointIndication = true
         changed()
@@ -396,6 +444,8 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         changed()
     }
 
+    /// Parks until `isMet` returns true, reevaluating after every ``changed()``. `isMet` runs
+    /// on this actor.
     package func waitUntil(_ isMet: @escaping () -> Bool) async {
         if isMet() {
             return
@@ -475,6 +525,10 @@ package actor FakeBluetoothCentral: BluetoothCentral {
         conditionWaiters = remaining
     }
 
+    /// Builds a CSC Control Point indication for `request`. Request Supported Sensor Locations
+    /// on success carries ``supportedSensorLocationBytes``; every other request carries an
+    /// empty parameter. The response value defaults to success (`0x01`) unless
+    /// ``setNextControlPointResponseValue(_:)`` armed a different byte for this write.
     private static func controlPointIndication(
         for request: Data,
         responseValue: UInt8,

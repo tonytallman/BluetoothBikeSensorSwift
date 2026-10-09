@@ -27,13 +27,22 @@ public struct CrankSample: Sendable, Equatable {
 }
 
 /// Live crank revolution measurements from a connected CSCS sensor.
+///
+/// The baseline is `nonisolated(unsafe)` behind `lock` so this `Sendable` class can store it.
+/// Only the measurement loop touches it. The lock is not held across the broadcaster awaits.
+///
+/// The first sample only seeds the baseline. A later sample is emitted when the event-time
+/// delta is nonzero and the implied cadence is at most 300 rpm. A faster delta is not emitted,
+/// but the baseline has already moved to that sample. Streams do not replay. After
+/// ``finishStreams()``, a new subscriber sees a finished stream.
 public final class CrankRevolutions: Sendable {
     private let cadenceBroadcaster = StreamBroadcaster<Cadence>()
     private let crankSampleBroadcaster = StreamBroadcaster<CrankSample>()
     private let lock = NSLock()
     private nonisolated(unsafe) var baseline = RevolutionBaseline<UInt16>()
 
-    /// Live cadence stream in revolutions per minute. The stream finishes on disconnect.
+    /// Live cadence in revolutions per minute. The stream finishes on disconnect. Subscribing
+    /// is async because the underlying broadcaster is an actor. A subscriber sees only later samples.
     public var cadence: AsyncStream<Cadence> {
         get async {
             await cadenceBroadcaster.makeStream()
@@ -49,6 +58,9 @@ public final class CrankRevolutions: Sendable {
 
     init() {}
 
+    /// Applies one CSC crank half. The baseline update happens under `lock` before any await.
+    /// Cadence is yielded before the matching ``CrankSample``. A `nil` sample (first packet,
+    /// zero event-time delta, or cadence above 300 rpm) yields nothing.
     func receive(revolutions: UInt16, eventTime: UInt16) async {
         let sample: CrankSample? = lock.withLock {
             guard let delta = baseline.delta(revolutions: revolutions, eventTime: eventTime) else {
@@ -66,6 +78,8 @@ public final class CrankRevolutions: Sendable {
         await crankSampleBroadcaster.yield(sample)
     }
 
+    /// Builds a sample when implied cadence is at most 300 rpm, including exactly 300. The
+    /// caller has already advanced the baseline.
     package static func sample(revolutions: UInt16, seconds: Double) -> CrankSample? {
         let cadence = Double(revolutions) / seconds * 60.0
         guard cadence <= 300 else {

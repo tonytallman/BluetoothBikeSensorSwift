@@ -1,7 +1,7 @@
 internal import CSCWire
 import Foundation
 
-/// Sensor location support exposed by a connected sensor.
+/// Sensor location support for one connection. Only `.multiple` can change after connect.
 public enum LocationSupport: Sendable {
     case unavailable
     case fixed(SensorLocation)
@@ -117,8 +117,15 @@ public struct SensorLocation: Sendable, Hashable {
 }
 
 /// Multiple sensor locations supported by a connected CSCS sensor.
+///
+/// `current` is guarded by `lock` and stored `nonisolated(unsafe)` so this `Sendable` class
+/// can be read from any thread while ``update(_:)`` writes it. The lock is not held across
+/// the control-point await.
 public final class MultipleSensorLocations: Sendable {
     private let lock = NSLock()
+    /// This connection's ``ControlPoint``. ``WheelRevolutions`` holds the same actor when the
+    /// connection also has wheel data. Exposed so tests can ``ControlPoint/waitUntilIdle()``
+    /// after a procedure that timed out with its write still outstanding.
     package let controlPoint: ControlPoint
 
     /// Sensor locations this peripheral supports.
@@ -141,7 +148,11 @@ public final class MultipleSensorLocations: Sendable {
         self.controlPoint = controlPoint
     }
 
-    /// Updates the sensor location via the SC Control Point characteristic.
+    /// Writes Update Sensor Location.
+    ///
+    /// A token that is not in ``supported`` throws ``ControlPointError/unsupportedLocation``
+    /// before any write. `current` changes only after the indication succeeds, so a timeout or
+    /// a refused procedure leaves the previous location in place.
     public func update(_ location: SensorLocation) async throws {
         guard supported.contains(location) else {
             throw ControlPointError.unsupportedLocation
