@@ -1,15 +1,13 @@
 import CSCServer
 import Foundation
 
-final class YieldingCrankSequence: AsyncSequence, Sendable {
-    typealias Element = CrankRevolution
-
-    private let channel = YieldChannel()
+final class YieldingSequence<Element: Sendable>: AsyncSequence, Sendable {
+    private let channel = YieldChannel<Element>()
 
     struct Iterator: AsyncIteratorProtocol, Sendable {
-        let channel: YieldChannel
+        let channel: YieldChannel<Element>
 
-        func next() async throws -> CrankRevolution? {
+        func next() async throws -> Element? {
             try await channel.next()
         }
     }
@@ -18,8 +16,8 @@ final class YieldingCrankSequence: AsyncSequence, Sendable {
         Iterator(channel: channel)
     }
 
-    func yield(_ revolution: CrankRevolution) async {
-        await channel.send(revolution)
+    func yield(_ element: Element) async {
+        await channel.send(element)
     }
 
     func iterationWasCancelled() async -> Bool {
@@ -32,21 +30,25 @@ final class YieldingCrankSequence: AsyncSequence, Sendable {
     }
 }
 
-actor YieldChannel {
-    private var queue: [CrankRevolution] = []
-    private var waiters: [CheckedContinuation<CrankRevolution?, Error>] = []
+typealias YieldingWheelSequence = YieldingSequence<WheelRevolution>
+typealias YieldingCrankSequence = YieldingSequence<CrankRevolution>
+typealias YieldingWheelAndCrankSequence = YieldingSequence<WheelAndCrankRevolution>
+
+actor YieldChannel<Element: Sendable> {
+    private var queue: [Element] = []
+    private var waiters: [CheckedContinuation<Element?, Error>] = []
     private var finished = false
     private(set) var iterationWasCancelled = false
     private var entryCount = 0
     private var entryWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
-    func send(_ revolution: CrankRevolution) {
+    func send(_ element: Element) {
         if let waiter = waiters.first {
             waiters.removeFirst()
-            waiter.resume(returning: revolution)
+            waiter.resume(returning: element)
             return
         }
-        queue.append(revolution)
+        queue.append(element)
     }
 
     func waitUntilNextEntered(count: Int) async {
@@ -62,7 +64,7 @@ actor YieldChannel {
         }
     }
 
-    func next() async throws -> CrankRevolution? {
+    func next() async throws -> Element? {
         entryCount += 1
         resumeEntryWaiters(for: entryCount)
 
@@ -75,7 +77,7 @@ actor YieldChannel {
         }
 
         return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CrankRevolution?, Error>) in
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Element?, Error>) in
                 waiters.append(continuation)
             }
         } onCancel: {
@@ -105,4 +107,14 @@ actor YieldChannel {
             continuation.resume(throwing: CancellationError())
         }
     }
+}
+
+func makeYieldingWheelAndCrankSequence() -> (
+    sequence: YieldingWheelAndCrankSequence,
+    yield: @Sendable (WheelAndCrankRevolution) async -> Void,
+) {
+    let sequence = YieldingWheelAndCrankSequence()
+    return (sequence, { element in
+        await sequence.yield(element)
+    })
 }
