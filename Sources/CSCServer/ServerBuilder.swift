@@ -30,17 +30,20 @@ public struct ServerBuilder<
     Crank: Sendable,
     Location: Sendable,
 >: Sendable {
-    private var wheel: WheelConfiguration?
+    private var wheel: WheelConfiguration<WheelRevolution>?
     private var crankRevolutions: AnyAsyncSequence<CrankRevolution>?
+    private var wheelAndCrank: WheelConfiguration<WheelAndCrankRevolution>?
     private var location: SensorLocationConfiguration
 
     internal init(
-        wheel: WheelConfiguration? = nil,
+        wheel: WheelConfiguration<WheelRevolution>? = nil,
         crankRevolutions: AnyAsyncSequence<CrankRevolution>? = nil,
+        wheelAndCrank: WheelConfiguration<WheelAndCrankRevolution>? = nil,
         location: SensorLocationConfiguration = .none,
     ) {
         self.wheel = wheel
         self.crankRevolutions = crankRevolutions
+        self.wheelAndCrank = wheelAndCrank
         self.location = location
     }
 }
@@ -79,10 +82,33 @@ extension Server {
     {
         ServerBuilder(crankRevolutions: AnyAsyncSequence(revolutions))
     }
+
+    /// Begins building a server whose wheel and crank data come from one sequence. Each element
+    /// is sent as at most one CSC Measurement notification carrying both halves.
+    public static func wheelAndCrankRevolutions<Revolutions>(
+        _ revolutions: Revolutions,
+        setCumulativeWheelRevolutions delegate: any CumulativeWheelRevolutionsDelegate,
+    ) -> ServerBuilder<
+        ServerWheel.Selected,
+        ServerCrank.Selected,
+        ServerLocation.Unselected,
+    >
+    where Revolutions: AsyncSequence & Sendable,
+          Revolutions.Element == WheelAndCrankRevolution
+    {
+        ServerBuilder(
+            wheelAndCrank: WheelConfiguration(
+                revolutions: AnyAsyncSequence(revolutions),
+                delegate: delegate,
+            ),
+        )
+    }
 }
 
 extension ServerBuilder where Wheel == ServerWheel.Unselected {
-    /// Adds wheel revolution data and a set-cumulative delegate.
+    /// Adds wheel revolution data and a set-cumulative delegate. With separate sources, each
+    /// sample is paired with the other source's last accepted half; to send both halves from one
+    /// tick together, use ``Server/wheelAndCrankRevolutions(_:setCumulativeWheelRevolutions:)``.
     public func wheelRevolutions<Revolutions>(
         _ revolutions: Revolutions,
         setCumulativeWheelRevolutions delegate: any CumulativeWheelRevolutionsDelegate,
@@ -100,13 +126,16 @@ extension ServerBuilder where Wheel == ServerWheel.Unselected {
                 delegate: delegate,
             ),
             crankRevolutions: crankRevolutions,
+            wheelAndCrank: wheelAndCrank,
             location: location,
         )
     }
 }
 
 extension ServerBuilder where Crank == ServerCrank.Unselected {
-    /// Adds crank revolution data.
+    /// Adds crank revolution data. With separate sources, each sample is paired with the other
+    /// source's last accepted half; to send both halves from one tick together, use
+    /// ``Server/wheelAndCrankRevolutions(_:setCumulativeWheelRevolutions:)``.
     public func crankRevolutions<Revolutions>(
         _ revolutions: Revolutions,
     ) -> ServerBuilder<
@@ -120,6 +149,7 @@ extension ServerBuilder where Crank == ServerCrank.Unselected {
         ServerBuilder<Wheel, ServerCrank.Selected, Location>(
             wheel: wheel,
             crankRevolutions: AnyAsyncSequence(revolutions),
+            wheelAndCrank: wheelAndCrank,
             location: location,
         )
     }
@@ -137,6 +167,7 @@ extension ServerBuilder where Location == ServerLocation.Unselected {
         ServerBuilder<Wheel, Crank, ServerLocation.Static>(
             wheel: wheel,
             crankRevolutions: crankRevolutions,
+            wheelAndCrank: wheelAndCrank,
             location: .staticLocation(kind),
         )
     }
@@ -168,6 +199,7 @@ extension ServerBuilder where Location == ServerLocation.Unselected {
         return ServerBuilder<Wheel, Crank, ServerLocation.Multiple>(
             wheel: wheel,
             crankRevolutions: crankRevolutions,
+            wheelAndCrank: wheelAndCrank,
             location: .multiple(
                 MultipleSensorLocationsConfiguration(
                     supported: supported,
@@ -187,6 +219,7 @@ where Wheel == ServerWheel.Selected, Crank == ServerCrank.Unselected {
             configuration: ServerConfiguration(
                 wheel: wheel,
                 crankRevolutions: crankRevolutions,
+                wheelAndCrank: wheelAndCrank,
                 location: location,
             ),
         )
@@ -201,6 +234,7 @@ where Wheel == ServerWheel.Unselected, Crank == ServerCrank.Selected {
             configuration: ServerConfiguration(
                 wheel: wheel,
                 crankRevolutions: crankRevolutions,
+                wheelAndCrank: wheelAndCrank,
                 location: location,
             ),
         )
@@ -215,6 +249,7 @@ where Wheel == ServerWheel.Selected, Crank == ServerCrank.Selected {
             configuration: ServerConfiguration(
                 wheel: wheel,
                 crankRevolutions: crankRevolutions,
+                wheelAndCrank: wheelAndCrank,
                 location: location,
             ),
         )
