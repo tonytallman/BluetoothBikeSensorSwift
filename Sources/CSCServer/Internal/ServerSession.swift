@@ -1354,8 +1354,8 @@ actor ServerSession {
     // MARK: - Measurement sources
 
     /// Iterates one revolution source from exactly one task for its whole lifetime, per the
-    /// single-task-per-box contract in `AnyAsyncSequence`. Shared by both the wheel and crank
-    /// loops via `map`, which tags each element with which source produced it. Any iterator
+    /// single-task-per-box contract in `AnyAsyncSequence`. Shared by every revolution loop via
+    /// `map`, which tags each element with which source produced it. Any iterator
     /// failure, or the sequence ending naturally, silently stops this loop only — reads and
     /// advertising continue, and a single-pass source (e.g. `AsyncStream`) cannot be restarted
     /// by a later `start()`.

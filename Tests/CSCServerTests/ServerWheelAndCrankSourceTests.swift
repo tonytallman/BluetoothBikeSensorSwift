@@ -201,9 +201,13 @@ struct ServerWheelAndCrankSourceTests {
 
         let payloads = await measurementPayloads(fake)
         #expect(payloads.first == encoded(e1))
-        #expect(payloads.contains(encoded(e2)))
-        #expect(payloads.contains(crankOnly))
         #expect(payloads.last == encoded(e3))
+        #expect(payloads.suffix(4) == [
+            encoded(e2),
+            crankOnly,
+            crankOnly,
+            encoded(e3),
+        ])
         await server.stop()
     }
 
