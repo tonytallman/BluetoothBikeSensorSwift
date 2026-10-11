@@ -110,30 +110,62 @@ final class RuntimeSimulationViewModel: SimulationViewModel {
     func addWheelRevolution() {
         guard isSimulating, activeShowsWheel, wheelMode == .manual, var outputs else { return }
         let sample = wheelSchedule.manualRevolution(at: nowActive())
-        outputs.yieldWheel(sample.wheelRevolution)
+        if activeShowsCrank {
+            publishWheelAndCrank(into: &outputs)
+        } else {
+            outputs.yieldWheel(sample.wheelRevolution)
+        }
         updateReadouts()
     }
 
     func addCrankRevolution() {
         guard isSimulating, activeShowsCrank, crankMode == .manual, var outputs else { return }
         let sample = crankSchedule.manualRevolution(at: nowActive())
-        outputs.yieldCrank(sample.crankRevolution)
+        if activeShowsWheel {
+            publishWheelAndCrank(into: &outputs)
+        } else {
+            outputs.yieldCrank(sample.crankRevolution)
+        }
         updateReadouts()
     }
 
     private func handleTick() {
         guard isSimulating, var outputs else { return }
         let now = nowActive()
-        if activeShowsWheel, wheelMode == .automatic,
-           let sample = wheelSchedule.advance(to: now) {
-            outputs.yieldWheel(sample.wheelRevolution)
-            updateReadouts()
+        if activeShowsWheel, activeShowsCrank {
+            var advanced = false
+            if wheelMode == .automatic {
+                advanced = wheelSchedule.advance(to: now) != nil || advanced
+            }
+            if crankMode == .automatic {
+                advanced = crankSchedule.advance(to: now) != nil || advanced
+            }
+            if advanced {
+                publishWheelAndCrank(into: &outputs)
+            }
+        } else {
+            if activeShowsWheel, wheelMode == .automatic,
+               let sample = wheelSchedule.advance(to: now) {
+                outputs.yieldWheel(sample.wheelRevolution)
+            }
+            if activeShowsCrank, crankMode == .automatic,
+               let sample = crankSchedule.advance(to: now) {
+                outputs.yieldCrank(sample.crankRevolution)
+            }
         }
-        if activeShowsCrank, crankMode == .automatic,
-           let sample = crankSchedule.advance(to: now) {
-            outputs.yieldCrank(sample.crankRevolution)
-            updateReadouts()
+        updateReadouts()
+    }
+
+    private func publishWheelAndCrank(into outputs: inout SimulationOutputs) {
+        guard let wheelSample = wheelSchedule.latestSample,
+              let crankSample = crankSchedule.latestSample
+        else {
+            return
         }
+        outputs.yieldWheelAndCrank(WheelAndCrankRevolution(
+            wheel: wheelSample.wheelRevolution,
+            crank: crankSample.crankRevolution,
+        ))
     }
 
     private func wheelModeDidChange(from oldValue: SimulationMode) {

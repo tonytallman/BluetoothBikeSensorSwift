@@ -363,9 +363,10 @@ final class RuntimeServerViewModel: ServerViewModel, ControlPointEventSink {
         var outputs = SimulationOutputs()
         var wheelStream: AsyncStream<WheelRevolution>?
         var crankStream: AsyncStream<CrankRevolution>?
+        var wheelAndCrankStream: AsyncStream<WheelAndCrankRevolution>?
 
         switch revolutions {
-        case .wheel, .wheelAndCrank:
+        case .wheel:
             let pair = AsyncStream.makeStream(
                 of: WheelRevolution.self,
                 bufferingPolicy: .bufferingNewest(1),
@@ -374,17 +375,24 @@ final class RuntimeServerViewModel: ServerViewModel, ControlPointEventSink {
             outputs.wheelContinuation = pair.continuation
         case .crank:
             break
+        case .wheelAndCrank:
+            let pair = AsyncStream.makeStream(
+                of: WheelAndCrankRevolution.self,
+                bufferingPolicy: .bufferingNewest(1),
+            )
+            wheelAndCrankStream = pair.stream
+            outputs.wheelAndCrankContinuation = pair.continuation
         }
 
         switch revolutions {
-        case .crank, .wheelAndCrank:
+        case .crank:
             let pair = AsyncStream.makeStream(
                 of: CrankRevolution.self,
                 bufferingPolicy: .bufferingNewest(1),
             )
             crankStream = pair.stream
             outputs.crankContinuation = pair.continuation
-        case .wheel:
+        case .wheel, .wheelAndCrank:
             break
         }
 
@@ -393,6 +401,7 @@ final class RuntimeServerViewModel: ServerViewModel, ControlPointEventSink {
         let revolutionInput = makeRevolutionInputs(
             wheelStream: wheelStream,
             crankStream: crankStream,
+            wheelAndCrankStream: wheelAndCrankStream,
             cumulativeHandler: cumulativeHandler,
         )
         let server = factory.makeServer(
@@ -422,6 +431,7 @@ final class RuntimeServerViewModel: ServerViewModel, ControlPointEventSink {
     private func makeRevolutionInputs(
         wheelStream: AsyncStream<WheelRevolution>?,
         crankStream: AsyncStream<CrankRevolution>?,
+        wheelAndCrankStream: AsyncStream<WheelAndCrankRevolution>?,
         cumulativeHandler: CumulativeWheelRevolutionsHandler,
     ) -> RevolutionInputs {
         switch revolutions {
@@ -430,11 +440,7 @@ final class RuntimeServerViewModel: ServerViewModel, ControlPointEventSink {
         case .crank:
             .crank(crankStream!)
         case .wheelAndCrank:
-            .wheelAndCrank(
-                wheelStream!,
-                setCumulative: cumulativeHandler,
-                crankStream!,
-            )
+            .wheelAndCrank(wheelAndCrankStream!, setCumulative: cumulativeHandler)
         }
     }
 

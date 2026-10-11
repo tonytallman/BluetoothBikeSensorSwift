@@ -5,9 +5,8 @@ enum RevolutionInputs {
     case wheel(AsyncStream<WheelRevolution>, setCumulative: any CumulativeWheelRevolutionsDelegate)
     case crank(AsyncStream<CrankRevolution>)
     case wheelAndCrank(
-        AsyncStream<WheelRevolution>,
+        AsyncStream<WheelAndCrankRevolution>,
         setCumulative: any CumulativeWheelRevolutionsDelegate,
-        AsyncStream<CrankRevolution>,
     )
 }
 

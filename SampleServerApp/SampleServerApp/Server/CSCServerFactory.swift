@@ -33,10 +33,11 @@ struct CSCServerFactory: SensorServerFactory {
                     .multipleSensorLocations(delegate)
                     .build()
             }
-        case let .wheelAndCrank(wheel, setCumulative, crank):
-            let builder = Server
-                .wheelRevolutions(wheel, setCumulativeWheelRevolutions: setCumulative)
-                .crankRevolutions(crank)
+        case let .wheelAndCrank(revolutions, setCumulative):
+            let builder = Server.wheelAndCrankRevolutions(
+                revolutions,
+                setCumulativeWheelRevolutions: setCumulative,
+            )
             switch location {
             case .none:
                 return builder.build()
