@@ -210,30 +210,33 @@ struct ResetWheelCount: CumulativeWheelRevolutionsDelegate {
     }
 }
 
-let (wheelRevolutions, wheelInput) = AsyncStream.makeStream(of: WheelRevolution.self)
-let (crankRevolutions, crankInput) = AsyncStream.makeStream(of: CrankRevolution.self)
+let (revolutions, input) = AsyncStream.makeStream(of: WheelAndCrankRevolution.self)
 
 let server = Server
-    .wheelRevolutions(wheelRevolutions, setCumulativeWheelRevolutions: ResetWheelCount())
-    .crankRevolutions(crankRevolutions)
+    .wheelAndCrankRevolutions(revolutions, setCumulativeWheelRevolutions: ResetWheelCount())
     .staticSensorLocation(.rearDropout)
     .build()
 
 try await server.start() // publishes 0x1816; returns once advertising has started
 
 // Event times are CSC wire units (1/1024 s). Samples are dropped until a central subscribes.
-wheelInput.yield(WheelRevolution(cumulativeRevolutions: 1_234, lastEventTime: 2_048))
-crankInput.yield(CrankRevolution(cumulativeRevolutions: 56, lastEventTime: 2_048))
+input.yield(WheelAndCrankRevolution(
+    wheel: WheelRevolution(cumulativeRevolutions: 1_234, lastEventTime: 2_048),
+    crank: CrankRevolution(cumulativeRevolutions: 56, lastEventTime: 2_048),
+))
 
 await server.stop()
 ```
 
-Revolution sources are any `AsyncSequence & Sendable` of `WheelRevolution` or `CrankRevolution`, including `AsyncStream`.
+Revolution sources are any `AsyncSequence & Sendable` of `WheelRevolution`, `CrankRevolution`, or `WheelAndCrankRevolution`, including `AsyncStream`.
+
+With **separate** wheel and crank sources, each sample is paired with the other source's last accepted half when encoded. With **one** `WheelAndCrankRevolution` source, each element is sent as at most one notification carrying both halves from that element; repeat the unchanged half's count and event time together when only one side had a new event.
 
 ### Builder rules
 
-- Entry points: `Server.wheelRevolutions(_:setCumulativeWheelRevolutions:)` and `Server.crankRevolutions(_:)`.
+- Entry points: `Server.wheelRevolutions(_:setCumulativeWheelRevolutions:)`, `Server.crankRevolutions(_:)`, and `Server.wheelAndCrankRevolutions(_:setCumulativeWheelRevolutions:)`.
 - Chain methods: `wheelRevolutions(_:setCumulativeWheelRevolutions:)`, `crankRevolutions(_:)`, `staticSensorLocation(_:)`, `multipleSensorLocations(_:)`, then `build()`.
+- Do not mix the single wheel-and-crank entry point with separate `wheelRevolutions` or `crankRevolutions` chain methods; the type-state builder rejects that at compile time.
 - Static and multiple sensor locations are mutually exclusive; the type-state builder rejects both at compile time.
 - Wheel data always requires a `CumulativeWheelRevolutionsDelegate`.
 - Start Sensor Calibration is not supported.
@@ -247,8 +250,8 @@ Revolution sources are any `AsyncSequence & Sendable` of `WheelRevolution` or `C
 | Crank + static | `02 00` | Measurement, Feature, Sensor Location (cached) |
 | Wheel | `01 00` | Measurement, Feature, Control Point |
 | Wheel + static | `01 00` | Measurement, Feature, Sensor Location (cached), Control Point |
-| Wheel + crank | `03 00` | Measurement, Feature, Control Point |
-| Wheel + crank + static | `03 00` | Measurement, Feature, Sensor Location (cached), Control Point |
+| Wheel + crank (separate or single source) | `03 00` | Measurement, Feature, Control Point |
+| Wheel + crank + static (separate or single source) | `03 00` | Measurement, Feature, Sensor Location (cached), Control Point |
 | Crank + multiple | `06 00` | Measurement, Feature, Sensor Location (`nil`), Control Point |
 | Wheel + multiple | `05 00` | Measurement, Feature, Sensor Location (`nil`), Control Point |
 | Wheel + crank + multiple | `07 00` | Measurement, Feature, Sensor Location (`nil`), Control Point |
@@ -273,7 +276,11 @@ let wheelStatic = Server.wheelRevolutions(wheelStream, setCumulativeWheelRevolut
     .staticSensorLocation(.rearDropout)
     .build()
 
-// Wheel + crank
+// Wheel + crank from one sequence (recommended when both halves belong to the same tick)
+let wheelAndCrank = Server.wheelAndCrankRevolutions(combinedStream, setCumulativeWheelRevolutions: cumulative)
+    .build()
+
+// Wheel + crank from separate sequences
 let wheelCrank = Server.wheelRevolutions(wheelStream, setCumulativeWheelRevolutions: cumulative)
     .crankRevolutions(crankStream)
     .build()
@@ -333,12 +340,13 @@ CSC Feature and the characteristic inventory are fixed at `build()` for the life
 
 - `Server.wheelRevolutions(_:setCumulativeWheelRevolutions:)` — wheel entry point; set-cumulative delegate is required
 - `Server.crankRevolutions(_:)` — crank entry point
+- `Server.wheelAndCrankRevolutions(_:setCumulativeWheelRevolutions:)` — single sequence for both halves; set-cumulative delegate is required
 - `wheelRevolutions(_:setCumulativeWheelRevolutions:)`, `crankRevolutions(_:)`, `staticSensorLocation(_:)`, `multipleSensorLocations(_:)` — chain methods
 - `build()` — returns a configured `Server` (no public `Server` initializer)
 - `Server.start()` / `Server.stop()` — publish and advertise the CSC service, and tear it down
 - `Server.measurementSubscriberCount` — `AsyncStream<Int>` of centrals subscribed to measurement notifications
 - `ServerError` — `alreadyStarted` (this `Server` is already starting, running, or stopping), `notPoweredOn` (unavailable, powered off, unauthorized, or unsupported during startup, or lost before `start()` finished), `publishFailed`, `advertisingFailed`
-- `WheelRevolution`, `CrankRevolution` — CSC Measurement wire units for server sequences
+- `WheelRevolution`, `CrankRevolution`, `WheelAndCrankRevolution` — CSC Measurement wire units for server sequences
 - `SensorLocationKind` — GATT assigned numbers 0...16 for the builder
 - `CumulativeWheelRevolutionsDelegate` — called for Set Cumulative Value
 - `MultipleSensorLocationsDelegate` — `supported`, `current`, and `update(_:)` for Update Sensor Location on multiple-location servers
