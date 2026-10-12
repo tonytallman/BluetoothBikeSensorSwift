@@ -644,7 +644,7 @@ actor ServerSession {
     /// Called only when `updateValue` returned `true` for a payload that overlapped no radio
     /// loss. `wheelGeneration` can still have bumped while `updateValue` was suspended (a Set
     /// Cumulative Value procedure runs on the same actor and can interleave during that await);
-    /// re-checking staleness here catches that case and skips counting stale wheel-bearing
+    /// rechecking staleness here catches that case and skips counting stale wheel-bearing
     /// payloads toward ``acceptedMeasurementCount``.
     private func recordAcceptedMeasurement(_ item: QueuedMeasurement) {
         guard !isStaleWheelPayload(item) else {
@@ -878,7 +878,7 @@ actor ServerSession {
     }
 
     /// Encodes one CSC Measurement from the sample's own halves only. The generation stamp is
-    /// non-nil exactly when the payload carries a wheel half, so a crank-only encoding is never
+    /// not nil exactly when the payload carries a wheel half, so a crank-only encoding is never
     /// mistaken for stale wheel data.
     private func encodeSample(_ sample: WheelAndCrankRevolution) -> (Data, UInt64?)? {
         let measurement = CSCMeasurement(
