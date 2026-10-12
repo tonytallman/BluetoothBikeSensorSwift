@@ -136,9 +136,10 @@ struct ServerWheelTests {
             return false
         }
 
+        let writeID = UUID()
         await fake.emitWriteTransaction(
             PeripheralWriteTransaction(
-                id: UUID(),
+                id: writeID,
                 requests: [
                     PeripheralWriteRequest(
                         centralID: writer,
@@ -151,20 +152,26 @@ struct ServerWheelTests {
             ),
         )
         await fake.waitForRecordedCall { call in
-            if case let .updateValue(value, _, CSCS.controlPointUUID, _) = call {
-                return value == CSCControlPointResponse(
-                    requestOpcode: 0x01,
-                    value: 0x03,
-                    parameter: Data(),
-                ).encode()
-            }
+            if case let .respond(id, .success, nil) = call { return id == writeID }
             return false
         }
 
         await fake.setNextUpdateValueAccepted(true)
         await fake.emitReadyToUpdateSubscribers()
-        await server.waitUntil(.controlPointProcedureIdle)
         await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
+        await server.waitUntil(.controlPointProcedureIdle)
+
+        let indication = CSCControlPointResponse(
+            requestOpcode: 0x01,
+            value: 0x03,
+            parameter: Data(),
+        ).encode()
+        await fake.waitForRecordedCall { call in
+            if case let .updateValue(value, _, CSCS.controlPointUUID, _) = call {
+                return value == indication
+            }
+            return false
+        }
 
         #expect(await fake.measurementPayloads() == [wheelPayload, wheelPayload])
         #expect(await delegate.recordedValues.isEmpty)

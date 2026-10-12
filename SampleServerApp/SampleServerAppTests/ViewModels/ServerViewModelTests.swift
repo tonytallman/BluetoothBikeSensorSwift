@@ -241,6 +241,32 @@ struct RuntimeServerViewModelTests {
         #expect(viewModel.phase == .stopped)
     }
 
+    @Test func factoryReceivesSingleWheelAndCrankStream() async {
+        let ticker = ManualTicker()
+        let slot = FakeLiveServerSlot()
+        let factory = FakeSensorServerFactory(slot: slot, scripts: [.succeed])
+        let viewModel = RuntimeServerViewModel(
+            simulation: RuntimeSimulationViewModel(
+                timeSource: ManualTimeSource(),
+                ticker: ticker,
+            ),
+            factory: factory,
+            bluetooth: FakeBluetoothStateMonitor(),
+        )
+        viewModel.performPrimaryAction()
+        await viewModel.waitForPhase(.running)
+        #expect(factory.recordCount() == 1)
+        guard case let .wheelAndCrank(stream, _) = factory.records[0].revolutions else {
+            Issue.record("Expected default wheel-and-crank revolution input")
+            return
+        }
+        viewModel.performPrimaryAction()
+        await viewModel.waitForPhase(.stopped)
+        var iterator = stream.makeAsyncIterator()
+        #expect(await iterator.next() == nil)
+        ticker.finish()
+    }
+
     @Test func factoryReceivesOnlyConfiguredStreams() async {
         let (viewModel, factory, _, _) = makeViewModel()
         viewModel.revolutions = .wheel

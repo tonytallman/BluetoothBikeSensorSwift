@@ -63,7 +63,7 @@ final class FakeSensorServerFactory: SensorServerFactory, @unchecked Sendable {
         switch records[index].revolutions {
         case let .wheel(_, handler):
             return handler as? CumulativeWheelRevolutionsHandler
-        case let .wheelAndCrank(_, handler, _):
+        case let .wheelAndCrank(_, handler):
             return handler as? CumulativeWheelRevolutionsHandler
         case .crank:
             return nil

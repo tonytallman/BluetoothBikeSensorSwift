@@ -26,12 +26,6 @@ actor ServerSession {
         case send(QueuedMeasurement)
     }
 
-    /// Tags which half of a queued measurement came from a separate wheel or crank source loop.
-    private enum RevolutionSample: Sendable {
-        case wheel(WheelRevolution)
-        case crank(CrankRevolution)
-    }
-
     /// One queued measurement send. `encodedWheelGeneration` is the ``wheelGeneration`` this
     /// payload's wheel half was encoded against, or `nil` if it has no wheel half; a mismatch
     /// against the current generation marks it stale (see ``isStaleWheelPayload(_:)``).
@@ -40,7 +34,7 @@ actor ServerSession {
     private struct QueuedMeasurement {
         var payload: Data
         var encodedWheelGeneration: UInt64?
-        let sample: RevolutionSample
+        let sample: WheelAndCrankRevolution
         var producerContinuation: CheckedContinuation<Void, Never>?
     }
 
@@ -140,8 +134,7 @@ actor ServerSession {
 
     private var inboundTask: Task<Void, Never>?
     private var outboundPumpTask: Task<Void, Never>?
-    private var wheelTask: Task<Void, Never>?
-    private var crankTask: Task<Void, Never>?
+    private var revolutionTasks: [Task<Void, Never>] = []
     private var procedureTask: Task<Void, Never>?
 
     private init(
@@ -220,20 +213,21 @@ actor ServerSession {
         outboundPumpTask?.cancel()
         procedureTask?.cancel()
         timeoutTask?.cancel()
-        wheelTask?.cancel()
-        crankTask?.cancel()
+        for task in revolutionTasks {
+            task.cancel()
+        }
 
         _ = await outboundPumpTask?.value
         _ = await procedureTask?.value
         _ = await timeoutTask?.value
-        _ = await wheelTask?.value
-        _ = await crankTask?.value
+        for task in revolutionTasks {
+            _ = await task.value
+        }
 
         outboundPumpTask = nil
         procedureTask = nil
         procedureTimeoutTask = nil
-        wheelTask = nil
-        crankTask = nil
+        revolutionTasks = []
     }
 
     private func stopInboundTask() async {
@@ -286,8 +280,15 @@ actor ServerSession {
         if closed || Task.isCancelled {
             throw CancellationError()
         }
-        crankTask = startRevolutionLoop(configuration.crankRevolutions, as: { .crank($0) })
-        wheelTask = startRevolutionLoop(configuration.wheel?.revolutions, as: { .wheel($0) })
+        revolutionTasks = [
+            startRevolutionLoop(configuration.crankRevolutions, as: {
+                WheelAndCrankRevolution(crank: $0)
+            }),
+            startRevolutionLoop(configuration.wheel?.revolutions, as: {
+                WheelAndCrankRevolution(wheel: $0)
+            }),
+            startRevolutionLoop(configuration.wheelAndCrank?.revolutions, as: { $0 }),
+        ].compactMap { $0 }
         isStartupComplete = true
         await notifyMeasurementSubscriberCount()
     }
@@ -498,7 +499,7 @@ actor ServerSession {
         guard isStaleWheelPayload(item) else {
             return .send(item)
         }
-        guard case let .crank(crank) = item.sample,
+        guard let crank = item.sample.crank,
               let payload = CSCMeasurement(
                   cumulativeCrankRevolutions: crank.cumulativeRevolutions,
                   lastCrankEventTime: crank.lastEventTime,
@@ -850,7 +851,7 @@ actor ServerSession {
     /// Enqueues one revolution sample and awaits until it leaves the outbound queue (sent,
     /// dropped, or discarded), which throttles ``startRevolutionLoop(_:as:)`` to the pump's pace
     /// rather than letting a source race ahead of what CoreBluetooth can actually send.
-    private func emit(_ sample: RevolutionSample) async {
+    private func emit(_ sample: WheelAndCrankRevolution) async {
         if closed {
             return
         }
@@ -878,24 +879,17 @@ actor ServerSession {
     /// Encodes one CSC Measurement from the sample's own halves only. The generation stamp is
     /// non-nil exactly when the payload carries a wheel half, so a crank-only encoding is never
     /// mistaken for stale wheel data.
-    private func encodeSample(_ sample: RevolutionSample) -> (Data, UInt64?)? {
-        let measurement: CSCMeasurement
-        switch sample {
-        case let .wheel(wheel):
-            measurement = CSCMeasurement(
-                cumulativeWheelRevolutions: wheel.cumulativeRevolutions,
-                lastWheelEventTime: wheel.lastEventTime,
-            )
-        case let .crank(crank):
-            measurement = CSCMeasurement(
-                cumulativeCrankRevolutions: crank.cumulativeRevolutions,
-                lastCrankEventTime: crank.lastEventTime,
-            )
-        }
+    private func encodeSample(_ sample: WheelAndCrankRevolution) -> (Data, UInt64?)? {
+        let measurement = CSCMeasurement(
+            cumulativeWheelRevolutions: sample.wheel?.cumulativeRevolutions,
+            lastWheelEventTime: sample.wheel?.lastEventTime,
+            cumulativeCrankRevolutions: sample.crank?.cumulativeRevolutions,
+            lastCrankEventTime: sample.crank?.lastEventTime,
+        )
         guard let payload = measurement.encode() else {
             return nil
         }
-        let stamp: UInt64? = measurement.cumulativeWheelRevolutions != nil ? wheelGeneration : nil
+        let stamp: UInt64? = sample.wheel != nil ? wheelGeneration : nil
         return (payload, stamp)
     }
 
@@ -1143,7 +1137,7 @@ actor ServerSession {
     private func supportsProcedure(_ opcode: UInt8) -> Bool {
         switch opcode {
         case CSCControlPointOpCode.setCumulativeValue.rawValue:
-            return configuration.wheel != nil
+            return configuration.cumulativeWheelRevolutionsDelegate != nil
         case CSCControlPointOpCode.updateSensorLocation.rawValue,
              CSCControlPointOpCode.requestSupportedSensorLocations.rawValue:
             return configuration.location.multipleLocations != nil
@@ -1160,14 +1154,18 @@ actor ServerSession {
     /// instead of running the procedure. Runs on ``procedureTask``, started once per accepted
     /// write by ``handleWrite(_:)``.
     private func runProcedure(_ request: CSCControlPointRequest, centralID: UUID) async {
-        switch (request, configuration.wheel, configuration.location.multipleLocations) {
-        case let (.setCumulativeValue(value), wheel?, _):
+        switch (
+            request,
+            configuration.cumulativeWheelRevolutionsDelegate,
+            configuration.location.multipleLocations,
+        ) {
+        case let (.setCumulativeValue(value), delegate?, _):
             // Calls the delegate, then bumps `wheelGeneration` on success so any still-queued
-            // wheel-bearing payload is recognized as stale. Wakes a parked
-            // pump without setting the ready latch, so it re-checks staleness immediately instead
-            // of waiting for an unrelated CoreBluetooth ready signal that may not come soon.
+            // wheel-bearing payload is recognized as stale. Wakes a parked pump without setting
+            // the ready latch, so it re-checks staleness immediately instead of waiting for an
+            // unrelated CoreBluetooth ready signal that may not come soon.
             do {
-                try await wheel.delegate.setCumulativeWheelRevolutions(value)
+                try await delegate.setCumulativeWheelRevolutions(value)
             } catch {
                 indicate(
                     opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
@@ -1312,7 +1310,7 @@ actor ServerSession {
     /// by a later `start()`.
     private func startRevolutionLoop<Element: Sendable>(
         _ sequence: AnyAsyncSequence<Element>?,
-        as map: @escaping @Sendable (Element) -> RevolutionSample,
+        as map: @escaping @Sendable (Element) -> WheelAndCrankRevolution,
     ) -> Task<Void, Never>? {
         guard let sequence else {
             return nil

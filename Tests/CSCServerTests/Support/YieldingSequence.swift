@@ -32,6 +32,7 @@ final class YieldingSequence<Element: Sendable>: AsyncSequence, Sendable {
 
 typealias YieldingWheelSequence = YieldingSequence<WheelRevolution>
 typealias YieldingCrankSequence = YieldingSequence<CrankRevolution>
+typealias YieldingWheelAndCrankSequence = YieldingSequence<WheelAndCrankRevolution>
 
 actor YieldChannel<Element: Sendable> {
     private var queue: [Element] = []
