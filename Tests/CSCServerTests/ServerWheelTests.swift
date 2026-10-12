@@ -63,7 +63,7 @@ struct ServerWheelTests {
         })
     }
 
-    @Test func secondSampleOnWheelAndCrankMatchesCombinedFixture() async throws {
+    @Test func twoSourceSamplesSendOnlyTheirOwnHalf() async throws {
         let delegate = ScriptedCumulativeDelegate()
         let (wheelSequence, yieldWheel) = makeYieldingWheelSequence()
         let (crankSequence, yieldCrank) = makeYieldingCrankSequence()
@@ -85,49 +85,24 @@ struct ServerWheelTests {
 
         await yieldWheel(WheelRevolution(cumulativeRevolutions: 100, lastEventTime: 1024))
         await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
-
         await yieldCrank(CrankRevolution(cumulativeRevolutions: 80, lastEventTime: 2048))
         await server.waitUntil(.acceptedMeasurementCount(atLeast: 2))
-
-        let combined = CSCMeasurement(
-            cumulativeWheelRevolutions: 100,
-            lastWheelEventTime: 1024,
-            cumulativeCrankRevolutions: 80,
-            lastCrankEventTime: 2048,
-        ).encode()!
-        await fake.waitUntilRecordedCallsSatisfy { calls in
-            calls.contains { call in
-                if case let .updateValue(value, _, _, _) = call {
-                    return value == combined
-                }
-                return false
-            }
-        }
-
         await yieldWheel(WheelRevolution(cumulativeRevolutions: 101, lastEventTime: 1100))
         await server.waitUntil(.acceptedMeasurementCount(atLeast: 3))
 
-        let finalCombined = CSCMeasurement(
-            cumulativeWheelRevolutions: 101,
-            lastWheelEventTime: 1100,
-            cumulativeCrankRevolutions: 80,
-            lastCrankEventTime: 2048,
-        ).encode()!
-        await fake.waitUntilRecordedCallsSatisfy { calls in
-            calls.filter { call in
-                if case let .updateValue(value, _, _, _) = call {
-                    return value == finalCombined
-                }
-                return false
-            }.count == 1
-        }
+        let wheel1 = CSCMeasurement(cumulativeWheelRevolutions: 100, lastWheelEventTime: 1024).encode()!
+        let crank1 = CSCMeasurement(cumulativeCrankRevolutions: 80, lastCrankEventTime: 2048).encode()!
+        let wheel2 = CSCMeasurement(cumulativeWheelRevolutions: 101, lastWheelEventTime: 1100).encode()!
+        await fake.waitUntilUpdateValueCount(3, characteristic: CSCS.measurementUUID)
+        #expect(await fake.measurementPayloads() == [wheel1, crank1, wheel2])
     }
 
-    @Test func invalidParameterLeavesAcceptedWheelInPlace() async throws {
+    @Test func invalidParameterLeavesQueuedWheelPayloadIntact() async throws {
         let delegate = ScriptedCumulativeDelegate()
         let (wheelSequence, yieldWheel) = makeYieldingWheelSequence()
-        let (crankSequence, yieldCrank) = makeYieldingCrankSequence()
+        let (crankSequence, _) = makeYieldingCrankSequence()
         let fake = FakeBluetoothPeripheral()
+        await fake.setNextUpdateValueAccepted(false)
         let server = Server.wheelRevolutions(wheelSequence, setCumulativeWheelRevolutions: delegate)
             .crankRevolutions(crankSequence)
             .build()
@@ -143,9 +118,6 @@ struct ServerWheelTests {
         )
         await server.waitUntil(.measurementSubscribers([writer]))
 
-        await yieldWheel(WheelRevolution(cumulativeRevolutions: 50, lastEventTime: 1))
-        await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
-
         await fake.emitSubscription(
             .subscribed(
                 centralID: writer,
@@ -155,10 +127,18 @@ struct ServerWheelTests {
         )
         await server.waitUntil(.controlPointSubscribers([writer]))
 
-        let transactionID = UUID()
+        let wheelPayload = CSCMeasurement(cumulativeWheelRevolutions: 50, lastWheelEventTime: 1).encode()!
+        await yieldWheel(WheelRevolution(cumulativeRevolutions: 50, lastEventTime: 1))
+        await fake.waitForRecordedCall { call in
+            if case let .updateValue(value, _, CSCS.measurementUUID, _) = call {
+                return value == wheelPayload
+            }
+            return false
+        }
+
         await fake.emitWriteTransaction(
             PeripheralWriteTransaction(
-                id: transactionID,
+                id: UUID(),
                 requests: [
                     PeripheralWriteRequest(
                         centralID: writer,
@@ -170,11 +150,8 @@ struct ServerWheelTests {
                 ],
             ),
         )
-
         await fake.waitForRecordedCall { call in
-            if case let .updateValue(value, _, characteristicUUID, _) = call,
-               characteristicUUID == CSCS.controlPointUUID
-            {
+            if case let .updateValue(value, _, CSCS.controlPointUUID, _) = call {
                 return value == CSCControlPointResponse(
                     requestOpcode: 0x01,
                     value: 0x03,
@@ -183,31 +160,17 @@ struct ServerWheelTests {
             }
             return false
         }
+
+        await fake.setNextUpdateValueAccepted(true)
+        await fake.emitReadyToUpdateSubscribers()
         await server.waitUntil(.controlPointProcedureIdle)
+        await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
 
-        await yieldCrank(CrankRevolution(cumulativeRevolutions: 10, lastEventTime: 2))
-        await server.waitUntil(.acceptedMeasurementCount(atLeast: 2))
-
-        let expected = CSCMeasurement(
-            cumulativeWheelRevolutions: 50,
-            lastWheelEventTime: 1,
-            cumulativeCrankRevolutions: 10,
-            lastCrankEventTime: 2,
-        ).encode()!
-        await fake.waitUntilRecordedCallsSatisfy { calls in
-            calls.contains { call in
-                if case let .updateValue(value, _, characteristicUUID, _) = call,
-                   characteristicUUID == CSCS.measurementUUID
-                {
-                    return value == expected
-                }
-                return false
-            }
-        }
+        #expect(await fake.measurementPayloads() == [wheelPayload, wheelPayload])
         #expect(await delegate.recordedValues.isEmpty)
     }
 
-    @Test func successfulSetCumulativeDropsCachedWheel() async throws {
+    @Test func successfulSetCumulativeSendsOnlyYieldedHalves() async throws {
         let delegate = ScriptedCumulativeDelegate()
         let (wheelSequence, yieldWheel) = makeYieldingWheelSequence()
         let (crankSequence, yieldCrank) = makeYieldingCrankSequence()
@@ -263,44 +226,18 @@ struct ServerWheelTests {
             return false
         }
         await server.waitUntil(.controlPointProcedureIdle)
+        #expect(await delegate.recordedValues == [0x12345678])
 
         await yieldCrank(CrankRevolution(cumulativeRevolutions: 11, lastEventTime: 3))
         await server.waitUntil(.acceptedMeasurementCount(atLeast: 3))
-
-        let crankOnly = CSCMeasurement(
-            cumulativeCrankRevolutions: 11,
-            lastCrankEventTime: 3,
-        ).encode()!
-        await fake.waitUntilRecordedCallsSatisfy { calls in
-            calls.contains { call in
-                if case let .updateValue(value, _, characteristicUUID, _) = call,
-                   characteristicUUID == CSCS.measurementUUID
-                {
-                    return value == crankOnly
-                }
-                return false
-            }
-        }
-
         await yieldWheel(WheelRevolution(cumulativeRevolutions: 0, lastEventTime: 4))
         await server.waitUntil(.acceptedMeasurementCount(atLeast: 4))
 
-        let combined = CSCMeasurement(
-            cumulativeWheelRevolutions: 0,
-            lastWheelEventTime: 4,
-            cumulativeCrankRevolutions: 11,
-            lastCrankEventTime: 3,
-        ).encode()!
-        await fake.waitUntilRecordedCallsSatisfy { calls in
-            calls.contains { call in
-                if case let .updateValue(value, _, characteristicUUID, _) = call,
-                   characteristicUUID == CSCS.measurementUUID
-                {
-                    return value == combined
-                }
-                return false
-            }
-        }
+        let wheel1 = CSCMeasurement(cumulativeWheelRevolutions: 50, lastWheelEventTime: 1).encode()!
+        let crank1 = CSCMeasurement(cumulativeCrankRevolutions: 10, lastCrankEventTime: 2).encode()!
+        let crank2 = CSCMeasurement(cumulativeCrankRevolutions: 11, lastCrankEventTime: 3).encode()!
+        let wheel2 = CSCMeasurement(cumulativeWheelRevolutions: 0, lastWheelEventTime: 4).encode()!
+        #expect(await fake.measurementPayloads() == [wheel1, crank1, crank2, wheel2])
     }
 
     @Test func setCumulativeDiscardsUnsentWheelNotification() async throws {
@@ -389,7 +326,7 @@ struct ServerWheelTests {
         await server.waitUntil(.controlPointProcedureIdle)
     }
 
-    @Test func setCumulativeDiscardsUnsentCombinedCrankAndRequeuesCrankOnly() async throws {
+    @Test func setCumulativeLeavesQueuedCrankSampleUnchanged() async throws {
         let delegate = ScriptedCumulativeDelegate()
         let (wheelSequence, yieldWheel) = makeYieldingWheelSequence()
         let (crankSequence, yieldCrank) = makeYieldingCrankSequence()
@@ -423,19 +360,11 @@ struct ServerWheelTests {
 
         await fake.setNextUpdateValueAccepted(false)
 
-        let crank = CrankRevolution(cumulativeRevolutions: 10, lastEventTime: 2)
-        await yieldCrank(crank)
-        let combined = CSCMeasurement(
-            cumulativeWheelRevolutions: 50,
-            lastWheelEventTime: 1,
-            cumulativeCrankRevolutions: 10,
-            lastCrankEventTime: 2,
-        ).encode()!
+        let crankPayload = CSCMeasurement(cumulativeCrankRevolutions: 10, lastCrankEventTime: 2).encode()!
+        await yieldCrank(CrankRevolution(cumulativeRevolutions: 10, lastEventTime: 2))
         await fake.waitForRecordedCall { call in
-            if case let .updateValue(value, _, characteristicUUID, _) = call,
-               characteristicUUID == CSCS.measurementUUID
-            {
-                return value == combined
+            if case let .updateValue(value, _, CSCS.measurementUUID, _) = call {
+                return value == crankPayload
             }
             return false
         }
@@ -462,35 +391,12 @@ struct ServerWheelTests {
             return false
         }
 
-        let crankOnly = CSCMeasurement(
-            cumulativeCrankRevolutions: 10,
-            lastCrankEventTime: 2,
-        ).encode()!
-        await fake.waitForRecordedCall { call in
-            if case let .updateValue(value, _, characteristicUUID, _) = call,
-               characteristicUUID == CSCS.measurementUUID
-            {
-                return value == crankOnly
-            }
-            return false
-        }
-
         await fake.setNextUpdateValueAccepted(true)
         await fake.emitReadyToUpdateSubscribers()
         await server.waitUntil(.controlPointProcedureIdle)
 
-        await fake.waitForRecordedCall { call in
-            if case let .updateValue(value, _, characteristicUUID, _) = call,
-               characteristicUUID == CSCS.controlPointUUID
-            {
-                return value == CSCControlPointResponse(
-                    requestOpcode: 0x01,
-                    value: 0x01,
-                    parameter: Data(),
-                ).encode()
-            }
-            return false
-        }
+        let wheelPayload = CSCMeasurement(cumulativeWheelRevolutions: 50, lastWheelEventTime: 1).encode()!
+        #expect(await fake.measurementPayloads() == [wheelPayload, crankPayload, crankPayload])
     }
 
     @Test func measurementNotifiesWhileCumulativeDelegateParked() async throws {
@@ -645,6 +551,7 @@ struct ServerWheelTests {
             }
             return false
         }
+        #expect(await fake.measurementPayloads() == [expected])
     }
 
     @Test func wheelBackpressureRetriesSamePayload() async throws {
@@ -858,7 +765,7 @@ struct ServerWheelTests {
         }
     }
 
-    @Test func combinedServerCrankRolloverPassesThrough() async throws {
+    @Test func twoSourceCrankRolloverPassesThrough() async throws {
         let delegate = ScriptedCumulativeDelegate()
         let (wheelSequence, yieldWheel) = makeYieldingWheelSequence()
         let (crankSequence, yieldCrank) = makeYieldingCrankSequence()
@@ -880,36 +787,15 @@ struct ServerWheelTests {
 
         await yieldWheel(WheelRevolution(cumulativeRevolutions: 100, lastEventTime: 1024))
         await server.waitUntil(.acceptedMeasurementCount(atLeast: 1))
-
         await yieldCrank(CrankRevolution(cumulativeRevolutions: 0xFFFF, lastEventTime: 100))
         await server.waitUntil(.acceptedMeasurementCount(atLeast: 2))
-        let rollover = CSCMeasurement(
-            cumulativeWheelRevolutions: 100,
-            lastWheelEventTime: 1024,
-            cumulativeCrankRevolutions: 0xFFFF,
-            lastCrankEventTime: 100,
-        ).encode()!
-        await fake.waitUntilRecordedCallsSatisfy { calls in
-            calls.contains { call in
-                if case let .updateValue(value, _, _, _) = call { return value == rollover }
-                return false
-            }
-        }
-
         await yieldCrank(CrankRevolution(cumulativeRevolutions: 0x0000, lastEventTime: 200))
         await server.waitUntil(.acceptedMeasurementCount(atLeast: 3))
-        let wrapped = CSCMeasurement(
-            cumulativeWheelRevolutions: 100,
-            lastWheelEventTime: 1024,
-            cumulativeCrankRevolutions: 0x0000,
-            lastCrankEventTime: 200,
-        ).encode()!
-        await fake.waitUntilRecordedCallsSatisfy { calls in
-            calls.contains { call in
-                if case let .updateValue(value, _, _, _) = call { return value == wrapped }
-                return false
-            }
-        }
+
+        let wheel1 = CSCMeasurement(cumulativeWheelRevolutions: 100, lastWheelEventTime: 1024).encode()!
+        let crank1 = CSCMeasurement(cumulativeCrankRevolutions: 0xFFFF, lastCrankEventTime: 100).encode()!
+        let crank2 = CSCMeasurement(cumulativeCrankRevolutions: 0x0000, lastCrankEventTime: 200).encode()!
+        #expect(await fake.measurementPayloads() == [wheel1, crank1, crank2])
     }
 }
 

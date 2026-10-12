@@ -116,6 +116,15 @@ extension FakeBluetoothPeripheral {
             calls.filter(predicate).count >= count
         }
     }
+
+    nonisolated func measurementPayloads() async -> [Data] {
+        await recordedCalls.compactMap { call in
+            if case let .updateValue(value, _, CSCS.measurementUUID, _) = call {
+                return value
+            }
+            return nil
+        }
+    }
 }
 
 func controlPointWrite(

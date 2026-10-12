@@ -26,9 +26,7 @@ actor ServerSession {
         case send(QueuedMeasurement)
     }
 
-    /// Identifies which source produced a queued measurement, so an accepted send updates the
-    /// right cache (``wheelCache``/``crankCache``) and a stale wheel payload can be re-encoded
-    /// crank-only.
+    /// Tags which half of a queued measurement came from a separate wheel or crank source loop.
     private enum RevolutionSample: Sendable {
         case wheel(WheelRevolution)
         case crank(CrankRevolution)
@@ -104,10 +102,6 @@ actor ServerSession {
     private var isStartupComplete = false
     private var pendingInboundEvents: [PeripheralEvent] = []
 
-    /// Last accepted half of a combined CSC Measurement from each source, used to fill in the
-    /// other half when only one source produces a new sample.
-    private var wheelCache: WheelRevolution?
-    private var crankCache: CrankRevolution?
     /// Bumped on every successful Set Cumulative Value. Stamps queued wheel-bearing payloads so
     /// one still queued when the value changes can be recognized as stale and dropped or
     /// recomputed. Wraps after `UInt64.max`; a stamp of `0` can then match again, which is
@@ -496,10 +490,10 @@ actor ServerSession {
         }
     }
 
-    /// If the head's wheel half is stale, either re-encodes it crank-only (writing the result
-    /// back into the queue so a subsequent re-check sees the same payload) or reports it should
-    /// be removed. Pure with respect to `item`'s caller-visible state — does not remove from the
-    /// queue or resume the producer; ``prepareHead(_:)`` does that.
+    /// If the head's wheel half is stale, either re-encodes crank-only from this sample's crank
+    /// half (Set Cumulative Value never changes crank data) or drops the item when no crank half
+    /// exists. Pure with respect to `item`'s caller-visible state — does not remove from the queue
+    /// or resume the producer; ``prepareHead(_:)`` does that.
     private func resolveStaleHead(_ item: QueuedMeasurement) -> StaleHeadResolution {
         guard isStaleWheelPayload(item) else {
             return .send(item)
@@ -648,21 +642,11 @@ actor ServerSession {
     /// Called only when `updateValue` returned `true` for a payload that overlapped no radio
     /// loss. `wheelGeneration` can still have bumped while `updateValue` was suspended (a Set
     /// Cumulative Value procedure runs on the same actor and can interleave during that await);
-    /// re-checking staleness here catches that case. A stale wheel-bearing payload still caches
-    /// its crank half (still current) but does not cache the wheel half or count toward
-    /// ``acceptedMeasurementCount``.
+    /// re-checking staleness here catches that case and skips counting stale wheel-bearing
+    /// payloads toward ``acceptedMeasurementCount``.
     private func recordAcceptedMeasurement(_ item: QueuedMeasurement) {
-        if isStaleWheelPayload(item) {
-            if case let .crank(crank) = item.sample {
-                crankCache = crank
-            }
+        guard !isStaleWheelPayload(item) else {
             return
-        }
-        switch item.sample {
-        case let .wheel(wheel):
-            wheelCache = wheel
-        case let .crank(crank):
-            crankCache = crank
         }
         acceptedMeasurementCount += 1
         resumeSatisfiedTestWaiters()
@@ -891,9 +875,9 @@ actor ServerSession {
         }
     }
 
-    /// Combines the new sample with the last-accepted half from the other source (if any) into
-    /// one CSC Measurement payload. The generation stamp is non-nil exactly when the payload
-    /// carries a wheel half, so a crank-only encoding is never mistaken for stale wheel data.
+    /// Encodes one CSC Measurement from the sample's own halves only. The generation stamp is
+    /// non-nil exactly when the payload carries a wheel half, so a crank-only encoding is never
+    /// mistaken for stale wheel data.
     private func encodeSample(_ sample: RevolutionSample) -> (Data, UInt64?)? {
         let measurement: CSCMeasurement
         switch sample {
@@ -901,13 +885,9 @@ actor ServerSession {
             measurement = CSCMeasurement(
                 cumulativeWheelRevolutions: wheel.cumulativeRevolutions,
                 lastWheelEventTime: wheel.lastEventTime,
-                cumulativeCrankRevolutions: crankCache?.cumulativeRevolutions,
-                lastCrankEventTime: crankCache?.lastEventTime,
             )
         case let .crank(crank):
             measurement = CSCMeasurement(
-                cumulativeWheelRevolutions: wheelCache?.cumulativeRevolutions,
-                lastWheelEventTime: wheelCache?.lastEventTime,
                 cumulativeCrankRevolutions: crank.cumulativeRevolutions,
                 lastCrankEventTime: crank.lastEventTime,
             )
@@ -1182,8 +1162,8 @@ actor ServerSession {
     private func runProcedure(_ request: CSCControlPointRequest, centralID: UUID) async {
         switch (request, configuration.wheel, configuration.location.multipleLocations) {
         case let (.setCumulativeValue(value), wheel?, _):
-            // Calls the delegate, then bumps `wheelGeneration` and clears `wheelCache` on success
-            // so any still-queued wheel-bearing payload is recognized as stale. Wakes a parked
+            // Calls the delegate, then bumps `wheelGeneration` on success so any still-queued
+            // wheel-bearing payload is recognized as stale. Wakes a parked
             // pump without setting the ready latch, so it re-checks staleness immediately instead
             // of waiting for an unrelated CoreBluetooth ready signal that may not come soon.
             do {
@@ -1197,7 +1177,6 @@ actor ServerSession {
                 return
             }
             wheelGeneration &+= 1
-            wheelCache = nil
             indicate(
                 opcode: CSCControlPointOpCode.setCumulativeValue.rawValue,
                 value: .success,

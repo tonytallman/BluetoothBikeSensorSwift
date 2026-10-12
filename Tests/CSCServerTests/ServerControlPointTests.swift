@@ -105,20 +105,9 @@ struct ServerControlPointTests {
         await yieldCrank(CrankRevolution(cumulativeRevolutions: 10, lastEventTime: 2))
         await server.waitUntil(.acceptedMeasurementCount(atLeast: 2))
 
-        let expected = CSCMeasurement(
-            cumulativeWheelRevolutions: 50,
-            lastWheelEventTime: 1,
-            cumulativeCrankRevolutions: 10,
-            lastCrankEventTime: 2,
-        ).encode()!
-        await fake.waitUntilRecordedCallsSatisfy { calls in
-            calls.contains { call in
-                if case let .updateValue(value, _, CSCS.measurementUUID, _) = call {
-                    return value == expected
-                }
-                return false
-            }
-        }
+        let wheelPayload = CSCMeasurement(cumulativeWheelRevolutions: 50, lastWheelEventTime: 1).encode()!
+        let crankPayload = CSCMeasurement(cumulativeCrankRevolutions: 10, lastCrankEventTime: 2).encode()!
+        #expect(await fake.measurementPayloads() == [wheelPayload, crankPayload])
 
         await fake.emitWriteTransaction(controlPointWrite(centralID: writer))
         await fake.waitForRecordedCall { call in
