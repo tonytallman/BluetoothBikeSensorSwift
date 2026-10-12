@@ -398,12 +398,24 @@ struct ServerWheelTests {
             return false
         }
 
+        await fake.waitUntilUpdateValueCount(2, characteristic: CSCS.measurementUUID, matching: { $0 == crankPayload })
+
         await fake.setNextUpdateValueAccepted(true)
         await fake.emitReadyToUpdateSubscribers()
         await server.waitUntil(.controlPointProcedureIdle)
+        await fake.waitForRecordedCall { call in
+            if case let .updateValue(value, _, CSCS.controlPointUUID, _) = call {
+                return value == CSCControlPointResponse(
+                    requestOpcode: 0x01,
+                    value: 0x01,
+                    parameter: Data(),
+                ).encode()
+            }
+            return false
+        }
 
         let wheelPayload = CSCMeasurement(cumulativeWheelRevolutions: 50, lastWheelEventTime: 1).encode()!
-        #expect(await fake.measurementPayloads() == [wheelPayload, crankPayload, crankPayload])
+        #expect(await fake.measurementPayloads() == [wheelPayload, crankPayload, crankPayload, crankPayload])
     }
 
     @Test func measurementNotifiesWhileCumulativeDelegateParked() async throws {

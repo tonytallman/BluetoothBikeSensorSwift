@@ -42,6 +42,7 @@ struct ServerReadmeExampleTests {
             characteristic: CSCS.measurementUUID,
             matching: { $0 == expected },
         )
+        #expect(await fake.measurementPayloads() == [expected])
 
         await server.stop()
     }

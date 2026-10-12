@@ -49,7 +49,7 @@ package struct ServerConfiguration: Sendable {
     /// with `location`).
     let includesControlPoint: Bool
 
-    package var cumulativeWheelRevolutionsDelegate: (any CumulativeWheelRevolutionsDelegate)? {
+    var cumulativeWheelRevolutionsDelegate: (any CumulativeWheelRevolutionsDelegate)? {
         wheel?.delegate ?? wheelAndCrank?.delegate
     }
 
@@ -61,7 +61,7 @@ package struct ServerConfiguration: Sendable {
     init(
         wheel: WheelConfiguration<WheelRevolution>?,
         crankRevolutions: AnyAsyncSequence<CrankRevolution>?,
-        wheelAndCrank: WheelConfiguration<WheelAndCrankRevolution>? = nil,
+        wheelAndCrank: WheelConfiguration<WheelAndCrankRevolution>?,
         location: SensorLocationConfiguration,
     ) {
         precondition(

@@ -269,25 +269,10 @@ struct ServerWheelAndCrankSourceTests {
             if case .respond(_, .success, nil) = call { return true }
             return false
         }
-        await fake.waitUntilRecordedCallsSatisfy { calls in
-            calls.filter { call in
-                if case let .updateValue(value, _, CSCS.measurementUUID, _) = call {
-                    return value == crankOnly
-                }
-                return false
-            }.count >= 1
-        }
-        await fake.emitReadyToUpdateSubscribers()
-        await fake.waitUntilRecordedCallsSatisfy { calls in
-            calls.filter { call in
-                if case let .updateValue(value, _, CSCS.measurementUUID, _) = call {
-                    return value == crankOnly
-                }
-                return false
-            }.count >= 2
-        }
+        await fake.waitUntilUpdateValueCount(1, characteristic: CSCS.measurementUUID, matching: { $0 == crankOnly })
         await fake.setNextUpdateValueAccepted(true)
         await fake.emitReadyToUpdateSubscribers()
+        await fake.waitUntilUpdateValueCount(2, characteristic: CSCS.measurementUUID, matching: { $0 == crankOnly })
         await server.waitUntil(.controlPointProcedureIdle)
         await fake.waitUntilUpdateValueCount(
             1,
@@ -301,10 +286,7 @@ struct ServerWheelAndCrankSourceTests {
         )
         await yield(e2)
         await fake.waitUntilUpdateValueCount(1, characteristic: CSCS.measurementUUID, matching: { $0 == encoded(e2) })
-        let payloads = await fake.measurementPayloads()
-        #expect(payloads.first == encoded(e1))
-        #expect(payloads.last == encoded(e2))
-        #expect(payloads.filter { $0 == crankOnly }.count >= 2)
+        #expect(await fake.measurementPayloads() == [encoded(e1), crankOnly, crankOnly, encoded(e2)])
         await server.stop()
     }
 
@@ -344,8 +326,7 @@ struct ServerWheelAndCrankSourceTests {
         await fake.emitReadyToUpdateSubscribers()
         await server.waitUntil(.controlPointProcedureIdle)
 
-        let attempts = await fake.countUpdateValues(characteristic: CSCS.measurementUUID, matching: { $0 == wheelPayload })
-        #expect(attempts == 1)
+        #expect(await fake.measurementPayloads() == [wheelPayload])
         await server.stop()
     }
 
@@ -372,13 +353,18 @@ struct ServerWheelAndCrankSourceTests {
             controlPointWrite(centralID: writer, value: setCumulativeValue(9)),
         )
         await fake.waitForRecordedCall { call in
-            if case let .respond(_, .success, nil) = call { return true }
+            if case .respond(_, .success, nil) = call { return true }
             return false
         }
         await server.waitUntil(.outboundCount(atLeast: 2))
 
         await fake.release(.updateValue)
         await server.waitUntil(.controlPointProcedureIdle)
+        await fake.waitUntilUpdateValueCount(
+            1,
+            characteristic: CSCS.controlPointUUID,
+            matching: { $0 == controlPointResponse(opcode: 0x01, value: 0x01) },
+        )
 
         let e2 = WheelAndCrankRevolution(
             wheel: WheelRevolution(cumulativeRevolutions: 2, lastEventTime: 5),

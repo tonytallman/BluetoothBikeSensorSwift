@@ -493,8 +493,9 @@ actor ServerSession {
 
     /// If the head's wheel half is stale, either re-encodes crank-only from this sample's crank
     /// half (Set Cumulative Value never changes crank data) or drops the item when no crank half
-    /// exists. Pure with respect to `item`'s caller-visible state — does not remove from the queue
-    /// or resume the producer; ``prepareHead(_:)`` does that.
+    /// exists. Writes the re-encoded payload back into the queue so a subsequent re-check sees
+    /// the same bytes. Does not remove from the queue or resume the producer; ``prepareHead(_:)``
+    /// does that.
     private func resolveStaleHead(_ item: QueuedMeasurement) -> StaleHeadResolution {
         guard isStaleWheelPayload(item) else {
             return .send(item)
@@ -1147,7 +1148,7 @@ actor ServerSession {
     }
 
     /// Dispatches one decoded SC Control Point request to its procedure by matching
-    /// `(request, wheel configuration, multiple-location configuration)` together: a case only
+    /// `(request, Set Cumulative Value delegate, multiple-location configuration)` together: a case only
     /// fires when both the request shape and the matching configuration are present, so a
     /// request this build does not serve (e.g. Update Sensor Location without multiple
     /// locations) falls through to the generic `invalidParameter`/`default` cases at the bottom
