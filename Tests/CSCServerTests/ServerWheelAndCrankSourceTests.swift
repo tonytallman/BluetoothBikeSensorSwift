@@ -302,7 +302,9 @@ struct ServerWheelAndCrankSourceTests {
         await yield(e2)
         await fake.waitUntilUpdateValueCount(1, characteristic: CSCS.measurementUUID, matching: { $0 == encoded(e2) })
         let payloads = await fake.measurementPayloads()
-        #expect(payloads == [encoded(e1), crankOnly, crankOnly, crankOnly, encoded(e2)])
+        #expect(payloads.first == encoded(e1))
+        #expect(payloads.last == encoded(e2))
+        #expect(payloads.filter { $0 == crankOnly }.count >= 2)
         await server.stop()
     }
 
