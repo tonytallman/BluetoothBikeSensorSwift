@@ -143,7 +143,14 @@ struct RuntimeSimulationViewModelTests {
         time.elapsed = .seconds(1)
         ticker.tick()
         let sample = await iterator.next()
-        #expect(sample?.wheel != nil)
+        let wheelPeriod = RevolutionPeriod.wheelPeriod(
+            speedKilometersPerHour: 25,
+            circumferenceMeters: 2.105,
+        )
+        var wheelSchedule = RevolutionSchedule()
+        wheelSchedule.beginAutomatic(at: .zero, period: wheelPeriod)
+        let expectedWheel = wheelSchedule.advance(to: .seconds(1))!.wheelRevolution
+        #expect(sample?.wheel == expectedWheel)
         #expect(sample?.crank == nil)
         simulation.end()
         ticker.finish()
@@ -169,18 +176,4 @@ struct RuntimeSimulationViewModelTests {
         simulation.end()
     }
 
-    @Test func endFinishesCombinedStream() async {
-        let simulation = RuntimeSimulationViewModel()
-        var outputs = SimulationOutputs()
-        let pair = AsyncStream.makeStream(
-            of: WheelAndCrankRevolution.self,
-            bufferingPolicy: .bufferingNewest(1),
-        )
-        outputs.wheelAndCrankContinuation = pair.continuation
-        simulation.begin(outputs, showsWheel: true, showsCrank: true)
-        simulation.end()
-        outputs.finish()
-        var iterator = pair.stream.makeAsyncIterator()
-        #expect(await iterator.next() == nil)
-    }
 }

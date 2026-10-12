@@ -151,7 +151,7 @@ change what a server advertises is to build a new one.
      and came back mid-startup, startup still fails with `.notPoweredOn`;
    - drains any inbound events that arrived while starting (buffered, not dropped) in arrival
      order, then opens the "startup gate" so future events are handled live;
-   - starts one pull loop per configured revolution source (crank, wheel, and/or combined).
+   - starts one pull loop per configured source: wheel and/or crank, or one combined source.
 3. Back in `ServerLifecycle`, once the child task finishes, reverify it is still the task `phase`
    points at before committing to `.running` — a concurrent `stop()` may have already begun
    tearing this same task down.
@@ -211,7 +211,8 @@ sequenceDiagram
 ```
 
 Each revolution `AsyncSequence` is pulled by its own dedicated task (`startRevolutionLoop`), one
-iterator per source (up to three: crank, wheel, and combined), never shared across tasks. There
+iterator per configured source: wheel and/or crank, or one combined source, never shared across
+tasks. There
 are no measurement caches: each notification carries exactly the halves present on one sample.
 Separate wheel and crank sources therefore produce single-half notifications; a
 `WheelAndCrankRevolution` source puts one element's present halves together in one notification.
@@ -228,14 +229,15 @@ discarded. `acceptedMeasurementCount` counts only non-stale, same-epoch accepted
 The pump is the **only** caller of `updateValue` and the only remover of the queue head. When
 `updateValue` returns `false` (CoreBluetooth's transmit buffer is full), the pump parks on a
 ready-to-update latch and retries the exact same payload once `events` reports
-`.readyToUpdateSubscribers`. `prepareHead(_:)` rechecks, both before the first send attempt and
-again after every `false` return, the three reasons the head might no longer be sendable:
+`.readyToUpdateSubscribers`. If `updateValue` throws, the head item is dropped and not counted.
+`prepareHead(_:)` rechecks, both before the first send attempt and again after every `false`
+return, the three reasons the head might no longer be sendable:
 
 - **Shutdown or no subscribers**: the item is dropped and its producer resumed.
 - **Staleness**: a queued wheel-bearing payload is stamped with the `wheelGeneration` it was
   encoded against. After Set Cumulative Value succeeds, a still-queued item with both halves is
   re-encoded crank-only from that sample's crank half (stamp cleared); a queued wheel-only item is
-  dropped; crank-only and stamp-less items are sent unchanged. An in-flight send that returns
+  dropped; stamp-less items are sent unchanged. An in-flight send that returns
   `true` after the generation bump keeps its original bytes and is not counted toward
   `acceptedMeasurementCount`.
 
@@ -261,8 +263,7 @@ Requests and responses use the same outbound queue and pump as measurements, but
    must honor cancellation — `stop()` and the timeout both cancel an in-flight call.
    `runProcedure(_:centralID:)` dispatches by matching `(request, cumulative-wheel delegate,
    multiple-location config)` together, so a request this build does not serve falls through to a
-   generic
-   "unsupported/invalid" case instead of running.
+   generic "unsupported/invalid" case instead of running.
 4. On success, the procedure's indication is enqueued (`enqueueIndication`) and processed by the
    same pump used for measurements — including the same retry-on-`false` backpressure loop.
    `enqueueIndication` itself checks `closed`/timed-out and ends the procedure without indicating
@@ -341,7 +342,8 @@ exercises `ServerSession`'s write handling, the outbound pump, and often `Server
 - **No measurement caches.** The server never pairs or fills halves from another source or from Set
   Cumulative Value, because a pair built from two independent sources can carry a half older than
   one already sent. Callers with both halves for one tick use `Server.wheelAndCrankRevolutions`.
-  Merging two `AsyncSequence`s was rejected for the same interleaving reason.
+  Merging two independent `AsyncSequence`s was rejected because their samples would interleave
+  unpredictably at encode time.
 - **Feature bits and the characteristic list are immutable after `build()`** because CoreBluetooth
   has no story for updating a published GATT database in place that this library relies on
   (`Service Changed` is not implemented); changing shape means publishing a new service and

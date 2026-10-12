@@ -2,7 +2,6 @@ import CSCServer
 import Foundation
 
 struct RevolutionSchedule: Equatable {
-    private(set) var hasEvent = false
     private(set) var cumulative: UInt64 = 0
     private(set) var lastEventElapsed: Duration = .zero
     private var anchor: Duration = .zero
@@ -40,7 +39,6 @@ struct RevolutionSchedule: Equatable {
             lastEventElapsed = next
             anchor = next
             next += period
-            hasEvent = true
             produced = WheelRevolutionSample(
                 cumulative: cumulative,
                 lastEventElapsed: lastEventElapsed,
@@ -57,7 +55,6 @@ struct RevolutionSchedule: Equatable {
         if isAutomatic {
             nextEvent = now + period
         }
-        hasEvent = true
         return WheelRevolutionSample(
             cumulative: cumulative,
             lastEventElapsed: lastEventElapsed,
@@ -66,14 +63,6 @@ struct RevolutionSchedule: Equatable {
 
     mutating func setCumulativeRevolutions(_ value: UInt64) {
         cumulative = value
-    }
-
-    var latestSample: WheelRevolutionSample? {
-        guard hasEvent else { return nil }
-        return WheelRevolutionSample(
-            cumulative: cumulative,
-            lastEventElapsed: lastEventElapsed,
-        )
     }
 }
 

@@ -254,7 +254,7 @@ With **separate** wheel and crank sources, each sample is sent as its own notifi
 | Wheel + crank + static (separate or single source) | `03 00` | Measurement, Feature, Sensor Location (cached), Control Point |
 | Crank + multiple | `06 00` | Measurement, Feature, Sensor Location (`nil`), Control Point |
 | Wheel + multiple | `05 00` | Measurement, Feature, Sensor Location (`nil`), Control Point |
-| Wheel + crank + multiple | `07 00` | Measurement, Feature, Sensor Location (`nil`), Control Point |
+| Wheel + crank + multiple (separate or single source) | `07 00` | Measurement, Feature, Sensor Location (`nil`), Control Point |
 
 The wheel + crank rows apply whether wheel and crank data come from separate sequences or one `WheelAndCrankRevolution` sequence.
 
@@ -280,6 +280,16 @@ let wheelStatic = Server.wheelRevolutions(wheelStream, setCumulativeWheelRevolut
 
 // Wheel + crank from one sequence (recommended when both halves belong to the same tick)
 let wheelAndCrank = Server.wheelAndCrankRevolutions(combinedStream, setCumulativeWheelRevolutions: cumulative)
+    .build()
+
+// Wheel + crank + static location (single source)
+let wheelAndCrankStatic = Server.wheelAndCrankRevolutions(combinedStream, setCumulativeWheelRevolutions: cumulative)
+    .staticSensorLocation(.rearDropout)
+    .build()
+
+// Wheel + crank + multiple locations (single source)
+let wheelAndCrankMultiple = Server.wheelAndCrankRevolutions(combinedStream, setCumulativeWheelRevolutions: cumulative)
+    .multipleSensorLocations(locationsDelegate)
     .build()
 
 // Wheel + crank from separate sequences

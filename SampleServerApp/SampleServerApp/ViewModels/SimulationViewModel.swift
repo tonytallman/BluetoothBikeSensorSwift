@@ -122,20 +122,13 @@ final class RuntimeSimulationViewModel: SimulationViewModel {
     private func handleTick() {
         guard isSimulating, var outputs else { return }
         let now = nowActive()
-        if activeShowsWheel, activeShowsCrank {
-            let wheel = wheelMode == .automatic ? wheelSchedule.advance(to: now)?.wheelRevolution : nil
-            let crank = crankMode == .automatic ? crankSchedule.advance(to: now)?.crankRevolution : nil
-            publish(wheel: wheel, crank: crank, into: &outputs)
-        } else {
-            if activeShowsWheel, wheelMode == .automatic,
-               let sample = wheelSchedule.advance(to: now) {
-                publish(wheel: sample.wheelRevolution, crank: nil, into: &outputs)
-            }
-            if activeShowsCrank, crankMode == .automatic,
-               let sample = crankSchedule.advance(to: now) {
-                publish(wheel: nil, crank: sample.crankRevolution, into: &outputs)
-            }
-        }
+        let wheel = activeShowsWheel && wheelMode == .automatic
+            ? wheelSchedule.advance(to: now)?.wheelRevolution
+            : nil
+        let crank = activeShowsCrank && crankMode == .automatic
+            ? crankSchedule.advance(to: now)?.crankRevolution
+            : nil
+        publish(wheel: wheel, crank: crank, into: &outputs)
     }
 
     private func publish(
