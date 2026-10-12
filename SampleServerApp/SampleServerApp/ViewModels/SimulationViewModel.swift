@@ -110,30 +110,35 @@ final class RuntimeSimulationViewModel: SimulationViewModel {
     func addWheelRevolution() {
         guard isSimulating, activeShowsWheel, wheelMode == .manual, var outputs else { return }
         let sample = wheelSchedule.manualRevolution(at: nowActive())
-        outputs.yieldWheel(sample.wheelRevolution)
-        updateReadouts()
+        publish(wheel: sample.wheelRevolution, crank: nil, into: &outputs)
     }
 
     func addCrankRevolution() {
         guard isSimulating, activeShowsCrank, crankMode == .manual, var outputs else { return }
         let sample = crankSchedule.manualRevolution(at: nowActive())
-        outputs.yieldCrank(sample.crankRevolution)
-        updateReadouts()
+        publish(wheel: nil, crank: sample.crankRevolution, into: &outputs)
     }
 
     private func handleTick() {
         guard isSimulating, var outputs else { return }
         let now = nowActive()
-        if activeShowsWheel, wheelMode == .automatic,
-           let sample = wheelSchedule.advance(to: now) {
-            outputs.yieldWheel(sample.wheelRevolution)
-            updateReadouts()
-        }
-        if activeShowsCrank, crankMode == .automatic,
-           let sample = crankSchedule.advance(to: now) {
-            outputs.yieldCrank(sample.crankRevolution)
-            updateReadouts()
-        }
+        let wheel = activeShowsWheel && wheelMode == .automatic
+            ? wheelSchedule.advance(to: now)?.wheelRevolution
+            : nil
+        let crank = activeShowsCrank && crankMode == .automatic
+            ? crankSchedule.advance(to: now)?.crankRevolution
+            : nil
+        publish(wheel: wheel, crank: crank, into: &outputs)
+    }
+
+    private func publish(
+        wheel: WheelRevolution?,
+        crank: CrankRevolution?,
+        into outputs: inout SimulationOutputs,
+    ) {
+        guard wheel != nil || crank != nil else { return }
+        outputs.yield(wheel: wheel, crank: crank)
+        updateReadouts()
     }
 
     private func wheelModeDidChange(from oldValue: SimulationMode) {

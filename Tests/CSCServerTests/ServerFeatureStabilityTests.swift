@@ -15,6 +15,9 @@ struct ServerFeatureStabilityTests {
         case wheelCrank
         case wheelCrankStatic
         case wheelCrankMultiple
+        case wheelAndCrankSource
+        case wheelAndCrankSourceStatic
+        case wheelAndCrankSourceMultiple
     }
 
     @Test(arguments: Shape.allCases)
@@ -100,6 +103,10 @@ struct ServerFeatureStabilityTests {
     private static func build(_ shape: Shape) -> Server {
         let wheel = Server.wheelRevolutions(NeverYieldingWheelSequence(), setCumulativeWheelRevolutions: ScriptedCumulativeDelegate())
         let crank = Server.crankRevolutions(NeverYieldingCrankSequence())
+        let combined = Server.wheelAndCrankRevolutions(
+            NeverYieldingWheelAndCrankSequence(),
+            setCumulativeWheelRevolutions: ScriptedCumulativeDelegate(),
+        )
         let locations = ScriptedLocationDelegate(supported: [.leftCrank, .rightCrank], current: .leftCrank)
         switch shape {
         case .crank:
@@ -120,6 +127,12 @@ struct ServerFeatureStabilityTests {
             return wheel.crankRevolutions(NeverYieldingCrankSequence()).staticSensorLocation(.rearWheel).build()
         case .wheelCrankMultiple:
             return wheel.crankRevolutions(NeverYieldingCrankSequence()).multipleSensorLocations(locations).build()
+        case .wheelAndCrankSource:
+            return combined.build()
+        case .wheelAndCrankSourceStatic:
+            return combined.staticSensorLocation(.rearWheel).build()
+        case .wheelAndCrankSourceMultiple:
+            return combined.multipleSensorLocations(locations).build()
         }
     }
 }

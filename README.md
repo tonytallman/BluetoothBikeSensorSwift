@@ -210,30 +210,33 @@ struct ResetWheelCount: CumulativeWheelRevolutionsDelegate {
     }
 }
 
-let (wheelRevolutions, wheelInput) = AsyncStream.makeStream(of: WheelRevolution.self)
-let (crankRevolutions, crankInput) = AsyncStream.makeStream(of: CrankRevolution.self)
+let (revolutions, input) = AsyncStream.makeStream(of: WheelAndCrankRevolution.self)
 
 let server = Server
-    .wheelRevolutions(wheelRevolutions, setCumulativeWheelRevolutions: ResetWheelCount())
-    .crankRevolutions(crankRevolutions)
+    .wheelAndCrankRevolutions(revolutions, setCumulativeWheelRevolutions: ResetWheelCount())
     .staticSensorLocation(.rearDropout)
     .build()
 
 try await server.start() // publishes 0x1816; returns once advertising has started
 
 // Event times are CSC wire units (1/1024 s). Samples are dropped until a central subscribes.
-wheelInput.yield(WheelRevolution(cumulativeRevolutions: 1_234, lastEventTime: 2_048))
-crankInput.yield(CrankRevolution(cumulativeRevolutions: 56, lastEventTime: 2_048))
+input.yield(WheelAndCrankRevolution(
+    wheel: WheelRevolution(cumulativeRevolutions: 1_234, lastEventTime: 2_048),
+    crank: CrankRevolution(cumulativeRevolutions: 56, lastEventTime: 2_048),
+))
 
 await server.stop()
 ```
 
-Revolution sources are any `AsyncSequence & Sendable` of `WheelRevolution` or `CrankRevolution`, including `AsyncStream`.
+Revolution sources are any `AsyncSequence & Sendable` of `WheelRevolution`, `CrankRevolution`, or `WheelAndCrankRevolution`, including `AsyncStream`.
+
+With **separate** wheel and crank sources, each sample is sent as its own notification carrying only that half. With **one** `WheelAndCrankRevolution` source, each element is sent as one notification carrying the halves it includes; an element with neither half is dropped. The Feature value is the same either way.
 
 ### Builder rules
 
-- Entry points: `Server.wheelRevolutions(_:setCumulativeWheelRevolutions:)` and `Server.crankRevolutions(_:)`.
+- Entry points: `Server.wheelRevolutions(_:setCumulativeWheelRevolutions:)`, `Server.crankRevolutions(_:)`, and `Server.wheelAndCrankRevolutions(_:setCumulativeWheelRevolutions:)`.
 - Chain methods: `wheelRevolutions(_:setCumulativeWheelRevolutions:)`, `crankRevolutions(_:)`, `staticSensorLocation(_:)`, `multipleSensorLocations(_:)`, then `build()`.
+- Do not mix the single wheel-and-crank entry point with separate `wheelRevolutions` or `crankRevolutions` chain methods; the type-state builder rejects that at compile time.
 - Static and multiple sensor locations are mutually exclusive; the type-state builder rejects both at compile time.
 - Wheel data always requires a `CumulativeWheelRevolutionsDelegate`.
 - Start Sensor Calibration is not supported.
@@ -247,11 +250,13 @@ Revolution sources are any `AsyncSequence & Sendable` of `WheelRevolution` or `C
 | Crank + static | `02 00` | Measurement, Feature, Sensor Location (cached) |
 | Wheel | `01 00` | Measurement, Feature, Control Point |
 | Wheel + static | `01 00` | Measurement, Feature, Sensor Location (cached), Control Point |
-| Wheel + crank | `03 00` | Measurement, Feature, Control Point |
-| Wheel + crank + static | `03 00` | Measurement, Feature, Sensor Location (cached), Control Point |
+| Wheel + crank (separate or single source) | `03 00` | Measurement, Feature, Control Point |
+| Wheel + crank + static (separate or single source) | `03 00` | Measurement, Feature, Sensor Location (cached), Control Point |
 | Crank + multiple | `06 00` | Measurement, Feature, Sensor Location (`nil`), Control Point |
 | Wheel + multiple | `05 00` | Measurement, Feature, Sensor Location (`nil`), Control Point |
-| Wheel + crank + multiple | `07 00` | Measurement, Feature, Sensor Location (`nil`), Control Point |
+| Wheel + crank + multiple (separate or single source) | `07 00` | Measurement, Feature, Sensor Location (`nil`), Control Point |
+
+The wheel + crank rows apply whether wheel and crank data come from separate sequences or one `WheelAndCrankRevolution` sequence.
 
 ```swift
 import CSCServer
@@ -273,7 +278,21 @@ let wheelStatic = Server.wheelRevolutions(wheelStream, setCumulativeWheelRevolut
     .staticSensorLocation(.rearDropout)
     .build()
 
-// Wheel + crank
+// Wheel + crank from one sequence (recommended when both halves belong to the same tick)
+let wheelAndCrank = Server.wheelAndCrankRevolutions(combinedStream, setCumulativeWheelRevolutions: cumulative)
+    .build()
+
+// Wheel + crank + static location (single source)
+let wheelAndCrankStatic = Server.wheelAndCrankRevolutions(combinedStream, setCumulativeWheelRevolutions: cumulative)
+    .staticSensorLocation(.rearDropout)
+    .build()
+
+// Wheel + crank + multiple locations (single source)
+let wheelAndCrankMultiple = Server.wheelAndCrankRevolutions(combinedStream, setCumulativeWheelRevolutions: cumulative)
+    .multipleSensorLocations(locationsDelegate)
+    .build()
+
+// Wheel + crank from separate sequences
 let wheelCrank = Server.wheelRevolutions(wheelStream, setCumulativeWheelRevolutions: cumulative)
     .crankRevolutions(crankStream)
     .build()
@@ -323,7 +342,7 @@ Servers with wheel data or multiple sensor locations include SC Control Point (`
 - Update Sensor Location (`0x03`) calls your `MultipleSensorLocationsDelegate`.
 - Request Supported Sensor Locations (`0x04`) answers from the list captured at `build()`.
 
-One procedure runs at a time. A procedure has 30 seconds from the accepted write until its indication is handed to the system; after that, the server stops the procedure and sends no indication. An indication already handed to the system cannot be recalled. Delegates must honor task cancellation; `stop()` and the timeout both cancel an in-flight call. A delegate call that returns successfully after the timeout has still been applied, and no indication is sent—the peer may retry, so make your implementation safe to call again.
+One procedure runs at a time. A procedure has 30 seconds from the accepted write until its indication is handed to the system; after that, the server stops the procedure and sends no indication. An indication already handed to the system cannot be recalled. After Set Cumulative Value succeeds, a wheel-bearing notification still waiting to send is sent crank-only if it has a crank half, and dropped otherwise. Delegates must honor task cancellation; `stop()` and the timeout both cancel an in-flight call. A delegate call that returns successfully after the timeout has still been applied, and no indication is sent—the peer may retry, so make your implementation safe to call again.
 
 ### Feature bits
 
@@ -333,12 +352,13 @@ CSC Feature and the characteristic inventory are fixed at `build()` for the life
 
 - `Server.wheelRevolutions(_:setCumulativeWheelRevolutions:)` — wheel entry point; set-cumulative delegate is required
 - `Server.crankRevolutions(_:)` — crank entry point
+- `Server.wheelAndCrankRevolutions(_:setCumulativeWheelRevolutions:)` — single sequence for both halves; set-cumulative delegate is required
 - `wheelRevolutions(_:setCumulativeWheelRevolutions:)`, `crankRevolutions(_:)`, `staticSensorLocation(_:)`, `multipleSensorLocations(_:)` — chain methods
 - `build()` — returns a configured `Server` (no public `Server` initializer)
 - `Server.start()` / `Server.stop()` — publish and advertise the CSC service, and tear it down
 - `Server.measurementSubscriberCount` — `AsyncStream<Int>` of centrals subscribed to measurement notifications
 - `ServerError` — `alreadyStarted` (this `Server` is already starting, running, or stopping), `notPoweredOn` (unavailable, powered off, unauthorized, or unsupported during startup, or lost before `start()` finished), `publishFailed`, `advertisingFailed`
-- `WheelRevolution`, `CrankRevolution` — CSC Measurement wire units for server sequences
+- `WheelRevolution`, `CrankRevolution`, `WheelAndCrankRevolution` — CSC Measurement wire units for server sequences
 - `SensorLocationKind` — GATT assigned numbers 0...16 for the builder
 - `CumulativeWheelRevolutionsDelegate` — called for Set Cumulative Value
 - `MultipleSensorLocationsDelegate` — `supported`, `current`, and `update(_:)` for Update Sensor Location on multiple-location servers

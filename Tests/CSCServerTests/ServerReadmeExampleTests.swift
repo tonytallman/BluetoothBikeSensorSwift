@@ -14,12 +14,10 @@ struct ServerReadmeExampleTests {
             }
         }
 
-        let (wheelRevolutions, wheelInput) = AsyncStream.makeStream(of: WheelRevolution.self)
-        let (crankRevolutions, crankInput) = AsyncStream.makeStream(of: CrankRevolution.self)
+        let (revolutions, input) = AsyncStream.makeStream(of: WheelAndCrankRevolution.self)
 
         let server = Server
-            .wheelRevolutions(wheelRevolutions, setCumulativeWheelRevolutions: ResetWheelCount())
-            .crankRevolutions(crankRevolutions)
+            .wheelAndCrankRevolutions(revolutions, setCumulativeWheelRevolutions: ResetWheelCount())
             .staticSensorLocation(.rearDropout)
             .build()
 
@@ -27,19 +25,24 @@ struct ServerReadmeExampleTests {
         try await server.start(peripheral: fake)
         await fake.subscribeMeasurement(server: server, centralID: UUID())
 
-        wheelInput.yield(WheelRevolution(cumulativeRevolutions: 1_234, lastEventTime: 2_048))
-        crankInput.yield(CrankRevolution(cumulativeRevolutions: 56, lastEventTime: 2_048))
+        input.yield(WheelAndCrankRevolution(
+            wheel: WheelRevolution(cumulativeRevolutions: 1_234, lastEventTime: 2_048),
+            crank: CrankRevolution(cumulativeRevolutions: 56, lastEventTime: 2_048),
+        ))
 
-        await fake.waitUntilRecordedCallsSatisfy { calls in
-            let measurements = calls.compactMap { call -> CSCMeasurement? in
-                if case let .updateValue(value, _, CSCS.measurementUUID, _) = call {
-                    return CSCMeasurement.decode(value)
-                }
-                return nil
-            }
-            return measurements.contains { $0.cumulativeWheelRevolutions == 1_234 }
-                && measurements.contains { $0.cumulativeCrankRevolutions == 56 }
-        }
+        let expected = CSCMeasurement(
+            cumulativeWheelRevolutions: 1_234,
+            lastWheelEventTime: 2_048,
+            cumulativeCrankRevolutions: 56,
+            lastCrankEventTime: 2_048,
+        ).encode()!
+
+        await fake.waitUntilUpdateValueCount(
+            1,
+            characteristic: CSCS.measurementUUID,
+            matching: { $0 == expected },
+        )
+        #expect(await fake.measurementPayloads() == [expected])
 
         await server.stop()
     }

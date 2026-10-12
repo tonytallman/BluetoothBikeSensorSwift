@@ -92,4 +92,88 @@ struct RuntimeSimulationViewModelTests {
         #expect(sample?.lastEventTime == expected?.wheelRevolution.lastEventTime)
         simulation.end()
     }
+
+    @Test func automaticBothMetricsTickYieldsOneCombinedElement() async {
+        let time = ManualTimeSource()
+        let ticker = ManualTicker()
+        let simulation = RuntimeSimulationViewModel(timeSource: time, ticker: ticker)
+        var outputs = SimulationOutputs()
+        let pair = AsyncStream.makeStream(
+            of: WheelAndCrankRevolution.self,
+            bufferingPolicy: .bufferingNewest(1),
+        )
+        outputs.wheelAndCrankContinuation = pair.continuation
+        simulation.begin(outputs, showsWheel: true, showsCrank: true)
+        await Task.yield()
+        var iterator = pair.stream.makeAsyncIterator()
+        time.elapsed = .seconds(1)
+        ticker.tick()
+        let sample = await iterator.next()
+        let wheelPeriod = RevolutionPeriod.wheelPeriod(
+            speedKilometersPerHour: 25,
+            circumferenceMeters: 2.105,
+        )
+        let crankPeriod = RevolutionPeriod.crankPeriod(revolutionsPerMinute: 90)
+        var wheelSchedule = RevolutionSchedule()
+        var crankSchedule = RevolutionSchedule()
+        wheelSchedule.beginAutomatic(at: .zero, period: wheelPeriod)
+        crankSchedule.beginAutomatic(at: .zero, period: crankPeriod)
+        let expectedWheel = wheelSchedule.advance(to: .seconds(1))!.wheelRevolution
+        let expectedCrank = crankSchedule.advance(to: .seconds(1))!.crankRevolution
+        #expect(sample?.wheel == expectedWheel)
+        #expect(sample?.crank == expectedCrank)
+        simulation.end()
+        ticker.finish()
+    }
+
+    @Test func automaticWheelWithManualCrankYieldsWheelOnlyElement() async {
+        let time = ManualTimeSource()
+        let ticker = ManualTicker()
+        let simulation = RuntimeSimulationViewModel(timeSource: time, ticker: ticker)
+        simulation.crankMode = .manual
+        var outputs = SimulationOutputs()
+        let pair = AsyncStream.makeStream(
+            of: WheelAndCrankRevolution.self,
+            bufferingPolicy: .bufferingNewest(1),
+        )
+        outputs.wheelAndCrankContinuation = pair.continuation
+        simulation.begin(outputs, showsWheel: true, showsCrank: true)
+        await Task.yield()
+        var iterator = pair.stream.makeAsyncIterator()
+        time.elapsed = .seconds(1)
+        ticker.tick()
+        let sample = await iterator.next()
+        let wheelPeriod = RevolutionPeriod.wheelPeriod(
+            speedKilometersPerHour: 25,
+            circumferenceMeters: 2.105,
+        )
+        var wheelSchedule = RevolutionSchedule()
+        wheelSchedule.beginAutomatic(at: .zero, period: wheelPeriod)
+        let expectedWheel = wheelSchedule.advance(to: .seconds(1))!.wheelRevolution
+        #expect(sample?.wheel == expectedWheel)
+        #expect(sample?.crank == nil)
+        simulation.end()
+        ticker.finish()
+    }
+
+    @Test func manualWheelBeforeCrankEventYieldsWheelOnlyHalf() async {
+        let simulation = RuntimeSimulationViewModel()
+        var outputs = SimulationOutputs()
+        let pair = AsyncStream.makeStream(
+            of: WheelAndCrankRevolution.self,
+            bufferingPolicy: .bufferingNewest(1),
+        )
+        outputs.wheelAndCrankContinuation = pair.continuation
+        simulation.begin(outputs, showsWheel: true, showsCrank: true)
+        simulation.wheelMode = .manual
+        simulation.crankMode = .manual
+        simulation.addWheelRevolution()
+        await Task.yield()
+        var iterator = pair.stream.makeAsyncIterator()
+        let sample = await iterator.next()
+        #expect(sample?.wheel != nil)
+        #expect(sample?.crank == nil)
+        simulation.end()
+    }
+
 }

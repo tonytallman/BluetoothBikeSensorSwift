@@ -8,6 +8,11 @@
 // Server.wheelRevolutions(wheel, setCumulativeWheelRevolutions: cumulative)
 //     .wheelRevolutions(wheel, setCumulativeWheelRevolutions: cumulative)
 // Server.crankRevolutions(crank).crankRevolutions(crank)
+// Server.wheelAndCrankRevolutions(combined, setCumulativeWheelRevolutions: cumulative)
+//     .wheelRevolutions(wheel, setCumulativeWheelRevolutions: cumulative)
+// Server.wheelAndCrankRevolutions(combined, setCumulativeWheelRevolutions: cumulative)
+//     .crankRevolutions(crank)
+// Server.wheelAndCrankRevolutions(combined)
 
 import CSCServer
 import CSCWire
@@ -75,6 +80,94 @@ struct ServerBuilderTests {
         ))
         #expect(delegateIdentity(server.configuration.wheel?.delegate) == delegateIdentity(cumulative))
         #expect(hasControlPoint(server))
+    }
+
+    @Test func wheelAndCrankSource() {
+        let cumulative = CumulativeSpy()
+        let twoSource = Server.wheelRevolutions(wheelStream, setCumulativeWheelRevolutions: cumulative)
+            .crankRevolutions(crankStream)
+            .build()
+        let server = Server.wheelAndCrankRevolutions(wheelAndCrankStream, setCumulativeWheelRevolutions: cumulative)
+            .build()
+
+        #expect(server.configuration.feature.encode() == Data([0x03, 0x00]))
+        #expect(server.configuration.service == expectedService(
+            featureBytes: [0x03, 0x00],
+            sensorLocation: .none,
+            includesControlPoint: true,
+        ))
+        #expect(delegateIdentity(server.configuration.wheelAndCrank?.delegate) == delegateIdentity(cumulative))
+        #expect(server.configuration.wheel == nil)
+        #expect(server.configuration.crankRevolutions == nil)
+        #expect(server.configuration.service == twoSource.configuration.service)
+        #expect(isLocationNone(server))
+        #expect(hasControlPoint(server))
+    }
+
+    @Test func wheelAndCrankSourcePlusStaticLocation() {
+        let cumulative = CumulativeSpy()
+        let twoSource = Server.wheelRevolutions(wheelStream, setCumulativeWheelRevolutions: cumulative)
+            .crankRevolutions(crankStream)
+            .staticSensorLocation(.rearWheel)
+            .build()
+        let server = Server.wheelAndCrankRevolutions(wheelAndCrankStream, setCumulativeWheelRevolutions: cumulative)
+            .staticSensorLocation(.rearWheel)
+            .build()
+
+        #expect(server.configuration.feature.encode() == Data([0x03, 0x00]))
+        #expect(server.configuration.service == expectedService(
+            featureBytes: [0x03, 0x00],
+            sensorLocation: .cached(.rearWheel),
+            includesControlPoint: true,
+        ))
+        #expect(delegateIdentity(server.configuration.wheelAndCrank?.delegate) == delegateIdentity(cumulative))
+        #expect(server.configuration.wheel == nil)
+        #expect(server.configuration.crankRevolutions == nil)
+        #expect(server.configuration.service == twoSource.configuration.service)
+        #expect(hasControlPoint(server))
+    }
+
+    @Test func wheelAndCrankSourcePlusMultipleLocations() {
+        let cumulative = CumulativeSpy()
+        let locations = LocationsSpy(
+            supported: [.leftCrank, .rightCrank],
+            current: .rightCrank,
+        )
+        let twoSource = Server.wheelRevolutions(wheelStream, setCumulativeWheelRevolutions: cumulative)
+            .crankRevolutions(crankStream)
+            .multipleSensorLocations(locations)
+            .build()
+        let server = Server.wheelAndCrankRevolutions(wheelAndCrankStream, setCumulativeWheelRevolutions: cumulative)
+            .multipleSensorLocations(locations)
+            .build()
+
+        #expect(server.configuration.feature.encode() == Data([0x07, 0x00]))
+        #expect(server.configuration.service == expectedService(
+            featureBytes: [0x07, 0x00],
+            sensorLocation: .multiple,
+            includesControlPoint: true,
+        ))
+        #expect(delegateIdentity(server.configuration.wheelAndCrank?.delegate) == delegateIdentity(cumulative))
+        #expect(server.configuration.wheel == nil)
+        #expect(server.configuration.crankRevolutions == nil)
+        #expect(server.configuration.service == twoSource.configuration.service)
+        #expect(hasControlPoint(server))
+    }
+
+    @Test func unreadWheelAndCrankSequenceRemainsAfterBuild() async throws {
+        let value = WheelAndCrankRevolution(
+            wheel: WheelRevolution(cumulativeRevolutions: 42, lastEventTime: 100),
+            crank: CrankRevolution(cumulativeRevolutions: 7, lastEventTime: 200),
+        )
+        let stream = SingleElementSequence(element: value)
+        let cumulative = CumulativeSpy()
+
+        let server = Server.wheelAndCrankRevolutions(stream, setCumulativeWheelRevolutions: cumulative)
+            .build()
+
+        let iterator = server.configuration.wheelAndCrank!.revolutions.makeAsyncIterator()
+        let element = try await iterator.next()
+        #expect(element == value)
     }
 
     @Test func wheelPlusCrank() {
@@ -303,6 +396,10 @@ struct ServerBuilderTests {
     }
 
     private var crankStream: EmptySequence<CrankRevolution> {
+        EmptySequence()
+    }
+
+    private var wheelAndCrankStream: EmptySequence<WheelAndCrankRevolution> {
         EmptySequence()
     }
 

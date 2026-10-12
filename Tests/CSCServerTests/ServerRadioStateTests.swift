@@ -106,7 +106,7 @@ struct ServerRadioStateTests {
         #expect(await fake.countUpdateValues(characteristic: CSCS.measurementUUID, matching: { $0 == payload2 }) == 0)
     }
 
-    @Test func inFlightMeasurementDuringLossIsNotCached() async throws {
+    @Test func inFlightMeasurementDuringLossIsNotRecorded() async throws {
         let wheel = YieldingWheelSequence()
         let crank = YieldingCrankSequence()
         let fake = FakeBluetoothPeripheral()

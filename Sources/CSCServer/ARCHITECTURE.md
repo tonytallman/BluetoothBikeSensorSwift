@@ -23,7 +23,8 @@ package. `CSCWire` (an internal, nonproduct target) holds the shared wire codecs
 The public surface is intentionally small: a type-state `ServerBuilder` that produces a `Server`,
 two delegate protocols (`CumulativeWheelRevolutionsDelegate`, `MultipleSensorLocationsDelegate`)
 for the two control-point procedures that need caller input, and a handful of small value types
-(`WheelRevolution`, `CrankRevolution`, `SensorLocationKind`, `ServerError`). Everything else —
+(`WheelRevolution`, `CrankRevolution`, `WheelAndCrankRevolution`, `SensorLocationKind`,
+`ServerError`). Everything else —
 the CoreBluetooth adapter, the session state machine, the outbound pump — is `package`-visible
 so tests can reach it without `@testable import`, but is not part of the product's public API.
 
@@ -46,14 +47,17 @@ graph TD
   marker generics) that pushes "static and multiple locations are mutually exclusive" and "at least
   one revolution source" to compile time: `build()` exists only for wheel-only, crank-only, and
   wheel-and-crank configurations (at any location marker state); a builder with neither wheel nor
-  crank selected has no `build()`. `ServerConfiguration`'s initializer still
-  `precondition`s "at least one revolution source" as a backstop because the markers are not
-  stored on the optional revolution fields.
+  crank selected has no `build()`. `Server/wheelAndCrankRevolutions(_:setCumulativeWheelRevolutions:)`
+  selects both wheel and crank markers and reuses the wheel-and-crank `build()`; it cannot be
+  mixed with the separate `wheelRevolutions` / `crankRevolutions` chain methods. `ServerConfiguration`'s
+  initializer still `precondition`s "at least one revolution source" as a backstop because the
+  markers are not stored on the optional revolution fields.
 - **`ServerConfiguration`** (`Internal/`) — the one place that turns a finished builder
   configuration into the pieces a `Server` needs: computes the CSC Feature bits and the fixed
-  characteristic inventory. Everything decided here is fixed for that `Server`'s lifetime —
-  feature bits and the characteristic list never change across `stop()`/`start()` or Bluetooth
-  recovery.
+  characteristic inventory. A single `wheelAndCrank` source is mutually exclusive with separate
+  `wheel` and `crankRevolutions` sources (`precondition`). Everything decided here is fixed for
+  that `Server`'s lifetime — feature bits and the characteristic list never change across
+  `stop()`/`start()` or Bluetooth recovery.
 - **`Server`** — the public, `Sendable` handle apps hold. It has no public initializer; owns a
   `ServerLifecycle`; forwards `start()`/`stop()`/`measurementSubscriberCount` to it. Releasing a
   started `Server` schedules `stop()` in the background from `deinit`, so leaking a reference
@@ -113,7 +117,7 @@ callback order is preserved once it reaches `events`. All direct `CBPeripheralMa
 inside `queue.sync` from actor methods; the actor is the only caller of those methods.
 
 Within `ServerSession`, several independent long-running `Task`s exist side by side — the inbound
-event loop, the outbound pump, the wheel loop, the crank loop, and (while a control-point write is
+event loop, the outbound pump, one loop per revolution source, and (while a control-point write is
 being handled) a procedure task — but because `ServerSession` is an actor, their bodies still
 execute one at a time with respect to the session's state. Concurrency comes from *interleaving*
 at `await` points, not from true parallel mutation. Understanding an invariant in this file
@@ -147,7 +151,7 @@ change what a server advertises is to build a new one.
      and came back mid-startup, startup still fails with `.notPoweredOn`;
    - drains any inbound events that arrived while starting (buffered, not dropped) in arrival
      order, then opens the "startup gate" so future events are handled live;
-   - starts the wheel/crank pull loops.
+   - starts one pull loop per configured source: wheel and/or crank, or one combined source.
 3. Back in `ServerLifecycle`, once the child task finishes, reverify it is still the task `phase`
    points at before committing to `.running` — a concurrent `stop()` may have already begun
    tearing this same task down.
@@ -169,7 +173,7 @@ forced to `0` whenever the server is not `.running` (starting, stopped, or radio
 `Server.stop()` is idempotent. If nothing is running, it's a no-op. If startup is still in
 progress, it cancels that task and, if a session had already been produced before the
 cancellation was observed, closes that session too. If a session is running, it closes it:
-cancels the outbound pump / procedure / wheel / crank tasks and waits for them, stops advertising,
+cancels the outbound pump / procedure / revolution tasks and waits for them, stops advertising,
 removes the service, then stops consuming inbound events. A second concurrent `stop()` joins the
 same in-flight teardown task rather than starting a second one.
 
@@ -194,7 +198,7 @@ sequenceDiagram
     participant CB as BluetoothPeripheral
 
     Source->>Session: revolution sample
-    Session->>Session: "encode combined CSCMeasurement (cache other half)"
+    Session->>Session: encode CSCMeasurement from the sample's own halves
     Session->>Pump: enqueue QueuedMeasurement, await producer completion
     Pump->>CB: "updateValue(payload)"
     CB-->>Pump: "false (backpressure)"
@@ -206,30 +210,40 @@ sequenceDiagram
     Session->>Source: pull next sample
 ```
 
-Each wheel/crank `AsyncSequence` is pulled by its own dedicated task (`startRevolutionLoop`), one
-iterator per source, never shared across tasks. Every sample is combined with the *last accepted*
-sample from the other source (cached in `wheelCache`/`crankCache`) into one CSC Measurement
-payload, then handed to the single outbound pump and — critically — **the producing loop awaits
+Each revolution `AsyncSequence` is pulled by its own dedicated task (`startRevolutionLoop`), one
+iterator per configured source: wheel and/or crank, or one combined source, never shared across
+tasks. There
+are no measurement caches: each notification carries exactly the halves present on one sample.
+Separate wheel and crank sources therefore produce single-half notifications; a
+`WheelAndCrankRevolution` source puts one element's present halves together in one notification.
+Every sample is handed to the single outbound pump and — critically — **the producing loop awaits
 until that item leaves the queue** before pulling the next sample. This is the backpressure
-mechanism for the whole pipeline: a slow CoreBluetooth transmit queue throttles the wheel/crank
+mechanism for the whole pipeline: a slow CoreBluetooth transmit queue throttles the revolution
 loops themselves, not just the pump.
+
+`emit` returns immediately, without waiting, when the session is closed, when there are no
+measurement subscribers, or when `encodeSample` returns `nil` (both halves absent). Otherwise
+`emit` enqueues the item and waits until it leaves the queue, whether it was sent, dropped, or
+discarded. `acceptedMeasurementCount` counts only non-stale, same-epoch accepted sends.
 
 The pump is the **only** caller of `updateValue` and the only remover of the queue head. When
 `updateValue` returns `false` (CoreBluetooth's transmit buffer is full), the pump parks on a
 ready-to-update latch and retries the exact same payload once `events` reports
-`.readyToUpdateSubscribers`. `prepareHead(_:)` rechecks, both before the first send attempt and
-again after every `false` return, the three reasons the head might no longer be sendable:
+`.readyToUpdateSubscribers`. If `updateValue` throws, the head item is dropped and not counted.
+`prepareHead(_:)` rechecks, both before the first send attempt and again after every `false`
+return, the three reasons the head might no longer be sendable:
 
 - **Shutdown or no subscribers**: the item is dropped and its producer resumed.
 - **Staleness**: a queued wheel-bearing payload is stamped with the `wheelGeneration` it was
-  encoded against. If a Set Cumulative Value procedure completes while that payload is still
-  queued (or even mid-flight, suspended inside `updateValue`), the payload is recognized as stale
-  and reencoded (crank-only, if there's a crank half) or dropped, rather than sent with a
-  now-wrong wheel cumulative.
+  encoded against. After Set Cumulative Value succeeds, a still-queued item with both halves is
+  re-encoded crank-only from that sample's crank half (stamp cleared); a queued wheel-only item is
+  dropped; stamp-less items are sent unchanged. An in-flight send that returns
+  `true` after the generation bump keeps its original bytes and is not counted toward
+  `acceptedMeasurementCount`.
 
 **Radio loss during a send** is checked separately, only on acceptance: if Bluetooth drops while a
 `updateValue` call for a measurement is in flight, an eventual `true` return is not trusted — it
-reached no *current* subscriber — so it is not cached and does not count as accepted.
+reached no *current* subscriber — so it does not count as accepted.
 
 An empty measurement-subscriber set drops a sample immediately rather than queuing it.
 
@@ -247,9 +261,9 @@ Requests and responses use the same outbound queue and pump as measurements, but
 3. The actual procedure (Set Cumulative Value, Update Sensor Location, or Request Supported
    Sensor Locations) runs on its own task, possibly calling a caller-supplied delegate. Delegates
    must honor cancellation — `stop()` and the timeout both cancel an in-flight call.
-   `runProcedure(_:centralID:)` dispatches by matching `(request, wheel config, multiple-location
-   config)` together, so a request this build does not serve falls through to a generic
-   "unsupported/invalid" case instead of running.
+   `runProcedure(_:centralID:)` dispatches by matching `(request, cumulative-wheel delegate,
+   multiple-location config)` together, so a request this build does not serve falls through to a
+   generic "unsupported/invalid" case instead of running.
 4. On success, the procedure's indication is enqueued (`enqueueIndication`) and processed by the
    same pump used for measurements — including the same retry-on-`false` backpressure loop.
    `enqueueIndication` itself checks `closed`/timed-out and ends the procedure without indicating
@@ -301,9 +315,10 @@ test-only surface through `package` visibility instead. Key seams:
   real sleeping. `ServerTestCondition` gives tests a fixed vocabulary of internal states to block
   on (a subscriber set, an outbound queue depth, a parked waiter) instead of polling or sleeping.
 - **Scripted delegates and controlled sequences** in `Support/` (e.g. `ScriptedCumulativeDelegate`,
-  `ScriptedLocationDelegate`, `ControlledWheelSequence`, `YieldingCrankSequence`) let tests script
+  `ScriptedLocationDelegate`, `ControlledWheelSequence`, `YieldingSequence`) let tests script
   delegate responses (including artificial delays or parking to test cancellation) and control
-  exactly when a revolution source yields, without relying on real time.
+  exactly when a revolution source yields, without relying on real time. `FakeBluetoothPeripheral`
+  also exposes `measurementPayloads()` for ordered measurement `updateValue` bytes.
 
 Tests are grouped roughly by concern (lifecycle, control point, procedure timeout, notify queue,
 radio state, subscriber count, wheel/crank behavior, builder validation) rather than one-file-per-
@@ -313,7 +328,7 @@ exercises `ServerSession`'s write handling, the outbound pump, and often `Server
 ## Nonobvious design decisions
 
 - **A new `ServerSession` per `start()`**, rather than a reusable session, keeps all of the
-  session's intricate state (queues, caches, generations, gates) trivially reset on restart —
+  session's intricate state (queues, generations, gates) trivially reset on restart —
   there is no "clear everything" method to keep in sync with new state as the session evolves.
 - **The outbound pump is the sole `updateValue` caller** specifically so backpressure, staleness,
   and procedure-ownership checks live in one place (`prepareHead(_:)`) instead of being duplicated
@@ -321,10 +336,14 @@ exercises `ServerSession`'s write handling, the outbound pump, and often `Server
 - **Notifications vs. indications share one queue and one pump** because they share the exact same
   backpressure problem (CoreBluetooth's transmit buffer) and the same "retry the same bytes on
   `false`" contract; splitting them would duplicate that retry logic for no benefit.
-- **`wheelGeneration` staleness detection, not a lock, protects the wheel cache** because the
-  cache is only ever touched from within the `ServerSession` actor — the problem being solved is
-  not concurrent mutation, it's a value becoming outdated while sitting in a queue across an
-  `await`.
+- **`wheelGeneration` staleness detection, not a lock, protects queued wheel-bearing payloads**
+  because all session state is actor-isolated — the problem being solved is a value becoming
+  outdated while sitting in a queue across an `await`.
+- **No measurement caches.** The server never pairs or fills halves from another source or from Set
+  Cumulative Value, because a pair built from two independent sources can carry a half older than
+  one already sent. Callers with both halves for one tick use `Server.wheelAndCrankRevolutions`.
+  Merging two independent `AsyncSequence`s was rejected because their samples would interleave
+  unpredictably at encode time.
 - **Feature bits and the characteristic list are immutable after `build()`** because CoreBluetooth
   has no story for updating a published GATT database in place that this library relies on
   (`Service Changed` is not implemented); changing shape means publishing a new service and
@@ -334,8 +353,8 @@ exercises `ServerSession`'s write handling, the outbound pump, and often `Server
   now owns an entirely independent `ServerLifecycle`, and multiple servers may start, run, and
   stop concurrently. If a future requirement reintroduces a shared-resource constraint (e.g. a
   hardware limitation), it belongs at this layer, not assumed away.
-- **"At least one revolution source" is type-state enforced on `build()`.** Only wheel-only,
-  crank-only, and wheel-and-crank `ServerBuilder` specializations expose `build()` (for any
-  `ServerLocation` marker), alongside the existing compile-time rules for static vs. multiple
-  locations. `ServerConfiguration.init` still `precondition`s the same requirement as defense in
-  depth because the wheel/crank markers are not reflected in the stored optionals.
+- **"At least one revolution source" is type-state enforced on `build()`.** Wheel-only, crank-only,
+  and wheel-and-crank `ServerBuilder` specializations expose `build()` (for any `ServerLocation`
+  marker), including the combined `wheelAndCrankRevolutions` entry point that selects both markers.
+  `ServerConfiguration.init` still `precondition`s the same requirement as defense in depth
+  because the wheel/crank markers are not reflected in the stored optionals.
